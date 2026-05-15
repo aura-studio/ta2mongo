@@ -275,7 +275,7 @@ func (ir *IdentityResolver) atomicCreateForAccountID(ctx context.Context, accoun
 	doc := IDMapping{
 		UserID:      userID,
 		AccountID:   accountID,
-		DistinctIDs: nil,
+		DistinctIDs: []string{},
 	}
 	_, err = ir.mapping.InsertOne(ctx, doc)
 	if err != nil {
