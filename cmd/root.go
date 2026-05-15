@@ -43,31 +43,16 @@ func Execute() {
 }
 
 // addCommonFlags registers all shared config flags onto a flag set.
-// Flag names mirror the YAML config keys exactly (dot-separated for nested fields).
-// This allows viper to bind them directly without any name translation.
+// Flag names match YAML keys and TANGO_* env var suffixes exactly.
 func addCommonFlags(flags *pflag.FlagSet) {
-	// mongo
-	flags.String("mongo.uri", "", "MongoDB connection URI (required)")
-
-	// ta
-	flags.StringSlice("ta.logPattern", nil, "regex patterns for matching log file paths (repeatable)")
-
-	// tail
-	flags.Int("tail.rescanSeconds", 0, "how often to rescan for new log files (seconds, default 30)")
-
-	// batch
-	flags.Int("batch.sizeMin", 0, "minimum batch size (default: sizeInitial/4)")
-	flags.Int("batch.sizeInitial", 0, "initial/target batch size (default 1000)")
-	flags.Int("batch.sizeMax", 0, "maximum batch size (default: sizeInitial*2)")
-	flags.Int("batch.workers", 0, "number of parallel write workers (default 2)")
-	flags.Int("batch.channelSize", 0, "per-worker channel buffer size (default 1000)")
-	flags.Duration("batch.flushInterval", 0, "how often workers flush partial batches (default 1s)")
-
-	// retry
-	flags.Duration("retry.maxElapsedTime", 0, "max total retry time for bulk writes (default 10s)")
-
-	// log
-	flags.String("log.level", "", "log level: debug, info, warn, error (default info)")
+	flags.String("mongoURI", "", "MongoDB connection URI (required)")
+	flags.StringSlice("logPattern", nil, "regex patterns for log file paths (repeatable)")
+	flags.Duration("rescanInterval", 0, "how often to rescan for new log files (default 30s)")
+	flags.Int("batchSize", 0, "target batch size; min=batchSize/4, max=batchSize*2 (default 1000)")
+	flags.Int("batchWorkers", 0, "number of parallel write workers (default 2)")
+	flags.Duration("flushInterval", 0, "how often workers flush partial batches (default 1s)")
+	flags.Duration("maxElapsedTime", 0, "max total retry time for bulk writes (default 10s)")
+	flags.String("logLevel", "", "log level: debug, info, warn, error (default info)")
 }
 
 // setup loads configuration from file + env + flags, creates a logger, and sets
@@ -92,7 +77,7 @@ func setup(cmd *cobra.Command) (config.Config, *logrus.Logger, context.Context, 
 func newLogger(cfg config.Config) *logrus.Logger {
 	logger := logrus.New()
 	logger.SetFormatter(&logrus.TextFormatter{FullTimestamp: true})
-	level, err := logrus.ParseLevel(strings.ToLower(cfg.Log.Level))
+	level, err := logrus.ParseLevel(strings.ToLower(cfg.LogLevel))
 	if err != nil {
 		level = logrus.InfoLevel
 	}

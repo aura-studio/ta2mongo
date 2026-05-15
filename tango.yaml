@@ -3,36 +3,26 @@
 # 优先级（从低到高）：内置默认值 < 此文件 < 环境变量（TANGO_* 前缀）< 命令行参数
 #
 # 环境变量示例：
-#   TANGO_MONGO_URI=mongodb://localhost:27017/tango
-#   TANGO_LOG_LEVEL=debug
-#   TANGO_BATCH_WORKERS=4
-#
-# mode 决定运行模式（也可通过子命令指定：tango daemon / tango once / tango ingest）：
-#   - daemon：持续追尾日志文件，增量导入（默认）
-#   - once：一次性读取所有匹配文件，处理完退出，输出统计摘要
-#   - ingest：同步阻塞上传模式（从 CLI 参数或 stdin 读取）
+#   TANGO_MONGOURI=mongodb://localhost:27017/tango
+#   TANGO_LOGLEVEL=debug
+#   TANGO_BATCHWORKERS=4
 
-mongo:
-  uri: "mongodb://localhost:27017/tango"
+# mode: 运行模式，也可直接使用子命令（tango daemon / once / ingest）
+# 可选值：daemon（默认）/ once / ingest
+mode: "daemon"
 
-ta:
-  # 每个字符串是一个正则，用于匹配文件路径（仅 daemon/once 模式使用）
-  logPattern:
-    - "/var/log/ta.*.log"
+mongoURI: "mongodb://localhost:27017/tango"
 
-tail:
-  rescanSeconds: 30
+# logPattern: 日志文件匹配正则（daemon/once 模式使用）
+logPattern:
+  - "/var/log/ta.*.log"
 
-batch:
-  sizeMin: 0          # 0 = 自动（sizeInitial / 4）
-  sizeInitial: 1000
-  sizeMax: 0          # 0 = 自动（sizeInitial * 2）
-  workers: 2
-  channelSize: 1000
-  flushInterval: "1s"
+rescanInterval: "30s"   # 文件重扫间隔，daemon 模式使用（如 "30s"、"1m"）
 
-retry:
-  maxElapsedTime: "10s"
+batchSize: 1000         # 目标批量大小；min=batchSize/4, max=batchSize*2 自动推导
+batchWorkers: 2         # 并行写入 worker 数
+flushInterval: "1s"     # 批量定时刷新间隔
 
-log:
-  level: "info"
+maxElapsedTime: "10s"   # 单次 bulk write 最大重试总时间
+
+logLevel: "info"        # 日志级别：debug / info / warn / error

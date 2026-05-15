@@ -24,12 +24,9 @@ func writeYAML(t *testing.T, content string) string {
 
 func TestRescanInterval_Default(t *testing.T) {
 	yaml := `
-mongo:
-  uri: "mongodb://localhost"
-  db: "testdb"
-ta:
-  logPattern:
-    - "/tmp/.*\\.log"
+mongoURI: "mongodb://localhost"
+logPattern:
+  - "/tmp/.*\\.log"
 `
 	cfg, err := Load(writeYAML(t, yaml), nil)
 	if err != nil {
@@ -37,21 +34,15 @@ ta:
 	}
 
 	want := 30 * time.Second
-	if got := cfg.RescanInterval(); got != want {
-		t.Errorf("RescanInterval() = %v, want %v", got, want)
+	if got := cfg.RescanInterval; got != want {
+		t.Errorf("RescanInterval = %v, want %v", got, want)
 	}
 }
 
 func TestRescanInterval_CustomValue(t *testing.T) {
 	yaml := `
-mongo:
-  uri: "mongodb://localhost"
-  db: "testdb"
-ta:
-  logPattern:
-    - "/tmp/.*\\.log"
-tail:
-  rescanSeconds: 60
+mongoURI: "mongodb://localhost"
+rescanInterval: "60s"
 `
 	cfg, err := Load(writeYAML(t, yaml), nil)
 	if err != nil {
@@ -59,21 +50,15 @@ tail:
 	}
 
 	want := 60 * time.Second
-	if got := cfg.RescanInterval(); got != want {
-		t.Errorf("RescanInterval() = %v, want %v", got, want)
+	if got := cfg.RescanInterval; got != want {
+		t.Errorf("RescanInterval = %v, want %v", got, want)
 	}
 }
 
-func TestRescanSeconds_ZeroFallsBackToDefault(t *testing.T) {
+func TestRescanInterval_ZeroFallsBackToDefault(t *testing.T) {
 	yaml := `
-mongo:
-  uri: "mongodb://localhost"
-  db: "testdb"
-ta:
-  logPattern:
-    - "/tmp/.*\\.log"
-tail:
-  rescanSeconds: 0
+mongoURI: "mongodb://localhost"
+rescanInterval: "0s"
 `
 	cfg, err := Load(writeYAML(t, yaml), nil)
 	if err != nil {
@@ -81,30 +66,8 @@ tail:
 	}
 
 	want := 30 * time.Second
-	if got := cfg.RescanInterval(); got != want {
-		t.Errorf("RescanInterval() = %v, want %v (should fallback for zero)", got, want)
-	}
-}
-
-func TestRescanSeconds_NegativeFallsBackToDefault(t *testing.T) {
-	yaml := `
-mongo:
-  uri: "mongodb://localhost"
-  db: "testdb"
-ta:
-  logPattern:
-    - "/tmp/.*\\.log"
-tail:
-  rescanSeconds: -5
-`
-	cfg, err := Load(writeYAML(t, yaml), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	want := 30 * time.Second
-	if got := cfg.RescanInterval(); got != want {
-		t.Errorf("RescanInterval() = %v, want %v (should fallback for negative)", got, want)
+	if got := cfg.RescanInterval; got != want {
+		t.Errorf("RescanInterval = %v, want %v (should fallback for zero)", got, want)
 	}
 }
 
@@ -114,12 +77,7 @@ tail:
 
 func TestMaxElapsedTime_Default(t *testing.T) {
 	yaml := `
-mongo:
-  uri: "mongodb://localhost"
-  db: "testdb"
-ta:
-  logPattern:
-    - "/tmp/.*\\.log"
+mongoURI: "mongodb://localhost"
 `
 	cfg, err := Load(writeYAML(t, yaml), nil)
 	if err != nil {
@@ -127,21 +85,15 @@ ta:
 	}
 
 	want := 10 * time.Second
-	if got := cfg.Retry.MaxElapsedTime; got != want {
+	if got := cfg.MaxElapsedTime; got != want {
 		t.Errorf("MaxElapsedTime = %v, want %v", got, want)
 	}
 }
 
 func TestMaxElapsedTime_CustomValue(t *testing.T) {
 	yaml := `
-mongo:
-  uri: "mongodb://localhost"
-  db: "testdb"
-ta:
-  logPattern:
-    - "/tmp/.*\\.log"
-retry:
-  maxElapsedTime: "30s"
+mongoURI: "mongodb://localhost"
+maxElapsedTime: "30s"
 `
 	cfg, err := Load(writeYAML(t, yaml), nil)
 	if err != nil {
@@ -149,23 +101,15 @@ retry:
 	}
 
 	want := 30 * time.Second
-	if got := cfg.Retry.MaxElapsedTime; got != want {
+	if got := cfg.MaxElapsedTime; got != want {
 		t.Errorf("MaxElapsedTime = %v, want %v", got, want)
 	}
 }
 
 func TestMaxElapsedTime_FallbackForZero(t *testing.T) {
-	// When maxElapsedTime is explicitly set to 0, validate() should
-	// correct it to the default 10s.
 	yaml := `
-mongo:
-  uri: "mongodb://localhost"
-  db: "testdb"
-ta:
-  logPattern:
-    - "/tmp/.*\\.log"
-retry:
-  maxElapsedTime: "0s"
+mongoURI: "mongodb://localhost"
+maxElapsedTime: "0s"
 `
 	cfg, err := Load(writeYAML(t, yaml), nil)
 	if err != nil {
@@ -173,21 +117,15 @@ retry:
 	}
 
 	want := 10 * time.Second
-	if got := cfg.Retry.MaxElapsedTime; got != want {
+	if got := cfg.MaxElapsedTime; got != want {
 		t.Errorf("MaxElapsedTime = %v, want %v (should fallback for zero)", got, want)
 	}
 }
 
 func TestMaxElapsedTime_LargeValue(t *testing.T) {
 	yaml := `
-mongo:
-  uri: "mongodb://localhost"
-  db: "testdb"
-ta:
-  logPattern:
-    - "/tmp/.*\\.log"
-retry:
-  maxElapsedTime: "5m"
+mongoURI: "mongodb://localhost"
+maxElapsedTime: "5m"
 `
 	cfg, err := Load(writeYAML(t, yaml), nil)
 	if err != nil {
@@ -195,7 +133,7 @@ retry:
 	}
 
 	want := 5 * time.Minute
-	if got := cfg.Retry.MaxElapsedTime; got != want {
+	if got := cfg.MaxElapsedTime; got != want {
 		t.Errorf("MaxElapsedTime = %v, want %v", got, want)
 	}
 }
@@ -206,28 +144,22 @@ retry:
 
 func TestValidation_MissingMongoURI(t *testing.T) {
 	yaml := `
-mongo:
-  db: "testdb"
-ta:
-  logPattern:
-    - "/tmp/.*\\.log"
+logPattern:
+  - "/tmp/.*\\.log"
 `
 	cfg, err := Load(writeYAML(t, yaml), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected error for missing mongo.uri")
+		t.Fatal("expected error for missing mongoURI")
 	}
 }
 
 func TestValidation_MissingLogPattern_OK(t *testing.T) {
-	// logPattern is not required at config level; it's only validated by the
-	// daemon at runtime. This allows the ingest mode to work without it.
+	// logPattern is not required at config level; validated by daemon at runtime.
 	yaml := `
-mongo:
-  uri: "mongodb://localhost"
-  db: "testdb"
+mongoURI: "mongodb://localhost"
 `
 	_, err := Load(writeYAML(t, yaml), nil)
 	if err != nil {
@@ -237,11 +169,8 @@ mongo:
 
 func TestValidation_EmptyLogPattern_OK(t *testing.T) {
 	yaml := `
-mongo:
-  uri: "mongodb://localhost"
-  db: "testdb"
-ta:
-  logPattern: []
+mongoURI: "mongodb://localhost"
+logPattern: []
 `
 	_, err := Load(writeYAML(t, yaml), nil)
 	if err != nil {
@@ -251,14 +180,8 @@ ta:
 
 func TestFlushInterval(t *testing.T) {
 	yaml := `
-mongo:
-  uri: "mongodb://localhost"
-  db: "testdb"
-ta:
-  logPattern:
-    - "/tmp/.*\\.log"
-batch:
-  flushInterval: "500ms"
+mongoURI: "mongodb://localhost"
+flushInterval: "500ms"
 `
 	cfg, err := Load(writeYAML(t, yaml), nil)
 	if err != nil {
@@ -266,7 +189,7 @@ batch:
 	}
 
 	want := 500 * time.Millisecond
-	if got := cfg.FlushInterval(); got != want {
-		t.Errorf("FlushInterval() = %v, want %v", got, want)
+	if got := cfg.FlushInterval; got != want {
+		t.Errorf("FlushInterval = %v, want %v", got, want)
 	}
 }

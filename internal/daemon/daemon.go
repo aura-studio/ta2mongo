@@ -68,12 +68,12 @@ type Daemon struct {
 // New connects to MongoDB and creates a ready-to-run Daemon.
 // The caller must call Shutdown after Run returns to disconnect from MongoDB.
 func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Daemon, error) {
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(cfg.Mongo.URI))
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(cfg.MongoURI))
 	if err != nil {
 		return nil, err
 	}
 
-	dbName, err := config.MongoDBFromURI(cfg.Mongo.URI)
+	dbName, err := config.MongoDBFromURI(cfg.MongoURI)
 	if err != nil {
 		_ = client.Disconnect(context.Background())
 		return nil, fmt.Errorf("daemon: %w", err)
@@ -105,19 +105,19 @@ func (d *Daemon) EnsureIndexes(ctx context.Context) error {
 // for the same user are processed sequentially by a single worker, preventing
 // out-of-order overwrites across workers.
 func (d *Daemon) Run(ctx context.Context) error {
-	if len(d.cfg.TA.LogPattern) == 0 {
+	if len(d.cfg.LogPattern) == 0 {
 		return errors.New("daemon: ta.logPattern is required (at least one regex)")
 	}
 
 	d.logger.WithFields(logrus.Fields{
-		"log_patterns":    d.cfg.TA.LogPattern,
-		"workers":        d.cfg.Batch.Workers,
-		"batch_size":     d.cfg.Batch.SizeInitial,
-		"flush_interval": d.cfg.Batch.FlushInterval,
+		"log_patterns":    d.cfg.LogPattern,
+		"workers":        d.cfg.BatchWorkers,
+		"batch_size":     d.cfg.BatchSize,
+		"flush_interval": d.cfg.FlushInterval,
 	}).Info("daemon: starting pipeline")
 
 	// Start the tailer; it returns a channel of log lines.
-	t := tailer.New(d.cfg.TA.LogPattern, d.cfg.RescanInterval(), d.logger)
+	t := tailer.New(d.cfg.LogPattern, d.cfg.RescanInterval, d.logger)
 	lineCh := t.Run(ctx)
 
 	// Create stats collector for periodic reporting.

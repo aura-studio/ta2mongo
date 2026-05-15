@@ -79,12 +79,12 @@ type Runner struct {
 
 // New connects to MongoDB and creates a ready-to-run Runner.
 func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Runner, error) {
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(cfg.Mongo.URI))
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(cfg.MongoURI))
 	if err != nil {
 		return nil, fmt.Errorf("once: connect to mongo: %w", err)
 	}
 
-	dbName, err := config.MongoDBFromURI(cfg.Mongo.URI)
+	dbName, err := config.MongoDBFromURI(cfg.MongoURI)
 	if err != nil {
 		return nil, fmt.Errorf("once: %w", err)
 	}
@@ -115,14 +115,14 @@ func (r *Runner) EnsureIndexes(ctx context.Context) error {
 // It returns an error only for fatal infrastructure issues (e.g. no log patterns).
 // Individual line failures are captured in Stats, not as a returned error.
 func (r *Runner) Run(ctx context.Context) (*Stats, error) {
-	if len(r.cfg.TA.LogPattern) == 0 {
+	if len(r.cfg.LogPattern) == 0 {
 		return nil, fmt.Errorf("once: ta.logPattern is required (at least one regex)")
 	}
 
 	r.stats.StartTime = time.Now()
 
 	// Discover files using the same logic as the tailer (regex-based).
-	files := tailer.DiscoverFiles(r.cfg.TA.LogPattern, r.logger)
+	files := tailer.DiscoverFiles(r.cfg.LogPattern, r.logger)
 	r.stats.FilesDiscovered = int64(len(files))
 
 	if len(files) == 0 {

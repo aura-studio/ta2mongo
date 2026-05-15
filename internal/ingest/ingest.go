@@ -38,12 +38,12 @@ type Ingester struct {
 // New connects to MongoDB and creates a ready-to-use Ingester.
 // The caller must call Close when the Ingester is no longer needed.
 func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Ingester, error) {
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(cfg.Mongo.URI))
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(cfg.MongoURI))
 	if err != nil {
 		return nil, fmt.Errorf("ingest: connect to mongo: %w", err)
 	}
 
-	dbName, err := config.MongoDBFromURI(cfg.Mongo.URI)
+	dbName, err := config.MongoDBFromURI(cfg.MongoURI)
 	if err != nil {
 		return nil, fmt.Errorf("ingest: %w", err)
 	}
@@ -63,10 +63,10 @@ func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Ingest
 // MongoDB lifecycle (e.g., when both daemon and ingest modes run in the same
 // process).
 func NewFromClient(client *mongo.Client, cfg config.Config, logger *logrus.Logger) *Ingester {
-	dbName, err := config.MongoDBFromURI(cfg.Mongo.URI)
+	dbName, err := config.MongoDBFromURI(cfg.MongoURI)
 	if err != nil {
 		// NewFromClient signature doesn't return error; fall back to using URI as-is.
-		// This should never happen if cfg.Mongo.URI is valid.
+		// This should never happen if cfg.MongoURI is valid.
 		dbName = ""
 	}
 	db := client.Database(dbName)

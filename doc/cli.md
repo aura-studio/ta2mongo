@@ -1,47 +1,68 @@
-# ta2mongo 命令行使用说明
+# tango 命令行使用说明
 
 ## 基本语法
 
 ```
-ta2mongo [subcommand] [flags]
+tango <subcommand> [flags]
 ```
 
-## 全局 Flags
+## 全局 Flag
 
 | Flag | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `--config` | string | `ta2mongo.yaml` | YAML 配置文件路径 |
+| `--config` | string | `tango.yaml` | YAML 配置文件路径（文件不存在时静默跳过） |
 
-所有子命令共享该 flag。
+## 配置 Flags（所有子命令共享）
+
+所有配置参数均可通过命令行 flag 覆盖，flag 名与 YAML key 和环境变量后缀一致：
+
+| Flag | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `--mongoURI` | string | *(必填)* | MongoDB 连接 URI |
+| `--logPattern` | string[] | `[]` | 日志文件路径匹配正则（可多次指定） |
+| `--rescanInterval` | duration | `30s` | 文件重扫间隔（如 `30s`、`1m`） |
+| `--batchSize` | int | `1000` | 目标批量大小 |
+| `--batchWorkers` | int | `2` | 并行写入 worker 数 |
+| `--flushInterval` | duration | `1s` | 批量定时刷新间隔 |
+| `--maxElapsedTime` | duration | `10s` | bulk write 最大重试总时间 |
+| `--logLevel` | string | `info` | 日志级别：debug/info/warn/error |
 
 ---
 
 ## 子命令
 
-### `ta2mongo daemon`
+### `tango daemon`
 
 持续追尾日志文件，增量导入 MongoDB。进程常驻，直到收到 SIGINT/SIGTERM。
 
 ```bash
-ta2mongo daemon --config ta2mongo.yaml
+tango daemon --config tango.yaml
+
+# 不使用配置文件，直接传参：
+tango daemon --mongoURI mongodb://localhost:27017/tango \
+             --logPattern '/var/log/ta.*.log' \
+             --batchWorkers 4
 ```
 
-- 需要配置 `ta.logPattern`
+- 需要 `logPattern`
 - 从文件末尾开始消费（增量）
 - 支持 log rotation（ReOpen + Follow）
-- 周期性重扫新文件
+- 周期性重扫新文件（`rescanInterval`）
 
 ---
 
-### `ta2mongo once`
+### `tango once`
 
-Daemon 的一次性版本。从匹配文件的**开头**读取全部内容，保留完整的 daemon 处理流程（affinity 路由、多 worker、batch flush、retry），处理完毕后输出统计摘要并退出。
+从匹配文件的**开头**读取全部内容，处理完毕后输出统计摘要并退出。
 
 ```bash
-ta2mongo once --config ta2mongo.yaml
+tango once --config tango.yaml
+
+tango once --mongoURI mongodb://localhost:27017/tango \
+           --logPattern '/var/log/ta.*.log'
 ```
 
-- 需要配置 `ta.logPattern`
+- 需要 `logPattern`
 - 从文件开头读取（全量）
 - 不 follow、不 reopen、不重扫
 - 退出时输出详细统计（重试次数、错误数、吞吐量等）
@@ -49,23 +70,23 @@ ta2mongo once --config ta2mongo.yaml
 
 ---
 
-### `ta2mongo ingest [json-line ...]`
+### `tango ingest [json-line ...]`
 
 同步阻塞式上传。逐条处理 JSON 行，出错直接返回。适合 CLI 单次上传或管道输入。
 
 ```bash
 # 位置参数传入：
-ta2mongo ingest --config ta2mongo.yaml \
+tango ingest --mongoURI mongodb://localhost:27017/tango \
   '{"#type":"track","#event_name":"login","#time":"2024-01-01","#uuid":"u1","#account_id":"alice"}'
 
 # 从 stdin 管道读取：
-cat events.jsonl | ta2mongo ingest --config ta2mongo.yaml
+cat events.jsonl | tango ingest --config tango.yaml
 
 # 混合：先处理参数，再处理 stdin：
-echo '{"#type":"track",...}' | ta2mongo ingest --config ta2mongo.yaml '{"#type":"user_set",...}'
+echo '{"#type":"track",...}' | tango ingest --config tango.yaml '{"#type":"user_set",...}'
 ```
 
-- 不需要 `ta.logPattern`
+- 不需要 `logPattern`
 - 每行独立处理：parse → identity → write → 返回结果
 - 失败行记录 Error 日志并继续后续行
 - 最终以非零退出码报告失败总数
@@ -73,19 +94,17 @@ echo '{"#type":"track",...}' | ta2mongo ingest --config ta2mongo.yaml '{"#type":
 
 ---
 
-## 无子命令时的行为
+## 配置优先级
 
-当不指定子命令时，根据 YAML 配置文件中的 `mode` 字段决定运行模式：
-
-```bash
-# 等价于 ta2mongo daemon（mode 默认为 "daemon"）
-ta2mongo --config ta2mongo.yaml
-
-# 若 YAML 中设置 mode: "once"
-ta2mongo --config ta2mongo.yaml   # 等价于 ta2mongo once
+```
+内置默认值  <  tango.yaml  <  TANGO_* 环境变量  <  --flag 命令行参数
 ```
 
-**优先级**：子命令 > YAML `mode` 字段。显式指定子命令时忽略配置文件中的 mode。
+示例（命令行覆盖配置文件中的 batchWorkers）：
+```bash
+# tango.yaml 中设置 batchWorkers: 2，命令行覆盖为 8
+tango daemon --config tango.yaml --batchWorkers 8
+```
 
 ---
 
@@ -96,7 +115,7 @@ ta2mongo --config ta2mongo.yaml   # 等价于 ta2mongo once
 | 后台服务持续导入日志 | `daemon` |
 | 批量迁移 / 历史数据回填 / CI 流水线 | `once` |
 | CLI 单次上传少量数据 | `ingest` |
-| 应用内嵌集成（Go 库调用） | API 模式（代码引用 `client` 包） |
+| 应用内嵌集成（Go 库调用） | `client` 包 |
 
 ---
 
@@ -104,8 +123,8 @@ ta2mongo --config ta2mongo.yaml   # 等价于 ta2mongo once
 
 | 退出码 | 含义 |
 |--------|------|
-| 0 | 成功 |
-| 1 | 配置错误 / 连接失败 / 处理异常 |
+| `0` | 成功 |
+| `1` | 配置错误 / 连接失败 / 处理异常 |
 
 - `daemon`：正常收到信号退出为 0
 - `once`：有任何 parse/identity/write 错误时退出码 1
@@ -120,33 +139,3 @@ ta2mongo --config ta2mongo.yaml   # 等价于 ta2mongo once
 - `daemon`：停止 tail，flush 剩余 batch，断开 MongoDB，退出
 - `once`：停止读文件，flush 剩余 batch，输出已完成部分的统计，退出
 - `ingest`：中断当前处理，断开 MongoDB，退出
-
----
-
-## 配置文件示例
-
-```yaml
-mode: "daemon"          # daemon / once / ingest
-
-mongo:
-  uri: "mongodb://localhost:27017"
-  db: "ta2mongo"
-
-ta:
-  logPattern:
-    - "/mnt/shared-data-log/ta\\.production-.*"
-
-tail:
-  rescanSeconds: 30
-
-batch:
-  size: 1000
-  workerCount: 2
-  flushIntervalMs: 1000
-
-retry:
-  maxElapsedTime: "10s"
-
-log:
-  level: "info"
-```

@@ -48,16 +48,11 @@ func testIngesterSetup(t *testing.T) (*Ingester, *mongo.Database, func()) {
 	uri := testMongoURI + "/" + dbName
 
 	cfg := config.Config{
-		Mongo: config.MongoConfig{URI: uri},
-		Retry: config.RetryConfig{MaxElapsedTime: 5 * time.Second},
-		Batch: config.BatchConfig{
-			SizeMin:       10,
-			SizeInitial:   100,
-			SizeMax:       1000,
-			Workers:       2,
-			ChannelSize:   100,
-			FlushInterval: 500 * time.Millisecond,
-		},
+		MongoURI:      uri,
+		MaxElapsedTime: 5 * time.Second,
+		BatchSize:     100,
+		BatchWorkers:  2,
+		FlushInterval: 500 * time.Millisecond,
 	}
 
 	logger := logrus.New()
@@ -526,8 +521,8 @@ func TestNewFromClient(t *testing.T) {
 
 	dbName := fmt.Sprintf("tango_fromclient_test_%d", time.Now().UnixNano())
 	cfg := config.Config{
-		Mongo: config.MongoConfig{URI: testMongoURI + "/" + dbName},
-		Retry: config.RetryConfig{MaxElapsedTime: 5 * time.Second},
+		MongoURI:       testMongoURI + "/" + dbName,
+		MaxElapsedTime: 5 * time.Second,
 	}
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)

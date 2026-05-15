@@ -57,8 +57,8 @@ func RunWorkers(ctx context.Context, cfg config.Config, st *store.Store,
 		stats = NoopStats{}
 	}
 
-	workerCount := cfg.Batch.Workers
-	chSize := cfg.Batch.ChannelSize
+	workerCount := cfg.BatchWorkers
+	chSize := cfg.BatchChannelSize()
 
 	// Create per-worker channels for affinity-based routing.
 	workerChs := make([]chan string, workerCount)
@@ -87,12 +87,12 @@ func worker(ctx context.Context, cfg config.Config, st *store.Store,
 	parser *talog.Parser, logger *logrus.Logger, lineCh <-chan string,
 	stats StatsCollector,
 ) {
-	userBatch := NewBatch(cfg.Batch.SizeMax)
-	eventBatch := NewBatch(cfg.Batch.SizeMax)
+	userBatch := NewBatch(cfg.BatchSizeMax())
+	eventBatch := NewBatch(cfg.BatchSizeMax())
 	deadBatch := NewBatch(128) // smaller capacity for dead letters
 
 	lastFlush := time.Now()
-	flushInterval := cfg.FlushInterval()
+	flushInterval := cfg.FlushInterval
 	invalidCount := 0
 
 	// flush writes accumulated batches to MongoDB and resets them.
@@ -160,11 +160,11 @@ func worker(ctx context.Context, cfg config.Config, st *store.Store,
 			// or time-interval triggers.
 			backlog := len(lineCh)
 			threshold := dynamicbatch.ComputeFlushThreshold(
-				cfg.Batch.SizeMin,
-				cfg.Batch.SizeInitial,
-				cfg.Batch.SizeMax,
+				cfg.BatchSizeMin(),
+				cfg.BatchSize,
+				cfg.BatchSizeMax(),
 				backlog,
-				cfg.Batch.ChannelSize,
+				cfg.BatchChannelSize(),
 			)
 			needFlush := userBatch.Len() >= threshold ||
 				eventBatch.Len() >= threshold ||

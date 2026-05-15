@@ -1,17 +1,16 @@
 // Package config defines the tango configuration structure and loading logic.
 //
-// Configuration is loaded from three sources in increasing priority order:
+// Configuration is loaded from four sources in increasing priority order:
 //  1. Built-in defaults
-//  2. YAML config file (optional; skipped if the file does not exist)
-//  3. Environment variables (prefix: TANGO_, e.g. TANGO_MONGO_URI)
-//  4. CLI flags (highest priority; set by the caller via ApplyFlags)
+//  2. YAML config file (optional; skipped silently if the file does not exist)
+//  3. Environment variables (prefix: TANGO_, e.g. TANGO_MONGOURI)
+//  4. CLI flags (highest priority)
 //
-// All YAML keys use camelCase. Environment variable names are derived by
-// upper-casing the key and replacing dots/underscores with underscores, e.g.
+// All YAML keys and CLI flag names are flat camelCase, e.g.
 //
-//	mongo.uri  => TANGO_MONGO_URI
-//	log.level  => TANGO_LOG_LEVEL
-//	batch.sizeMin => TANGO_BATCH_SIZEMIN
+//	mongoURI        => TANGO_MONGOURI         / --mongoURI
+//	logLevel        => TANGO_LOGLEVEL         / --logLevel
+//	batchSize       => TANGO_BATCHSIZE        / --batchSize
 package config
 
 import (
@@ -33,74 +32,67 @@ const (
 	ModeIngest = "ingest"
 )
 
-// Config is the top-level configuration, mapping 1-to-1 with the YAML structure.
+// Config is the flat top-level configuration.
+// All fields map directly to YAML keys, CLI flags, and TANGO_* env vars.
 type Config struct {
-	Mode  string      `mapstructure:"mode"`
-	Mongo MongoConfig `mapstructure:"mongo"`
-	TA    TAConfig    `mapstructure:"ta"`
-	Tail  TailConfig  `mapstructure:"tail"`
-	Batch BatchConfig `mapstructure:"batch"`
-	Retry RetryConfig `mapstructure:"retry"`
-	Log   LogConfig   `mapstructure:"log"`
-}
+	// Mode selects the run mode: daemon (default), once, or ingest.
+	Mode string `mapstructure:"mode"`
 
-// MongoConfig holds MongoDB connection parameters.
-type MongoConfig struct {
-	URI string `mapstructure:"uri"`
-}
+	// MongoURI is the MongoDB connection URI (required).
+	// The database name is extracted from the URI path.
+	MongoURI string `mapstructure:"mongoURI"`
 
-// TAConfig holds ThinkingData log source settings.
-type TAConfig struct {
-	// LogPattern is a list of glob/regex patterns matched against file paths.
+	// LogPattern is a list of regex patterns matched against file paths.
+	// Required for daemon and once modes; ignored by ingest.
 	LogPattern []string `mapstructure:"logPattern"`
-}
 
-// TailConfig controls the file-tailing behavior.
-type TailConfig struct {
-	// RescanSeconds is how often (in seconds) the tailer rescans for new files.
-	RescanSeconds int `mapstructure:"rescanSeconds"`
-}
+	// RescanInterval is how often the tailer rescans for new files (daemon only).
+	RescanInterval time.Duration `mapstructure:"rescanInterval"`
 
-// BatchConfig controls batching and parallelism of writes.
-type BatchConfig struct {
-	// SizeMin is the minimum batch size (adaptive lower bound).
-	SizeMin int `mapstructure:"sizeMin"`
-	// SizeInitial is the effective batch size at "mid backlog".
-	SizeInitial int `mapstructure:"sizeInitial"`
-	// SizeMax is the maximum batch size (adaptive upper bound).
-	SizeMax int `mapstructure:"sizeMax"`
+	// BatchSize is the target number of records per bulk-write flush.
+	// The adaptive min is BatchSize/4 and max is BatchSize*2.
+	BatchSize int `mapstructure:"batchSize"`
 
-	// Workers is the number of parallel write workers.
-	Workers int `mapstructure:"workers"`
-	// ChannelSize is the per-worker channel buffer size.
-	ChannelSize int `mapstructure:"channelSize"`
+	// BatchWorkers is the number of parallel write workers.
+	BatchWorkers int `mapstructure:"batchWorkers"`
+
 	// FlushInterval is how often workers flush partial batches (e.g. "1s").
 	FlushInterval time.Duration `mapstructure:"flushInterval"`
-}
 
-// RetryConfig controls the exponential-backoff retry for bulk writes.
-type RetryConfig struct {
-	// MaxElapsedTime is the maximum total time spent retrying a single bulk write.
+	// MaxElapsedTime is the maximum total retry time for a single bulk write.
 	MaxElapsedTime time.Duration `mapstructure:"maxElapsedTime"`
+
+	// LogLevel is the log verbosity: debug, info, warn, error.
+	LogLevel string `mapstructure:"logLevel"`
 }
 
-// LogConfig controls logging output.
-type LogConfig struct {
-	Level string `mapstructure:"level"`
+// BatchSizeMin returns the adaptive lower bound (BatchSize / 4, minimum 1).
+func (c Config) BatchSizeMin() int {
+	v := c.BatchSize / 4
+	if v < 1 {
+		return 1
+	}
+	return v
 }
 
-// Load builds a Config from:
-//  1. Defaults
-//  2. YAML file at path (skipped silently if the file does not exist)
-//  3. Environment variables (TANGO_ prefix)
-//  4. CLI flags bound via BindFlags (caller must call BindFlags before Load)
+// BatchSizeMax returns the adaptive upper bound (BatchSize * 2).
+func (c Config) BatchSizeMax() int {
+	return c.BatchSize * 2
+}
+
+// BatchChannelSize returns the per-worker channel buffer size (BatchSize * 2).
+func (c Config) BatchChannelSize() int {
+	return c.BatchSize * 2
+}
+
+
+// Load builds a Config from defaults → YAML file → env vars → CLI flags.
 //
-// If path is empty, file loading is skipped entirely.
-// The config is validated before being returned.
+// If path is empty or the file does not exist, file loading is skipped silently.
 func Load(path string, flags *pflag.FlagSet) (Config, error) {
 	v := viper.New()
 
-	// Environment variables: TANGO_MONGO_URI, TANGO_LOG_LEVEL, etc.
+	// Environment variables: TANGO_MONGOURI, TANGO_LOGLEVEL, etc.
 	v.SetEnvPrefix("TANGO")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
@@ -118,7 +110,7 @@ func Load(path string, flags *pflag.FlagSet) (Config, error) {
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return Config{}, fmt.Errorf("stat config %q: %w", path, err)
 		}
-		// If ErrNotExist: silently skip; use defaults + env + flags.
+		// ErrNotExist: silently skip; use defaults + env + flags.
 	}
 
 	// Bind CLI flags (flags override env vars and file).
@@ -138,7 +130,7 @@ func Load(path string, flags *pflag.FlagSet) (Config, error) {
 }
 
 // bindFlags binds every flag in the set to its matching viper key.
-// Only flags that were explicitly set on the CLI take effect; unset flags
+// Only flags explicitly set on the CLI take effect; unset flags
 // fall back to the file / env / default chain.
 func bindFlags(v *viper.Viper, flags *pflag.FlagSet) error {
 	var bindErr error
@@ -146,10 +138,8 @@ func bindFlags(v *viper.Viper, flags *pflag.FlagSet) error {
 		if bindErr != nil {
 			return
 		}
-		// Map flag name (e.g. "mongo.uri") to viper key.
-		key := f.Name
-		if err := v.BindPFlag(key, f); err != nil {
-			bindErr = fmt.Errorf("bind flag %q: %w", key, err)
+		if err := v.BindPFlag(f.Name, f); err != nil {
+			bindErr = fmt.Errorf("bind flag %q: %w", f.Name, err)
 		}
 	})
 	return bindErr
@@ -158,83 +148,42 @@ func bindFlags(v *viper.Viper, flags *pflag.FlagSet) error {
 // setDefaults registers viper defaults for all fields.
 func setDefaults(v *viper.Viper) {
 	v.SetDefault("mode", ModeDaemon)
-	v.SetDefault("mongo.uri", "")
-	v.SetDefault("ta.logPattern", []string{})
-	v.SetDefault("tail.rescanSeconds", 30)
-	v.SetDefault("batch.sizeMin", 0)     // 0 = auto (1/4 of sizeInitial)
-	v.SetDefault("batch.sizeInitial", 1000)
-	v.SetDefault("batch.sizeMax", 0)     // 0 = auto (2x sizeInitial)
-	v.SetDefault("batch.workers", 2)
-	v.SetDefault("batch.channelSize", 1000)
-	v.SetDefault("batch.flushInterval", "1s")
-	v.SetDefault("retry.maxElapsedTime", "10s")
-	v.SetDefault("log.level", "info")
+	v.SetDefault("mongoURI", "")
+	v.SetDefault("logPattern", []string{})
+	v.SetDefault("rescanInterval", "30s")
+	v.SetDefault("batchSize", 1000)
+	v.SetDefault("batchWorkers", 2)
+	v.SetDefault("flushInterval", "1s")
+	v.SetDefault("maxElapsedTime", "10s")
+	v.SetDefault("logLevel", "info")
 }
 
-// applyDefaults fills in zero-value fields with sensible derived defaults
-// and clamps values into valid ranges.
+// applyDefaults fills in zero-value fields with sensible defaults.
 func applyDefaults(c *Config) {
 	if c.Mode == "" {
 		c.Mode = ModeDaemon
 	}
-
-	if c.Tail.RescanSeconds <= 0 {
-		c.Tail.RescanSeconds = 30
+	if c.RescanInterval <= 0 {
+		c.RescanInterval = 30 * time.Second
 	}
-
-	if c.Batch.SizeInitial <= 0 {
-		c.Batch.SizeInitial = 1000
+	if c.BatchSize <= 0 {
+		c.BatchSize = 1000
 	}
-	if c.Batch.SizeMin <= 0 {
-		c.Batch.SizeMin = c.Batch.SizeInitial / 4
-		if c.Batch.SizeMin < 1 {
-			c.Batch.SizeMin = 1
-		}
+	if c.BatchWorkers <= 0 {
+		c.BatchWorkers = 2
 	}
-	if c.Batch.SizeMax <= 0 {
-		c.Batch.SizeMax = c.Batch.SizeInitial * 2
+	if c.FlushInterval <= 0 {
+		c.FlushInterval = time.Second
 	}
-
-	// Clamp: sizeMin <= sizeInitial <= sizeMax.
-	if c.Batch.SizeMin > c.Batch.SizeInitial {
-		c.Batch.SizeMin = c.Batch.SizeInitial
+	if c.MaxElapsedTime <= 0 {
+		c.MaxElapsedTime = 10 * time.Second
 	}
-	if c.Batch.SizeMax < c.Batch.SizeInitial {
-		c.Batch.SizeMax = c.Batch.SizeInitial
-	}
-	if c.Batch.SizeMax < c.Batch.SizeMin {
-		c.Batch.SizeMax = c.Batch.SizeMin
-	}
-	if c.Batch.SizeMin < 1 {
-		c.Batch.SizeMin = 1
-	}
-	if c.Batch.SizeInitial < 1 {
-		c.Batch.SizeInitial = 1
-	}
-	if c.Batch.SizeMax < 1 {
-		c.Batch.SizeMax = 1
-	}
-
-	if c.Batch.Workers <= 0 {
-		c.Batch.Workers = 2
-	}
-	if c.Batch.ChannelSize <= 0 {
-		c.Batch.ChannelSize = 1000
-	}
-	if c.Batch.FlushInterval <= 0 {
-		c.Batch.FlushInterval = time.Second
-	}
-
-	if c.Retry.MaxElapsedTime <= 0 {
-		c.Retry.MaxElapsedTime = 10 * time.Second
-	}
-	if c.Log.Level == "" {
-		c.Log.Level = "info"
+	if c.LogLevel == "" {
+		c.LogLevel = "info"
 	}
 }
 
 // Validate checks that required fields are present.
-// It is called by the cmd layer after flags are merged in.
 func (c *Config) Validate() error {
 	switch c.Mode {
 	case ModeDaemon, ModeOnce, ModeIngest:
@@ -243,8 +192,8 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("config: mode must be one of %q, %q, %q; got %q",
 			ModeDaemon, ModeOnce, ModeIngest, c.Mode)
 	}
-	if c.Mongo.URI == "" {
-		return fmt.Errorf("config: mongo.uri is required (set via --mongo.uri, TANGO_MONGO_URI, or config file)")
+	if c.MongoURI == "" {
+		return fmt.Errorf("config: mongoURI is required (set via --mongoURI, TANGO_MONGOURI, or config file)")
 	}
 	return nil
 }
@@ -258,23 +207,9 @@ func MongoDBFromURI(uri string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("parse mongo uri: %w", err)
 	}
-
-	// AWS DocumentDB / some MongoDB connection strings may not include a
-	// database name in the URI path (e.g. .../?tls=true...).
-	// In that case fall back to the project's default database name.
 	db := strings.Trim(u.Path, "/")
 	if db == "" {
 		return "tango", nil
 	}
 	return db, nil
-}
-
-// FlushInterval returns Batch.FlushInterval (already a time.Duration).
-func (c *Config) FlushInterval() time.Duration {
-	return c.Batch.FlushInterval
-}
-
-// RescanInterval returns Tail.RescanSeconds as a time.Duration.
-func (c *Config) RescanInterval() time.Duration {
-	return time.Duration(c.Tail.RescanSeconds) * time.Second
 }

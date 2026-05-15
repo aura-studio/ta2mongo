@@ -44,16 +44,11 @@ func testSetup(t *testing.T) (*Store, *mongo.Database, func()) {
 	db := client.Database(dbName)
 
 	cfg := config.Config{
-		Mongo: config.MongoConfig{URI: testMongoURI + "/" + dbName},
-		Retry: config.RetryConfig{MaxElapsedTime: 5 * time.Second},
-		Batch: config.BatchConfig{
-			SizeMin:       10,
-			SizeInitial:   100,
-			SizeMax:       1000,
-			Workers:       2,
-			ChannelSize:   100,
-			FlushInterval: 500 * time.Millisecond,
-		},
+		MongoURI:       testMongoURI + "/" + dbName,
+		MaxElapsedTime: 5 * time.Second,
+		BatchSize:      100,
+		BatchWorkers:   2,
+		FlushInterval:  500 * time.Millisecond,
 	}
 
 	logger := logrus.New()

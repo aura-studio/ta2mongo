@@ -160,9 +160,7 @@ func TestRetryWithDifferentMaxElapsedTimes(t *testing.T) {
 // backoff setup from Store.BulkWrite with the configured MaxElapsedTime.
 func TestConfigMaxElapsedTimeWiring(t *testing.T) {
 	cfg := config.Config{
-		Retry: config.RetryConfig{
-			MaxElapsedTime: 500 * time.Millisecond,
-		},
+		MaxElapsedTime: 500 * time.Millisecond,
 	}
 
 	_ = logrus.New()
@@ -171,7 +169,7 @@ func TestConfigMaxElapsedTimeWiring(t *testing.T) {
 	bo := backoff.NewExponentialBackOff()
 	bo.InitialInterval = 200 * time.Millisecond
 	bo.MaxInterval = 2 * time.Second
-	bo.MaxElapsedTime = cfg.Retry.MaxElapsedTime
+	bo.MaxElapsedTime = cfg.MaxElapsedTime
 	bo.Reset()
 
 	if bo.MaxElapsedTime != 500*time.Millisecond {
@@ -179,7 +177,7 @@ func TestConfigMaxElapsedTimeWiring(t *testing.T) {
 	}
 
 	// Also verify the config value propagation.
-	if cfg.Retry.MaxElapsedTime != 500*time.Millisecond {
-		t.Errorf("expected config MaxElapsedTime = 500ms, got %v", cfg.Retry.MaxElapsedTime)
+	if cfg.MaxElapsedTime != 500*time.Millisecond {
+		t.Errorf("expected config MaxElapsedTime = 500ms, got %v", cfg.MaxElapsedTime)
 	}
 }
