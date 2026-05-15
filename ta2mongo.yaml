@@ -1,0 +1,29 @@
+# ta2mongo 推荐两级 YAML 配置（mongo/ta/tail/batch/index/retry/log）
+#
+# daemon-only：只会启动 RunDaemon。
+
+mongo:
+  uri: "mongodb://localhost:27017"
+  db: "ta2mongo"
+
+ta:
+  # 每个字符串是一个正则，用于匹配文件路径
+  logPattern:
+    - "/mnt/shared-data-log/ta\\.production-.*"
+
+tail:
+  # rescan 一定会开启，因此只需要配置重扫间隔
+  rescanSeconds: 30
+
+batch:
+  size: 1000
+  workerCount: 2
+  flushIntervalMs: 1000
+
+# index.ensureIndexes 现在始终开启：因此移除该配置项
+
+retry:
+  maxElapsedTime: "10s"
+
+log:
+  level: "info"
