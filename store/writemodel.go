@@ -337,8 +337,13 @@ func EventWriteModel(typ, uuid string, doc bson.M) mongo.WriteModel {
 
 	switch typ {
 	case "track":
-		// Simple insert of the event document.
-		return mongo.NewInsertOneModel().SetDocument(doc)
+		// Upsert by #uuid to ensure idempotency: if the event already exists
+		// (e.g. daemon restart re-reads from file beginning), it is skipped.
+		// Uses $setOnInsert so existing documents are never modified.
+		return mongo.NewUpdateOneModel().
+			SetFilter(bson.M{"#uuid": uuid}).
+			SetUpdate(bson.M{"$setOnInsert": doc}).
+			SetUpsert(true)
 
 	case "track_update":
 		// Field-level update with per-#uuid `_ts` ordering protection.
@@ -355,7 +360,11 @@ func EventWriteModel(typ, uuid string, doc bson.M) mongo.WriteModel {
 			SetUpsert(true)
 
 	default:
-		return mongo.NewInsertOneModel().SetDocument(doc)
+		// Default: same as track, upsert with $setOnInsert for idempotency.
+		return mongo.NewUpdateOneModel().
+			SetFilter(bson.M{"#uuid": uuid}).
+			SetUpdate(bson.M{"$setOnInsert": doc}).
+			SetUpsert(true)
 	}
 }
 
