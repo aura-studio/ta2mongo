@@ -87,9 +87,9 @@ func (t *Tailer) startFile(ctx context.Context, path string, out chan<- string) 
 	t.tailed[path] = struct{}{}
 	t.mu.Unlock()
 
-	// Start from file end (incremental, daemon mode).
+	// Start from file beginning so existing content is processed on first run.
 	tt, err := tail.TailFile(path, tail.Config{
-		Location:    &tail.SeekInfo{Whence: 2, Offset: 0},
+		Location:    &tail.SeekInfo{Whence: 0, Offset: 0},
 		ReOpen:      true,
 		Follow:      true,
 		MustExist:   false,

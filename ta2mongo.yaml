@@ -15,7 +15,7 @@ mongo:
 ta:
   # 每个字符串是一个正则，用于匹配文件路径
   logPattern:
-    - "/mnt/shared-data-log/ta\\.production-.*"
+    - "/Users/tony/Documents/Workspace/codeup.aliyun.com/mirror/world/rocket-nano/log/ta.*.log"
 
 tail:
   rescanSeconds: 30

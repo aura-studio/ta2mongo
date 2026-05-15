@@ -97,10 +97,10 @@ func worker(ctx context.Context, cfg config.Config, st *store.Store,
 
 	// flush writes accumulated batches to MongoDB and resets them.
 	// User batch uses ordered writes to preserve operation sequence within a batch.
-	flush := func() {
-		flushBatchOrdered(ctx, st, logger, st.UserCollection(), userBatch, stats)
-		flushBatch(ctx, st, logger, st.EventCollection(), eventBatch, stats)
-		flushBatch(ctx, st, logger, st.DeadLetterCollection(), deadBatch, stats)
+	flush := func(flushCtx context.Context) {
+		flushBatchOrdered(flushCtx, st, logger, st.UserCollection(), userBatch, stats)
+		flushBatch(flushCtx, st, logger, st.EventCollection(), eventBatch, stats)
+		flushBatch(flushCtx, st, logger, st.DeadLetterCollection(), deadBatch, stats)
 		lastFlush = time.Now()
 	}
 
@@ -117,7 +117,7 @@ func worker(ctx context.Context, cfg config.Config, st *store.Store,
 			}
 			deadBatch.Add(store.DeadLetterModel(line, err))
 			if deadBatch.Full() || time.Since(lastFlush) >= flushInterval {
-				flush()
+				flush(ctx)
 			}
 			continue
 		}
@@ -158,20 +158,23 @@ func worker(ctx context.Context, cfg config.Config, st *store.Store,
 			eventBatch.Len() >= threshold ||
 			time.Since(lastFlush) >= flushInterval
 		if needFlush {
-			flush()
+			flush(ctx)
 		}
 
 		// Check for cancellation without blocking.
 		select {
 		case <-ctx.Done():
-			flush()
+			// Use a background context for the final flush so remaining
+			// data is written even after the main context is cancelled.
+			flush(context.Background())
 			return
 		default:
 		}
 	}
 
-	// Channel closed (tailer stopped). Flush remaining data.
-	flush()
+	// Channel closed (tailer stopped). Flush remaining data using a
+	// background context to ensure writes complete during shutdown.
+	flush(context.Background())
 }
 
 // flushBatch writes a batch to the given collection (unordered) and resets it.
