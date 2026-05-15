@@ -176,7 +176,13 @@ func discoverFiles(patterns []string, logger *logrus.Logger) []string {
 		}
 
 		base := regexBaseDir(pattern)
-		_ = filepath.WalkDir(base, func(path string, d fs.DirEntry, err error) error {
+		logger.WithFields(logrus.Fields{
+			"pattern":  pattern,
+			"walk_dir": base,
+		}).Debug("tailer: scanning directory for matching files")
+
+		var matched int
+		walkErr := filepath.WalkDir(base, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return nil // skip inaccessible paths
 			}
@@ -187,10 +193,20 @@ func discoverFiles(patterns []string, logger *logrus.Logger) []string {
 				if _, ok := seen[path]; !ok {
 					seen[path] = struct{}{}
 					result = append(result, path)
+					matched++
 				}
 			}
 			return nil
 		})
+		if walkErr != nil {
+			logger.WithError(walkErr).WithField("walk_dir", base).Warn("tailer: error walking directory")
+		}
+
+		logger.WithFields(logrus.Fields{
+			"pattern":      pattern,
+			"walk_dir":     base,
+			"files_matched": matched,
+		}).Info("tailer: scan complete")
 	}
 	return result
 }
