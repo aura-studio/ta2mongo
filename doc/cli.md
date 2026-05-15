@@ -100,11 +100,26 @@ echo '{"#type":"track",...}' | tango ingest --config tango.yaml '{"#type":"user_
 内置默认值  <  tango.yaml  <  TANGO_* 环境变量  <  --flag 命令行参数
 ```
 
-示例（命令行覆盖配置文件中的 batchWorkers）：
+高优先级来源只覆盖**明确设置**的字段，未设置的字段继续沿用低优先级来源的值。
+
+- `--config` 指定 YAML 文件路径（默认 `tango.yaml`），文件不存在时静默跳过
+- 环境变量名规则：`TANGO_` + 参数名全大写，如 `TANGO_MONGOURI`、`TANGO_BATCHWORKERS`
+- CLI flag 只有**明确传入**时才生效，未传入的 flag 不会覆盖环境变量或文件中的值
+
 ```bash
-# tango.yaml 中设置 batchWorkers: 2，命令行覆盖为 8
+# tango.yaml 中设置 batchWorkers: 2，命令行覆盖为 8，其余参数仍来自文件
 tango daemon --config tango.yaml --batchWorkers 8
+
+# 环境变量注入敏感参数，其余参数来自文件
+TANGO_MONGOURI=mongodb://prod:27017/tango tango daemon --config tango.yaml
+
+# 纯命令行，不使用配置文件
+tango daemon --mongoURI mongodb://localhost:27017/tango \
+             --logPattern '/var/log/ta\..*\.log' \
+             --batchWorkers 4
 ```
+
+完整的配置来源说明及各类型写法规则参见 [config.md](config.md)。
 
 ---
 

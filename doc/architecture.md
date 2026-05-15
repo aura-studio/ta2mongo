@@ -171,7 +171,7 @@ err = cli.IngestBatch(ctx, []string{line1, line2, ...})
 | **处理方式** | 批量、异步、多 worker | 批量、异步、多 worker | 逐条、同步 | 逐条/批量、同步 |
 | **退出条件** | 信号终止 | 所有文件处理完毕 | 所有输入处理完毕 | 调用方控制 |
 | **需要 logPattern** | 是 | 是 | 否 | 否 |
-| **配置方式** | YAML / flag / env | YAML / flag / env | YAML / flag / env | Options 结构体 |
+| **配置方式** | YAML / env / flag（见 [config.md](config.md)） | YAML / env / flag（见 [config.md](config.md)） | YAML / env / flag（见 [config.md](config.md)） | Options 结构体 |
 
 ---
 
