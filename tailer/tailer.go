@@ -109,6 +109,8 @@ func (t *Tailer) startFile(ctx context.Context, path string, out chan<- string) 
 	t.tails[path] = tt
 	t.mu.Unlock()
 
+	t.logger.WithField("path", path).Info("tailer: discovered and tailing new file")
+
 	go t.readLines(ctx, tt, out)
 }
 
