@@ -42,7 +42,7 @@ func testClientSetup(t *testing.T) (*Client, *mongo.Database, func()) {
 	pingMongo(t)
 
 	ctx := context.Background()
-	dbName := fmt.Sprintf("ta2mongo_client_test_%d_%d", time.Now().UnixNano(), rand.Intn(10000))
+	dbName := fmt.Sprintf("tango_client_test_%d_%d", time.Now().UnixNano(), rand.Intn(10000))
 	uri := testMongoURI + "/" + dbName
 
 	cli, err := New(ctx, WithURI(uri))
@@ -88,7 +88,7 @@ func TestNew_WithOptions(t *testing.T) {
 	pingMongo(t)
 
 	ctx := context.Background()
-	dbName := fmt.Sprintf("ta2mongo_opt_test_%d", time.Now().UnixNano())
+	dbName := fmt.Sprintf("tango_opt_test_%d", time.Now().UnixNano())
 	uri := testMongoURI + "/" + dbName
 
 	cli, err := New(ctx,

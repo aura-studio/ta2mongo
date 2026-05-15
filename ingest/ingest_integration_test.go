@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"rocket-nano/tools/ta2mongo/config"
+	"rocket-nano/tools/tango/config"
 
 	"github.com/sirupsen/logrus"
 	"go.mongodb.org/mongo-driver/bson"
@@ -44,19 +44,19 @@ func testIngesterSetup(t *testing.T) (*Ingester, *mongo.Database, func()) {
 	t.Helper()
 	pingMongo(t)
 
-	dbName := fmt.Sprintf("ta2mongo_ingest_test_%d_%d", time.Now().UnixNano(), rand.Intn(10000))
+	dbName := fmt.Sprintf("tango_ingest_test_%d_%d", time.Now().UnixNano(), rand.Intn(10000))
 	uri := testMongoURI + "/" + dbName
 
 	cfg := config.Config{
 		Mongo: config.MongoConfig{URI: uri},
 		Retry: config.RetryConfig{MaxElapsedTime: 5 * time.Second},
 		Batch: config.BatchConfig{
-			SizeMin:         10,
-			SizeInitial:     100,
-			SizeMax:         1000,
-			WorkerCount:     2,
-			WorkerChSize:    100,
-			FlushIntervalMs: 500,
+			SizeMin:       10,
+			SizeInitial:   100,
+			SizeMax:       1000,
+			Workers:       2,
+			ChannelSize:   100,
+			FlushInterval: 500 * time.Millisecond,
 		},
 	}
 
@@ -524,7 +524,7 @@ func TestNewFromClient(t *testing.T) {
 	}
 	defer client.Disconnect(ctx)
 
-	dbName := fmt.Sprintf("ta2mongo_fromclient_test_%d", time.Now().UnixNano())
+	dbName := fmt.Sprintf("tango_fromclient_test_%d", time.Now().UnixNano())
 	cfg := config.Config{
 		Mongo: config.MongoConfig{URI: testMongoURI + "/" + dbName},
 		Retry: config.RetryConfig{MaxElapsedTime: 5 * time.Second},

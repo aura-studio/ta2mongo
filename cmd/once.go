@@ -7,15 +7,15 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
-	"rocket-nano/tools/ta2mongo/config"
-	"rocket-nano/tools/ta2mongo/once"
+	"rocket-nano/tools/tango/config"
+	"rocket-nano/tools/tango/once"
 )
 
 // NewOnce creates the once subcommand.
 func NewOnce() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "once",
-		Short: "One-shot processing: read all matched files from beginning, process, then exit",
+		Short: "One-shot: read all matched files from beginning, process, then exit",
 		Long: `Process all existing ThinkingData log files matching ta.logPattern from the
 beginning (not incremental). After all lines are processed, print a detailed
 summary of statistics (lines processed, errors, retries, throughput) and exit.
@@ -33,12 +33,13 @@ Unlike daemon mode, once mode:
   - Provides detailed statistics summary at the end
 
 Examples:
-  # Process all matched files once:
-  ta2mongo once --config ta2mongo.yaml
-
-  # Can also be configured in YAML with mode: once`,
+  tango once --mongo.uri mongodb://localhost:27017/tango --ta.logPattern '/var/log/ta.*.log'
+  tango once --config tango.yaml`,
 		RunE: runOnce,
 	}
+
+	addCommonFlags(cmd.Flags())
+	return cmd
 }
 
 func runOnce(cmd *cobra.Command, _ []string) error {
@@ -48,10 +49,10 @@ func runOnce(cmd *cobra.Command, _ []string) error {
 	}
 	defer cancel()
 
-	return runOnceWithConfig(cmd, cfg, logger, ctx)
+	return runOnceWithConfig(cfg, logger, ctx)
 }
 
-func runOnceWithConfig(_ *cobra.Command, cfg config.Config, logger *logrus.Logger, ctx context.Context) error {
+func runOnceWithConfig(cfg config.Config, logger *logrus.Logger, ctx context.Context) error {
 	r, err := once.New(ctx, cfg, logger)
 	if err != nil {
 		return err

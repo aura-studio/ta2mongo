@@ -1,4 +1,4 @@
-// Package daemon orchestrates the ta2mongo pipeline:
+// Package daemon orchestrates the tango pipeline:
 // file tailing -> line parsing -> batch accumulation -> MongoDB bulk writes.
 package daemon
 
@@ -13,11 +13,11 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
-	"rocket-nano/tools/ta2mongo/config"
-	"rocket-nano/tools/ta2mongo/internal/pipeline"
-	"rocket-nano/tools/ta2mongo/store"
-	"rocket-nano/tools/ta2mongo/tailer"
-	"rocket-nano/tools/ta2mongo/talog"
+	"rocket-nano/tools/tango/config"
+	"rocket-nano/tools/tango/internal/pipeline"
+	"rocket-nano/tools/tango/store"
+	"rocket-nano/tools/tango/tailer"
+	"rocket-nano/tools/tango/talog"
 )
 
 // statsReportInterval is how often the daemon logs processing statistics.
@@ -111,9 +111,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 	d.logger.WithFields(logrus.Fields{
 		"log_patterns":    d.cfg.TA.LogPattern,
-		"worker_count":    d.cfg.Batch.WorkerCount,
-		"batch_size":      d.cfg.Batch.SizeInitial,
-		"flush_interval_ms": d.cfg.Batch.FlushIntervalMs,
+		"workers":        d.cfg.Batch.Workers,
+		"batch_size":     d.cfg.Batch.SizeInitial,
+		"flush_interval": d.cfg.Batch.FlushInterval,
 	}).Info("daemon: starting pipeline")
 
 	// Start the tailer; it returns a channel of log lines.

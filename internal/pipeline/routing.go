@@ -7,7 +7,7 @@ import (
 
 	"github.com/tidwall/gjson"
 
-	"rocket-nano/tools/ta2mongo/talog"
+	"rocket-nano/tools/tango/talog"
 )
 
 // ExtractRoutingKey performs a lightweight extraction of the user affinity key

@@ -8,17 +8,20 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
-	"rocket-nano/tools/ta2mongo/config"
-	"rocket-nano/tools/ta2mongo/daemon"
+	"rocket-nano/tools/tango/config"
+	"rocket-nano/tools/tango/daemon"
 )
 
 // NewDaemon creates the daemon subcommand.
 func NewDaemon() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "daemon",
 		Short: "Run as a daemon: tail log files and continuously import into MongoDB",
 		RunE:  runDaemon,
 	}
+
+	addCommonFlags(cmd.Flags())
+	return cmd
 }
 
 func runDaemon(cmd *cobra.Command, _ []string) error {
@@ -68,7 +71,6 @@ func runDaemonWithConfig(cfg config.Config, logger *logrus.Logger, ctx context.C
 
 // maskURI masks the password portion of a MongoDB URI for safe logging.
 func maskURI(uri string) string {
-	// Simple masking: find "://" and "@", mask content between them.
 	start := -1
 	for i := 0; i < len(uri)-2; i++ {
 		if uri[i] == ':' && uri[i+1] == '/' && uri[i+2] == '/' {
@@ -89,6 +91,5 @@ func maskURI(uri string) string {
 	if at == -1 {
 		return uri // no credentials in URI
 	}
-	// Mask everything between "://" and "@" with "***:***"
 	return uri[:start] + "***:***" + uri[at:]
 }

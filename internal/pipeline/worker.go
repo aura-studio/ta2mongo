@@ -8,10 +8,10 @@ import (
 	"github.com/sirupsen/logrus"
 	"go.mongodb.org/mongo-driver/mongo"
 
-	"rocket-nano/tools/ta2mongo/config"
-	"rocket-nano/tools/ta2mongo/dynamicbatch"
-	"rocket-nano/tools/ta2mongo/store"
-	"rocket-nano/tools/ta2mongo/talog"
+	"rocket-nano/tools/tango/config"
+	"rocket-nano/tools/tango/dynamicbatch"
+	"rocket-nano/tools/tango/store"
+	"rocket-nano/tools/tango/talog"
 )
 
 // StatsCollector is an optional callback interface for recording processing
@@ -57,8 +57,8 @@ func RunWorkers(ctx context.Context, cfg config.Config, st *store.Store,
 		stats = NoopStats{}
 	}
 
-	workerCount := cfg.Batch.WorkerCount
-	chSize := cfg.Batch.WorkerChSize
+	workerCount := cfg.Batch.Workers
+	chSize := cfg.Batch.ChannelSize
 
 	// Create per-worker channels for affinity-based routing.
 	workerChs := make([]chan string, workerCount)
@@ -164,7 +164,7 @@ func worker(ctx context.Context, cfg config.Config, st *store.Store,
 				cfg.Batch.SizeInitial,
 				cfg.Batch.SizeMax,
 				backlog,
-				cfg.Batch.WorkerChSize,
+				cfg.Batch.ChannelSize,
 			)
 			needFlush := userBatch.Len() >= threshold ||
 				eventBatch.Len() >= threshold ||

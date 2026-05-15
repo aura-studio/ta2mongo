@@ -5,7 +5,7 @@
 // Usage is similar to a Redis or database client library:
 //
 //	cli, err := client.New(ctx,
-//	    client.WithURI("mongodb://localhost:27017/ta2mongo"),
+//	    client.WithURI("mongodb://localhost:27017/tango"),
 //	)
 //	if err != nil { ... }
 //	defer cli.Close()
@@ -29,16 +29,16 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
-	"rocket-nano/tools/ta2mongo/config"
-	"rocket-nano/tools/ta2mongo/ingest"
-	"rocket-nano/tools/ta2mongo/store"
+	"rocket-nano/tools/tango/config"
+	"rocket-nano/tools/tango/ingest"
+	"rocket-nano/tools/tango/store"
 )
 
 // Options configures the Client connection and behavior.
 type Options struct {
 	// URI is the MongoDB connection string (required).
 	// Must contain the database name as the URI path, e.g.
-	// mongodb://host:27017/ta2mongo
+	// mongodb://host:27017/tango
 	URI string
 
 	// MaxElapsedTime is the maximum retry duration for bulk writes.
@@ -108,7 +108,7 @@ New creates a Client, connecting to MongoDB and initializing the connection pool
 Example:
 
 	cli, err := client.New(ctx,
-	    client.WithURI("mongodb://localhost:27017/ta2mongo"),
+	    client.WithURI("mongodb://localhost:27017/tango"),
 	    client.WithBatchSize(1000),
 	)
 
@@ -129,7 +129,7 @@ func New(ctx context.Context, optFns ...Option) (*Client, error) {
 
 	dbName, err := config.MongoDBFromURI(opts.URI)
 	if err != nil {
-		return nil, fmt.Errorf("client: URI must contain database name in path (e.g. mongodb://host:27017/ta2mongo): %w", err)
+		return nil, fmt.Errorf("client: URI must contain database name in path (e.g. mongodb://host:27017/tango): %w", err)
 	}
 
 	mongoClient, err := mongo.Connect(ctx, options.Client().ApplyURI(opts.URI))
@@ -151,12 +151,12 @@ func New(ctx context.Context, optFns ...Option) (*Client, error) {
 		Mongo: config.MongoConfig{URI: opts.URI},
 		Retry: config.RetryConfig{MaxElapsedTime: opts.MaxElapsedTime},
 		Batch: config.BatchConfig{
-			SizeMin:         1,
-			SizeInitial:     opts.BatchSize,
-			SizeMax:         opts.BatchSize,
-			WorkerCount:     1,
-			WorkerChSize:    1,
-			FlushIntervalMs: 1000,
+			SizeMin:       1,
+			SizeInitial:   opts.BatchSize,
+			SizeMax:       opts.BatchSize,
+			Workers:       1,
+			ChannelSize:   1,
+			FlushInterval: time.Second,
 		},
 	}
 

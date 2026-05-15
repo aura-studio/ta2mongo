@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"rocket-nano/tools/ta2mongo/config"
+	"rocket-nano/tools/tango/config"
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/sirupsen/logrus"

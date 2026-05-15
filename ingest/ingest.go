@@ -21,9 +21,9 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
-	"rocket-nano/tools/ta2mongo/config"
-	"rocket-nano/tools/ta2mongo/store"
-	"rocket-nano/tools/ta2mongo/talog"
+	"rocket-nano/tools/tango/config"
+	"rocket-nano/tools/tango/store"
+	"rocket-nano/tools/tango/talog"
 )
 
 // Ingester processes individual JSON log lines synchronously.

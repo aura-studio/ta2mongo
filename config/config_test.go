@@ -11,7 +11,7 @@ import (
 func writeYAML(t *testing.T, content string) string {
 	t.Helper()
 	dir := t.TempDir()
-	p := filepath.Join(dir, "ta2mongo.yaml")
+	p := filepath.Join(dir, "tango.yaml")
 	if err := os.WriteFile(p, []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ ta:
   logPattern:
     - "/tmp/.*\\.log"
 `
-	cfg, err := Load(writeYAML(t, yaml))
+	cfg, err := Load(writeYAML(t, yaml), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ ta:
 tail:
   rescanSeconds: 60
 `
-	cfg, err := Load(writeYAML(t, yaml))
+	cfg, err := Load(writeYAML(t, yaml), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ ta:
 tail:
   rescanSeconds: 0
 `
-	cfg, err := Load(writeYAML(t, yaml))
+	cfg, err := Load(writeYAML(t, yaml), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ ta:
 tail:
   rescanSeconds: -5
 `
-	cfg, err := Load(writeYAML(t, yaml))
+	cfg, err := Load(writeYAML(t, yaml), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ ta:
   logPattern:
     - "/tmp/.*\\.log"
 `
-	cfg, err := Load(writeYAML(t, yaml))
+	cfg, err := Load(writeYAML(t, yaml), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ ta:
 retry:
   maxElapsedTime: "30s"
 `
-	cfg, err := Load(writeYAML(t, yaml))
+	cfg, err := Load(writeYAML(t, yaml), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ ta:
 retry:
   maxElapsedTime: "0s"
 `
-	cfg, err := Load(writeYAML(t, yaml))
+	cfg, err := Load(writeYAML(t, yaml), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,7 @@ ta:
 retry:
   maxElapsedTime: "5m"
 `
-	cfg, err := Load(writeYAML(t, yaml))
+	cfg, err := Load(writeYAML(t, yaml), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,8 +212,11 @@ ta:
   logPattern:
     - "/tmp/.*\\.log"
 `
-	_, err := Load(writeYAML(t, yaml))
-	if err == nil {
+	cfg, err := Load(writeYAML(t, yaml), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected error for missing mongo.uri")
 	}
 }
@@ -226,7 +229,7 @@ mongo:
   uri: "mongodb://localhost"
   db: "testdb"
 `
-	_, err := Load(writeYAML(t, yaml))
+	_, err := Load(writeYAML(t, yaml), nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -240,7 +243,7 @@ mongo:
 ta:
   logPattern: []
 `
-	_, err := Load(writeYAML(t, yaml))
+	_, err := Load(writeYAML(t, yaml), nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -255,9 +258,9 @@ ta:
   logPattern:
     - "/tmp/.*\\.log"
 batch:
-  flushIntervalMs: 500
+  flushInterval: "500ms"
 `
-	cfg, err := Load(writeYAML(t, yaml))
+	cfg, err := Load(writeYAML(t, yaml), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

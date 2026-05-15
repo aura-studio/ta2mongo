@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"rocket-nano/tools/ta2mongo/config"
+	"rocket-nano/tools/tango/config"
 
 	"github.com/sirupsen/logrus"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -40,19 +40,19 @@ func testSetup(t *testing.T) (*Store, *mongo.Database, func()) {
 		t.Skipf("MongoDB not available at %s: %v", testMongoURI, err)
 	}
 
-	dbName := fmt.Sprintf("ta2mongo_test_%d_%d", time.Now().UnixNano(), rand.Intn(10000))
+	dbName := fmt.Sprintf("tango_test_%d_%d", time.Now().UnixNano(), rand.Intn(10000))
 	db := client.Database(dbName)
 
 	cfg := config.Config{
 		Mongo: config.MongoConfig{URI: testMongoURI + "/" + dbName},
 		Retry: config.RetryConfig{MaxElapsedTime: 5 * time.Second},
 		Batch: config.BatchConfig{
-			SizeMin:         10,
-			SizeInitial:     100,
-			SizeMax:         1000,
-			WorkerCount:     2,
-			WorkerChSize:    100,
-			FlushIntervalMs: 500,
+			SizeMin:       10,
+			SizeInitial:   100,
+			SizeMax:       1000,
+			Workers:       2,
+			ChannelSize:   100,
+			FlushInterval: 500 * time.Millisecond,
 		},
 	}
 

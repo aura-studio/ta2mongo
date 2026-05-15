@@ -6,7 +6,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	"rocket-nano/tools/ta2mongo/config"
+	"rocket-nano/tools/tango/config"
 )
 
 func TestOptions_defaults_SetsMaxElapsedTimeAndBatchSizeAndLogger(t *testing.T) {
@@ -58,7 +58,7 @@ func TestMongoDBFromURI_DefaultDBWhenURINoDBInPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if db != "ta2mongo" {
-		t.Fatalf("db=%q, want %q", db, "ta2mongo")
+	if db != "tango" {
+		t.Fatalf("db=%q, want %q", db, "tango")
 	}
 }

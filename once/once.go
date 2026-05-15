@@ -20,11 +20,11 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
-	"rocket-nano/tools/ta2mongo/config"
-	"rocket-nano/tools/ta2mongo/internal/pipeline"
-	"rocket-nano/tools/ta2mongo/store"
-	"rocket-nano/tools/ta2mongo/tailer"
-	"rocket-nano/tools/ta2mongo/talog"
+	"rocket-nano/tools/tango/config"
+	"rocket-nano/tools/tango/internal/pipeline"
+	"rocket-nano/tools/tango/store"
+	"rocket-nano/tools/tango/tailer"
+	"rocket-nano/tools/tango/talog"
 )
 
 // Stats holds detailed processing statistics for the once run.

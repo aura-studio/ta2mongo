@@ -1,4 +1,4 @@
-module rocket-nano/tools/ta2mongo
+module rocket-nano/tools/tango
 
 go 1.24.1
 

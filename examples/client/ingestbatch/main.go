@@ -6,12 +6,12 @@ import (
 	"log"
 	"time"
 
-	"rocket-nano/tools/ta2mongo/client"
+	"rocket-nano/tools/tango/client"
 )
 
 func main() {
 	var (
-		uri       = flag.String("uri", "mongodb://localhost:27017/ta2mongo", "mongodb URI (must include db name in path)")
+		uri       = flag.String("uri", "mongodb://localhost:27017/tango", "mongodb URI (must include db name in path)")
 		maxRetry  = flag.Duration("maxElapsedTime", 10*time.Second, "mongo retry max elapsed time")
 		batchSize = flag.Int("batchSize", 1000, "client batch size (used by IngestBatch)")
 		timeout   = flag.Duration("timeout", 30*time.Second, "operation timeout")

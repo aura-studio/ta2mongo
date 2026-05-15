@@ -1,6 +1,6 @@
 package main
 
-import "rocket-nano/tools/ta2mongo/cmd"
+import "rocket-nano/tools/tango/cmd"
 
 func main() {
 	cmd.Execute()

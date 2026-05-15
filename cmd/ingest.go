@@ -10,13 +10,13 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
-	"rocket-nano/tools/ta2mongo/config"
-	"rocket-nano/tools/ta2mongo/ingest"
+	"rocket-nano/tools/tango/config"
+	"rocket-nano/tools/tango/ingest"
 )
 
 // NewIngest creates the ingest subcommand.
 func NewIngest() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "ingest [json-line ...]",
 		Short: "Ingest JSON log lines synchronously (blocking)",
 		Long: `Process ThinkingData JSON log lines one at a time with synchronous MongoDB writes.
@@ -27,15 +27,18 @@ line is processed. Exits with a non-zero status if any line fails.
 
 Examples:
   # Single line as argument:
-  ta2mongo ingest --config ta2mongo.yaml '{"#type":"track","#event_name":"login",...}'
+  tango ingest --mongo.uri mongodb://localhost:27017/tango '{"#type":"track","#event_name":"login",...}'
 
   # Multiple lines from stdin:
-  cat events.jsonl | ta2mongo ingest --config ta2mongo.yaml
+  cat events.jsonl | tango ingest --config tango.yaml
 
   # Mix: arguments processed first, then stdin if piped:
-  echo '{"#type":"track",...}' | ta2mongo ingest --config ta2mongo.yaml`,
+  echo '{"#type":"track",...}' | tango ingest --config tango.yaml`,
 		RunE: runIngest,
 	}
+
+	addCommonFlags(cmd.Flags())
+	return cmd
 }
 
 func runIngest(cmd *cobra.Command, args []string) error {
