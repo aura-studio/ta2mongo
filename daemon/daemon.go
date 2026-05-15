@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
+	"time"
 
 	"github.com/sirupsen/logrus"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -17,6 +19,42 @@ import (
 	"rocket-nano/tools/ta2mongo/tailer"
 	"rocket-nano/tools/ta2mongo/talog"
 )
+
+// statsReportInterval is how often the daemon logs processing statistics.
+const statsReportInterval = 60 * time.Second
+
+// daemonStats tracks processing metrics for the daemon mode.
+type daemonStats struct {
+	totalLines     atomic.Int64
+	parsedOK       atomic.Int64
+	parseErrors    atomic.Int64
+	identityErrors atomic.Int64
+	userWrites     atomic.Int64
+	eventWrites    atomic.Int64
+	deadLetters    atomic.Int64
+	writeErrors    atomic.Int64
+}
+
+func (s *daemonStats) OnLine()          { s.totalLines.Add(1) }
+func (s *daemonStats) OnParseOK()       { s.parsedOK.Add(1) }
+func (s *daemonStats) OnParseError()    { s.parseErrors.Add(1) }
+func (s *daemonStats) OnIdentityError() { s.identityErrors.Add(1) }
+func (s *daemonStats) OnUserWrite()     { s.userWrites.Add(1) }
+func (s *daemonStats) OnEventWrite()    { s.eventWrites.Add(1) }
+func (s *daemonStats) OnDeadLetter()    { s.deadLetters.Add(1) }
+func (s *daemonStats) OnWriteError()    { s.writeErrors.Add(1) }
+
+// snapshot returns the current counter values for reporting.
+func (s *daemonStats) snapshot() (totalLines, parsedOK, parseErrors, identityErrors, userWrites, eventWrites, deadLetters, writeErrors int64) {
+	return s.totalLines.Load(),
+		s.parsedOK.Load(),
+		s.parseErrors.Load(),
+		s.identityErrors.Load(),
+		s.userWrites.Load(),
+		s.eventWrites.Load(),
+		s.deadLetters.Load(),
+		s.writeErrors.Load()
+}
 
 // Daemon is the main runtime that connects all components together.
 type Daemon struct {
@@ -71,10 +109,132 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return errors.New("daemon: ta.logPattern is required (at least one regex)")
 	}
 
+	d.logger.WithFields(logrus.Fields{
+		"log_patterns":    d.cfg.TA.LogPattern,
+		"worker_count":    d.cfg.Batch.WorkerCount,
+		"batch_size":      d.cfg.Batch.SizeInitial,
+		"flush_interval_ms": d.cfg.Batch.FlushIntervalMs,
+	}).Info("daemon: starting pipeline")
+
 	// Start the tailer; it returns a channel of log lines.
 	t := tailer.New(d.cfg.TA.LogPattern, d.cfg.RescanInterval(), d.logger)
 	lineCh := t.Run(ctx)
 
-	pipeline.RunWorkers(ctx, d.cfg, d.store, d.parser, d.logger, lineCh, pipeline.NoopStats{})
+	// Create stats collector for periodic reporting.
+	stats := &daemonStats{}
+	startTime := time.Now()
+
+	// Launch periodic stats reporter.
+	reportDone := make(chan struct{})
+	go d.reportStats(ctx, stats, startTime, reportDone)
+
+	// Block until all workers finish.
+	pipeline.RunWorkers(ctx, d.cfg, d.store, d.parser, d.logger, lineCh, stats)
+
+	// Wait for the reporter goroutine to exit.
+	<-reportDone
+
+	// Log final stats summary.
+	d.logFinalStats(stats, startTime)
+
 	return nil
+}
+
+// reportStats periodically logs processing statistics every statsReportInterval.
+func (d *Daemon) reportStats(ctx context.Context, stats *daemonStats, startTime time.Time, done chan<- struct{}) {
+	defer close(done)
+
+	ticker := time.NewTicker(statsReportInterval)
+	defer ticker.Stop()
+
+	// Track previous values to compute per-interval deltas.
+	var prevTotal, prevParsedOK, prevParseErrors, prevIdentityErrors,
+		prevUserWrites, prevEventWrites, prevDeadLetters, prevWriteErrors int64
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			total, parsedOK, parseErrors, identityErrors,
+				userWrites, eventWrites, deadLetters, writeErrors := stats.snapshot()
+
+			// Compute deltas since last report.
+			deltaTotal := total - prevTotal
+			deltaParsedOK := parsedOK - prevParsedOK
+			deltaParseErrors := parseErrors - prevParseErrors
+			deltaIdentityErrors := identityErrors - prevIdentityErrors
+			deltaUserWrites := userWrites - prevUserWrites
+			deltaEventWrites := eventWrites - prevEventWrites
+			deltaDeadLetters := deadLetters - prevDeadLetters
+			deltaWriteErrors := writeErrors - prevWriteErrors
+
+			uptime := time.Since(startTime).Round(time.Second)
+
+			d.logger.WithFields(logrus.Fields{
+				"uptime":               uptime,
+				"interval_lines":       deltaTotal,
+				"interval_parsed_ok":   deltaParsedOK,
+				"interval_parse_err":   deltaParseErrors,
+				"interval_identity_err": deltaIdentityErrors,
+				"interval_user_writes": deltaUserWrites,
+				"interval_event_writes": deltaEventWrites,
+				"interval_dead_letters": deltaDeadLetters,
+				"interval_write_err":   deltaWriteErrors,
+			}).Info("daemon: periodic stats (last 60s)")
+
+			d.logger.WithFields(logrus.Fields{
+				"total_lines":       total,
+				"total_parsed_ok":   parsedOK,
+				"total_parse_err":   parseErrors,
+				"total_identity_err": identityErrors,
+				"total_user_writes": userWrites,
+				"total_event_writes": eventWrites,
+				"total_dead_letters": deadLetters,
+				"total_write_err":   writeErrors,
+			}).Info("daemon: cumulative stats")
+
+			// Update previous values for next delta calculation.
+			prevTotal = total
+			prevParsedOK = parsedOK
+			prevParseErrors = parseErrors
+			prevIdentityErrors = identityErrors
+			prevUserWrites = userWrites
+			prevEventWrites = eventWrites
+			prevDeadLetters = deadLetters
+			prevWriteErrors = writeErrors
+		}
+	}
+}
+
+// logFinalStats logs a final summary when the daemon is shutting down.
+func (d *Daemon) logFinalStats(stats *daemonStats, startTime time.Time) {
+	total, parsedOK, parseErrors, identityErrors,
+		userWrites, eventWrites, deadLetters, writeErrors := stats.snapshot()
+
+	duration := time.Since(startTime).Round(time.Second)
+
+	d.logger.Info("daemon: ========== shutdown summary ==========")
+	d.logger.WithFields(logrus.Fields{
+		"total_lines":        total,
+		"total_parsed_ok":    parsedOK,
+		"total_parse_errors": parseErrors,
+		"total_identity_err": identityErrors,
+		"total_user_writes":  userWrites,
+		"total_event_writes": eventWrites,
+		"total_dead_letters": deadLetters,
+		"total_write_errors": writeErrors,
+		"uptime":             duration,
+	}).Info("daemon: final stats")
+
+	if total > 0 && duration.Seconds() > 0 {
+		lps := float64(total) / duration.Seconds()
+		d.logger.WithField("lines_per_second", fmt.Sprintf("%.1f", lps)).Info("daemon: average throughput")
+	}
+
+	if parseErrors > 0 || identityErrors > 0 || writeErrors > 0 {
+		d.logger.Warn("daemon: ========== SHUTDOWN WITH ERRORS ==========")
+	} else {
+		d.logger.Info("daemon: ========== SHUTDOWN COMPLETE ==========")
+	}
 }
