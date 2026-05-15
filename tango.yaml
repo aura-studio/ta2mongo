@@ -7,22 +7,29 @@
 #   TANGO_LOGLEVEL=debug
 #   TANGO_BATCHWORKERS=4
 
-# mode: 运行模式，也可直接使用子命令（tango daemon / once / ingest）
-# 可选值：daemon（默认）/ once / ingest
+# mode: 运行模式 (daemon / once / ingest）
 mode: "daemon"
 
+# MongoDB 连接 URI
 mongoURI: "mongodb://localhost:27017/tango"
 
-# logPattern: 日志文件匹配正则（daemon/once 模式使用）
-logPattern:
-  - "/var/log/ta.*.log"
+# 日志级别：debug / info / warn / error
+logLevel: "info"
 
-rescanInterval: "30s"   # 文件重扫间隔，daemon 模式使用（如 "30s"、"1m"）
+# 日志文件匹配正则（daemon/once 模式使用）
+logPattern: ["/var/log/ta.*.log"]
 
-batchSize: 1000         # 目标批量大小；min=batchSize/4, max=batchSize*2 自动推导
-batchWorkers: 2         # 并行写入 worker 数
-flushInterval: "1s"     # 批量定时刷新间隔
+# 目标批量大小；min=batchSize/4, max=batchSize*2 自动推导
+batchSize: 1000
 
-maxElapsedTime: "10s"   # 单次 bulk write 最大重试总时间
+# 并行写入 worker 数
+batchWorkers: 2
 
-logLevel: "info"        # 日志级别：debug / info / warn / error
+# 批量定时刷新间隔
+flushInterval: "1s"
+
+# 文件重扫间隔，daemon 模式使用（如 "30s"、"1m"）
+rescanInterval: "30s"
+
+# 单次 bulk write 最大重试总时间
+maxElapsedTime: "10s"
