@@ -1,11 +1,4 @@
 # tango 配置文件
-#
-# 优先级（从低到高）：内置默认值 < 此文件 < 环境变量（TANGO_* 前缀）< 命令行参数
-#
-# 环境变量示例：
-#   TANGO_MONGOURI=mongodb://localhost:27017/tango
-#   TANGO_LOGLEVEL=debug
-#   TANGO_BATCHWORKERS=4
 
 # mode: 运行模式 (daemon / once / ingest）
 mode: "daemon"

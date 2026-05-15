@@ -2,6 +2,14 @@
 
 配置来源优先级（从低到高）：内置默认值 < YAML 文件 < 环境变量（`TANGO_*`）< 命令行参数
 
+环境变量示例：
+
+```
+TANGO_MONGOURI=mongodb://localhost:27017/tango
+TANGO_LOGLEVEL=debug
+TANGO_BATCHWORKERS=4
+```
+
 所有参数均为**扁平单层结构**，YAML key、CLI flag、环境变量后缀三者名称一致。
 
 ---
