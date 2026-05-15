@@ -8,7 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"rocket-nano/tools/tango/config"
-	"rocket-nano/tools/tango/once"
+	"rocket-nano/tools/tango/internal/once"
 )
 
 // NewOnce creates the once subcommand.

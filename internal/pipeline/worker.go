@@ -9,9 +9,9 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 
 	"rocket-nano/tools/tango/config"
-	"rocket-nano/tools/tango/dynamicbatch"
-	"rocket-nano/tools/tango/store"
-	"rocket-nano/tools/tango/talog"
+	"rocket-nano/tools/tango/internal/dynamicbatch"
+	"rocket-nano/tools/tango/internal/store"
+	"rocket-nano/tools/tango/internal/talog"
 )
 
 // StatsCollector is an optional callback interface for recording processing

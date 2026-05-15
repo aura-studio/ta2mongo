@@ -9,7 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"rocket-nano/tools/tango/config"
-	"rocket-nano/tools/tango/daemon"
+	"rocket-nano/tools/tango/internal/daemon"
 )
 
 // NewDaemon creates the daemon subcommand.

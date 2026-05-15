@@ -22,9 +22,9 @@ import (
 
 	"rocket-nano/tools/tango/config"
 	"rocket-nano/tools/tango/internal/pipeline"
-	"rocket-nano/tools/tango/store"
-	"rocket-nano/tools/tango/tailer"
-	"rocket-nano/tools/tango/talog"
+	"rocket-nano/tools/tango/internal/store"
+	"rocket-nano/tools/tango/internal/tailer"
+	"rocket-nano/tools/tango/internal/talog"
 )
 
 // Stats holds detailed processing statistics for the once run.

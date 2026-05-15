@@ -11,7 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"rocket-nano/tools/tango/config"
-	"rocket-nano/tools/tango/ingest"
+	"rocket-nano/tools/tango/internal/ingest"
 )
 
 // NewIngest creates the ingest subcommand.
