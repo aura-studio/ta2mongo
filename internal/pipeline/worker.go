@@ -104,77 +104,88 @@ func worker(ctx context.Context, cfg config.Config, st *store.Store,
 		lastFlush = time.Now()
 	}
 
-	for line := range lineCh {
-		stats.OnLine()
+	// Use a ticker to ensure batches are flushed even when no new lines arrive.
+	flushTicker := time.NewTicker(flushInterval)
+	defer flushTicker.Stop()
 
-		rec, err := parser.ParseLine(line)
-		if err != nil {
-			invalidCount++
-			stats.OnParseError()
-			stats.OnDeadLetter()
-			if invalidCount%1000 == 0 {
-				logger.WithError(err).Warnf("dropped invalid line (total invalid=%d)", invalidCount)
+	for {
+		select {
+		case line, ok := <-lineCh:
+			if !ok {
+				// Channel closed (tailer stopped). Flush remaining data.
+				flush(context.Background())
+				return
 			}
-			deadBatch.Add(store.DeadLetterModel(line, err))
-			if deadBatch.Full() || time.Since(lastFlush) >= flushInterval {
+
+			stats.OnLine()
+
+			rec, err := parser.ParseLine(line)
+			if err != nil {
+				invalidCount++
+				stats.OnParseError()
+				stats.OnDeadLetter()
+				if invalidCount%1000 == 0 {
+					logger.WithError(err).Warnf("dropped invalid line (total invalid=%d)", invalidCount)
+				}
+				deadBatch.Add(store.DeadLetterModel(line, err))
+				if deadBatch.Full() || time.Since(lastFlush) >= flushInterval {
+					flush(ctx)
+				}
+				continue
+			}
+			stats.OnParseOK()
+
+			// Resolve user identity for both user and event records.
+			userID, err := st.Identity().Resolve(ctx, rec.AccountID, rec.DistinctID)
+			if err != nil {
+				stats.OnIdentityError()
+				stats.OnDeadLetter()
+				logger.WithError(err).Warn("identity resolve failed, sending to dead letter")
+				deadBatch.Add(store.DeadLetterModel(line, err))
+				continue
+			}
+
+			// Route the record to the appropriate batch.
+			switch rec.Category() {
+			case talog.CategoryUser:
+				userBatch.Add(store.UserWriteModel(rec.Type, userID, rec.Doc))
+				stats.OnUserWrite()
+			case talog.CategoryEvent:
+				rec.Doc["#user_id"] = userID
+				eventBatch.Add(store.EventWriteModel(rec.Type, rec.UUID, rec.Doc))
+				stats.OnEventWrite()
+			}
+
+			// Flush on dynamic batch threshold (derived from current backlog)
+			// or time-interval triggers.
+			backlog := len(lineCh)
+			threshold := dynamicbatch.ComputeFlushThreshold(
+				cfg.Batch.SizeMin,
+				cfg.Batch.SizeInitial,
+				cfg.Batch.SizeMax,
+				backlog,
+				cfg.Batch.WorkerChSize,
+			)
+			needFlush := userBatch.Len() >= threshold ||
+				eventBatch.Len() >= threshold ||
+				time.Since(lastFlush) >= flushInterval
+			if needFlush {
 				flush(ctx)
 			}
-			continue
-		}
-		stats.OnParseOK()
 
-		// Resolve user identity for both user and event records.
-		userID, err := st.Identity().Resolve(ctx, rec.AccountID, rec.DistinctID)
-		if err != nil {
-			stats.OnIdentityError()
-			stats.OnDeadLetter()
-			logger.WithError(err).Warn("identity resolve failed, sending to dead letter")
-			deadBatch.Add(store.DeadLetterModel(line, err))
-			continue
-		}
+		case <-flushTicker.C:
+			// Periodic flush to ensure data is written even when idle.
+			if !userBatch.Empty() || !eventBatch.Empty() || !deadBatch.Empty() {
+				flush(ctx)
+			}
 
-		// Route the record to the appropriate batch.
-		switch rec.Category() {
-		case talog.CategoryUser:
-			userBatch.Add(store.UserWriteModel(rec.Type, userID, rec.Doc))
-			stats.OnUserWrite()
-		case talog.CategoryEvent:
-			rec.Doc["#user_id"] = userID
-			eventBatch.Add(store.EventWriteModel(rec.Type, rec.UUID, rec.Doc))
-			stats.OnEventWrite()
-		}
-
-		// Flush on dynamic batch threshold (derived from current backlog)
-		// or time-interval triggers.
-		backlog := len(lineCh)
-		threshold := dynamicbatch.ComputeFlushThreshold(
-			cfg.Batch.SizeMin,
-			cfg.Batch.SizeInitial,
-			cfg.Batch.SizeMax,
-			backlog,
-			cfg.Batch.WorkerChSize,
-		)
-		needFlush := userBatch.Len() >= threshold ||
-			eventBatch.Len() >= threshold ||
-			time.Since(lastFlush) >= flushInterval
-		if needFlush {
-			flush(ctx)
-		}
-
-		// Check for cancellation without blocking.
-		select {
 		case <-ctx.Done():
 			// Use a background context for the final flush so remaining
 			// data is written even after the main context is cancelled.
 			flush(context.Background())
 			return
-		default:
 		}
 	}
-
-	// Channel closed (tailer stopped). Flush remaining data using a
-	// background context to ensure writes complete during shutdown.
-	flush(context.Background())
 }
 
 // flushBatch writes a batch to the given collection (unordered) and resets it.
