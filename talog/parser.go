@@ -52,7 +52,7 @@ func hasTAKeys(obj map[string]any) bool {
 
 // tryParseEnvelope looks for a nested JSON string in known envelope keys.
 func tryParseEnvelope(obj map[string]any) (*Record, error) {
-	for _, key := range []string{"msg", "message", "log"} {
+	for _, key := range EnvelopeKeys {
 		s, ok := obj[key].(string)
 		if !ok || len(s) < 2 || s[0] != '{' {
 			continue

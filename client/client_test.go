@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+
+	"rocket-nano/tools/ta2mongo/config"
 )
 
 func TestOptions_defaults_SetsMaxElapsedTimeAndBatchSizeAndLogger(t *testing.T) {
@@ -51,8 +53,8 @@ func TestNew_ErrorsWhenURIEmpty(t *testing.T) {
 	}
 }
 
-func Test_dbFromMongoURI_DefaultDBWhenURINoDBInPath(t *testing.T) {
-	db, err := dbFromMongoURI("mongodb://localhost:27017")
+func TestMongoDBFromURI_DefaultDBWhenURINoDBInPath(t *testing.T) {
+	db, err := config.MongoDBFromURI("mongodb://localhost:27017")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

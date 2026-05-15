@@ -2,8 +2,11 @@
 package cmd
 
 import (
+	"context"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -38,6 +41,20 @@ func Execute() {
 	}
 }
 
+// setup loads configuration, creates a logger, and sets up a signal-aware
+// context. All subcommands share this initialisation sequence.
+func setup(cmd *cobra.Command) (config.Config, *logrus.Logger, context.Context, context.CancelFunc, error) {
+	cfg, err := config.Load(configFile)
+	if err != nil {
+		return config.Config{}, nil, nil, nil, err
+	}
+
+	logger := newLogger(cfg)
+
+	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+	return cfg, logger, ctx, cancel, nil
+}
+
 // newLogger creates a structured logrus logger from the config.
 func newLogger(cfg config.Config) *logrus.Logger {
 	logger := logrus.New()
@@ -53,17 +70,18 @@ func newLogger(cfg config.Config) *logrus.Logger {
 // runDefault dispatches to the appropriate mode based on the YAML config `mode` field.
 // This is used when no subcommand is specified on the CLI.
 func runDefault(cmd *cobra.Command, args []string) error {
-	cfg, err := config.Load(configFile)
+	cfg, logger, ctx, cancel, err := setup(cmd)
 	if err != nil {
 		return err
 	}
+	defer cancel()
 
 	switch cfg.Mode {
 	case config.ModeOnce:
-		return runOnce(cmd, args)
+		return runOnceWithConfig(cmd, cfg, logger, ctx)
 	case config.ModeIngest:
-		return runIngest(cmd, args)
+		return runIngestWithConfig(cmd, args, cfg, logger, ctx)
 	default:
-		return runDaemon(cmd, args)
+		return runDaemonWithConfig(cfg, logger, ctx)
 	}
 }

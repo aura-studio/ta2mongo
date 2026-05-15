@@ -2,12 +2,12 @@ package cmd
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
-	"os/signal"
 	"strings"
-	"syscall"
 
+	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
 	"rocket-nano/tools/ta2mongo/config"
@@ -39,16 +39,16 @@ Examples:
 }
 
 func runIngest(cmd *cobra.Command, args []string) error {
-	cfg, err := config.Load(configFile)
+	cfg, logger, ctx, cancel, err := setup(cmd)
 	if err != nil {
 		return err
 	}
-
-	logger := newLogger(cfg)
-
-	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
+	return runIngestWithConfig(cmd, args, cfg, logger, ctx)
+}
+
+func runIngestWithConfig(_ *cobra.Command, args []string, cfg config.Config, logger *logrus.Logger, ctx context.Context) error {
 	ig, err := ingest.New(ctx, cfg, logger)
 	if err != nil {
 		return err

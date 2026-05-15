@@ -89,21 +89,11 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
+// setDefaults registers only the mode default via viper. All other field
+// defaults are applied in validate() to keep a single source of truth and
+// avoid maintaining the same default value in two places.
 func setDefaults(v *viper.Viper) {
 	v.SetDefault("mode", ModeDaemon)
-	v.SetDefault("tail.rescanSeconds", 30)
-
-	// Dynamic batch tuning defaults.
-	v.SetDefault("batch.sizeMin", 250)
-	v.SetDefault("batch.sizeInitial", 1000)
-	v.SetDefault("batch.sizeMax", 2000)
-
-	v.SetDefault("batch.workerCount", 2)
-	v.SetDefault("batch.workerChSize", 1000)
-	v.SetDefault("batch.flushIntervalMs", 1000)
-
-	v.SetDefault("retry.maxElapsedTime", "10s")
-	v.SetDefault("log.level", "info")
 }
 
 func (c *Config) validate() error {

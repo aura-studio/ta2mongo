@@ -1,11 +1,10 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
-	"os"
-	"os/signal"
-	"syscall"
 
+	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
 	"rocket-nano/tools/ta2mongo/config"
@@ -43,16 +42,16 @@ Examples:
 }
 
 func runOnce(cmd *cobra.Command, _ []string) error {
-	cfg, err := config.Load(configFile)
+	cfg, logger, ctx, cancel, err := setup(cmd)
 	if err != nil {
 		return err
 	}
-
-	logger := newLogger(cfg)
-
-	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
+	return runOnceWithConfig(cmd, cfg, logger, ctx)
+}
+
+func runOnceWithConfig(_ *cobra.Command, cfg config.Config, logger *logrus.Logger, ctx context.Context) error {
 	r, err := once.New(ctx, cfg, logger)
 	if err != nil {
 		return err

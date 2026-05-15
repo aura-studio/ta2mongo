@@ -23,8 +23,6 @@ package client
 import (
 	"context"
 	"fmt"
-	"net/url"
-	"strings"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -32,8 +30,8 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"rocket-nano/tools/ta2mongo/config"
+	"rocket-nano/tools/ta2mongo/ingest"
 	"rocket-nano/tools/ta2mongo/store"
-	"rocket-nano/tools/ta2mongo/talog"
 )
 
 // Options configures the Client connection and behavior.
@@ -97,11 +95,11 @@ func (o *Options) defaults() {
 // Client is a connection-pool-backed client for writing ThinkingData records
 // to MongoDB. It is safe for concurrent use.
 type Client struct {
-	store  *store.Store
-	parser *talog.Parser
-	client *mongo.Client
-	logger *logrus.Logger
-	opts   Options
+	ingester *ingest.Ingester
+	client   *mongo.Client
+	store    *store.Store
+	logger   *logrus.Logger
+	opts     Options
 }
 
 /*
@@ -129,7 +127,7 @@ func New(ctx context.Context, optFns ...Option) (*Client, error) {
 	}
 	opts.defaults()
 
-	dbName, err := dbFromMongoURI(opts.URI)
+	dbName, err := config.MongoDBFromURI(opts.URI)
 	if err != nil {
 		return nil, fmt.Errorf("client: URI must contain database name in path (e.g. mongodb://host:27017/ta2mongo): %w", err)
 	}
@@ -163,13 +161,14 @@ func New(ctx context.Context, optFns ...Option) (*Client, error) {
 	}
 
 	st := store.New(db, cfg, opts.Logger)
+	ig := ingest.NewFromClient(mongoClient, cfg, opts.Logger)
 
 	return &Client{
-		store:  st,
-		parser: talog.NewParser(),
-		client: mongoClient,
-		logger: opts.Logger,
-		opts:   opts,
+		ingester: ig,
+		client:   mongoClient,
+		store:    st,
+		logger:   opts.Logger,
+		opts:     opts,
 	}, nil
 }
 
@@ -189,39 +188,7 @@ func (c *Client) EnsureIndexes(ctx context.Context) error {
 //
 // Returns nil on success, or an error describing the failure.
 func (c *Client) Ingest(ctx context.Context, line string) error {
-	rec, err := c.parser.ParseLine(line)
-	if err != nil {
-		dlModel := store.DeadLetterModel(line, err)
-		if wErr := c.store.BulkWrite(ctx, c.store.DeadLetterCollection(), []mongo.WriteModel{dlModel}); wErr != nil {
-			c.logger.WithError(wErr).Warn("client: failed to write dead letter")
-		}
-		return fmt.Errorf("client: parse: %w", err)
-	}
-
-	userID, err := c.store.Identity().Resolve(ctx, rec.AccountID, rec.DistinctID)
-	if err != nil {
-		dlModel := store.DeadLetterModel(line, err)
-		if wErr := c.store.BulkWrite(ctx, c.store.DeadLetterCollection(), []mongo.WriteModel{dlModel}); wErr != nil {
-			c.logger.WithError(wErr).Warn("client: failed to write dead letter")
-		}
-		return fmt.Errorf("client: identity resolve: %w", err)
-	}
-
-	switch rec.Category() {
-	case talog.CategoryUser:
-		model := store.UserWriteModel(rec.Type, userID, rec.Doc)
-		if err := c.store.BulkWriteOrdered(ctx, c.store.UserCollection(), []mongo.WriteModel{model}); err != nil {
-			return fmt.Errorf("client: write user: %w", err)
-		}
-	case talog.CategoryEvent:
-		rec.Doc["#user_id"] = userID
-		model := store.EventWriteModel(rec.Type, rec.UUID, rec.Doc)
-		if err := c.store.BulkWrite(ctx, c.store.EventCollection(), []mongo.WriteModel{model}); err != nil {
-			return fmt.Errorf("client: write event: %w", err)
-		}
-	}
-
-	return nil
+	return c.ingester.Ingest(ctx, line)
 }
 
 // IngestBatch processes multiple JSON log lines in a single batch.
@@ -231,54 +198,7 @@ func (c *Client) Ingest(ctx context.Context, line string) error {
 // Returns an error if any MongoDB bulk write fails. Parse errors for
 // individual lines are logged but do not block other lines.
 func (c *Client) IngestBatch(ctx context.Context, lines []string) error {
-	var (
-		userModels  []mongo.WriteModel
-		eventModels []mongo.WriteModel
-		deadModels  []mongo.WriteModel
-	)
-
-	for _, line := range lines {
-		rec, err := c.parser.ParseLine(line)
-		if err != nil {
-			c.logger.WithError(err).Debug("client: invalid line in batch")
-			deadModels = append(deadModels, store.DeadLetterModel(line, err))
-			continue
-		}
-
-		userID, err := c.store.Identity().Resolve(ctx, rec.AccountID, rec.DistinctID)
-		if err != nil {
-			c.logger.WithError(err).Warn("client: identity resolve failed in batch")
-			deadModels = append(deadModels, store.DeadLetterModel(line, err))
-			continue
-		}
-
-		switch rec.Category() {
-		case talog.CategoryUser:
-			userModels = append(userModels, store.UserWriteModel(rec.Type, userID, rec.Doc))
-		case talog.CategoryEvent:
-			rec.Doc["#user_id"] = userID
-			eventModels = append(eventModels, store.EventWriteModel(rec.Type, rec.UUID, rec.Doc))
-		}
-	}
-
-	var firstErr error
-	if len(userModels) > 0 {
-		if err := c.store.BulkWriteOrdered(ctx, c.store.UserCollection(), userModels); err != nil {
-			firstErr = fmt.Errorf("client: write user batch: %w", err)
-		}
-	}
-	if len(eventModels) > 0 {
-		if err := c.store.BulkWrite(ctx, c.store.EventCollection(), eventModels); err != nil && firstErr == nil {
-			firstErr = fmt.Errorf("client: write event batch: %w", err)
-		}
-	}
-	if len(deadModels) > 0 {
-		if err := c.store.BulkWrite(ctx, c.store.DeadLetterCollection(), deadModels); err != nil && firstErr == nil {
-			firstErr = fmt.Errorf("client: write dead letter batch: %w", err)
-		}
-	}
-
-	return firstErr
+	return c.ingester.IngestBatch(ctx, lines)
 }
 
 // Ping verifies that the MongoDB connection is alive.
@@ -289,24 +209,4 @@ func (c *Client) Ping(ctx context.Context) error {
 // Stats returns the cumulative write statistics (retry counts).
 func (c *Client) Stats() *store.WriteStats {
 	return c.store.Stats()
-}
-
-// dbFromMongoURI extracts the database name from a MongoDB URI path.
-// Examples:
-// - mongodb://host:27017/ta2mongo  => ta2mongo
-// - mongodb://host:27017/ta2mongo/ => ta2mongo
-// - mongodb://host:27017           => error
-func dbFromMongoURI(uri string) (string, error) {
-	u, err := url.Parse(uri)
-	if err != nil {
-		return "", fmt.Errorf("parse mongo uri: %w", err)
-	}
-
-	db := strings.Trim(u.Path, "/")
-	if db == "" {
-		// Compatible with connection strings that omit database in URI path
-		// (e.g. some AWS DocumentDB / tls-style URIs).
-		return "ta2mongo", nil
-	}
-	return db, nil
 }

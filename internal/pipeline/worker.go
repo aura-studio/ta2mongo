@@ -1,0 +1,206 @@
+package pipeline
+
+import (
+	"context"
+	"sync"
+	"time"
+
+	"github.com/sirupsen/logrus"
+	"go.mongodb.org/mongo-driver/mongo"
+
+	"rocket-nano/tools/ta2mongo/config"
+	"rocket-nano/tools/ta2mongo/dynamicbatch"
+	"rocket-nano/tools/ta2mongo/store"
+	"rocket-nano/tools/ta2mongo/talog"
+)
+
+// StatsCollector is an optional callback interface for recording processing
+// statistics. Implementations must be safe for concurrent use.
+type StatsCollector interface {
+	// OnLine is called for every line received.
+	OnLine()
+	// OnParseOK is called when a line is successfully parsed.
+	OnParseOK()
+	// OnParseError is called when a line fails to parse.
+	OnParseError()
+	// OnIdentityError is called when identity resolution fails.
+	OnIdentityError()
+	// OnUserWrite is called when a user write model is enqueued.
+	OnUserWrite()
+	// OnEventWrite is called when an event write model is enqueued.
+	OnEventWrite()
+	// OnDeadLetter is called when a line is sent to dead letter.
+	OnDeadLetter()
+	// OnWriteError is called when a bulk write fails.
+	OnWriteError()
+}
+
+// NoopStats is a StatsCollector that does nothing.
+type NoopStats struct{}
+
+func (NoopStats) OnLine()          {}
+func (NoopStats) OnParseOK()       {}
+func (NoopStats) OnParseError()    {}
+func (NoopStats) OnIdentityError() {}
+func (NoopStats) OnUserWrite()     {}
+func (NoopStats) OnEventWrite()    {}
+func (NoopStats) OnDeadLetter()    {}
+func (NoopStats) OnWriteError()    {}
+
+// RunWorkers launches N workers with affinity-based dispatch and blocks
+// until all workers finish.
+func RunWorkers(ctx context.Context, cfg config.Config, st *store.Store,
+	parser *talog.Parser, logger *logrus.Logger, lineCh <-chan string,
+	stats StatsCollector,
+) {
+	if stats == nil {
+		stats = NoopStats{}
+	}
+
+	workerCount := cfg.Batch.WorkerCount
+	chSize := cfg.Batch.WorkerChSize
+
+	// Create per-worker channels for affinity-based routing.
+	workerChs := make([]chan string, workerCount)
+	for i := range workerChs {
+		workerChs[i] = make(chan string, chSize)
+	}
+
+	// Launch N workers, each consuming from its own dedicated channel.
+	var wg sync.WaitGroup
+	wg.Add(workerCount)
+	for i := 0; i < workerCount; i++ {
+		go func(ch <-chan string) {
+			defer wg.Done()
+			worker(ctx, cfg, st, parser, logger, ch, stats)
+		}(workerChs[i])
+	}
+
+	// Dispatcher goroutine: routes lines to workers by user affinity key.
+	go Dispatch(ctx, lineCh, workerChs)
+
+	wg.Wait()
+}
+
+// worker processes lines from a channel, batches them, and flushes to MongoDB.
+func worker(ctx context.Context, cfg config.Config, st *store.Store,
+	parser *talog.Parser, logger *logrus.Logger, lineCh <-chan string,
+	stats StatsCollector,
+) {
+	userBatch := NewBatch(cfg.Batch.SizeMax)
+	eventBatch := NewBatch(cfg.Batch.SizeMax)
+	deadBatch := NewBatch(128) // smaller capacity for dead letters
+
+	lastFlush := time.Now()
+	flushInterval := cfg.FlushInterval()
+	invalidCount := 0
+
+	// flush writes accumulated batches to MongoDB and resets them.
+	// User batch uses ordered writes to preserve operation sequence within a batch.
+	flush := func() {
+		flushBatchOrdered(ctx, st, logger, st.UserCollection(), userBatch, stats)
+		flushBatch(ctx, st, logger, st.EventCollection(), eventBatch, stats)
+		flushBatch(ctx, st, logger, st.DeadLetterCollection(), deadBatch, stats)
+		lastFlush = time.Now()
+	}
+
+	for line := range lineCh {
+		stats.OnLine()
+
+		rec, err := parser.ParseLine(line)
+		if err != nil {
+			invalidCount++
+			stats.OnParseError()
+			stats.OnDeadLetter()
+			if invalidCount%1000 == 0 {
+				logger.WithError(err).Warnf("dropped invalid line (total invalid=%d)", invalidCount)
+			}
+			deadBatch.Add(store.DeadLetterModel(line, err))
+			if deadBatch.Full() || time.Since(lastFlush) >= flushInterval {
+				flush()
+			}
+			continue
+		}
+		stats.OnParseOK()
+
+		// Resolve user identity for both user and event records.
+		userID, err := st.Identity().Resolve(ctx, rec.AccountID, rec.DistinctID)
+		if err != nil {
+			stats.OnIdentityError()
+			stats.OnDeadLetter()
+			logger.WithError(err).Warn("identity resolve failed, sending to dead letter")
+			deadBatch.Add(store.DeadLetterModel(line, err))
+			continue
+		}
+
+		// Route the record to the appropriate batch.
+		switch rec.Category() {
+		case talog.CategoryUser:
+			userBatch.Add(store.UserWriteModel(rec.Type, userID, rec.Doc))
+			stats.OnUserWrite()
+		case talog.CategoryEvent:
+			rec.Doc["#user_id"] = userID
+			eventBatch.Add(store.EventWriteModel(rec.Type, rec.UUID, rec.Doc))
+			stats.OnEventWrite()
+		}
+
+		// Flush on dynamic batch threshold (derived from current backlog)
+		// or time-interval triggers.
+		backlog := len(lineCh)
+		threshold := dynamicbatch.ComputeFlushThreshold(
+			cfg.Batch.SizeMin,
+			cfg.Batch.SizeInitial,
+			cfg.Batch.SizeMax,
+			backlog,
+			cfg.Batch.WorkerChSize,
+		)
+		needFlush := userBatch.Len() >= threshold ||
+			eventBatch.Len() >= threshold ||
+			time.Since(lastFlush) >= flushInterval
+		if needFlush {
+			flush()
+		}
+
+		// Check for cancellation without blocking.
+		select {
+		case <-ctx.Done():
+			flush()
+			return
+		default:
+		}
+	}
+
+	// Channel closed (tailer stopped). Flush remaining data.
+	flush()
+}
+
+// flushBatch writes a batch to the given collection (unordered) and resets it.
+func flushBatch(ctx context.Context, st *store.Store, logger *logrus.Logger,
+	coll *mongo.Collection, b *Batch, stats StatsCollector,
+) {
+	if b.Empty() {
+		return
+	}
+	if err := st.BulkWrite(ctx, coll, b.Models); err != nil {
+		stats.OnWriteError()
+		logger.WithError(err).WithField("collection", coll.Name()).
+			Error("bulk write failed")
+	}
+	b.Reset()
+}
+
+// flushBatchOrdered writes a batch to the given collection with ordered writes
+// to guarantee that operations within the batch are applied sequentially.
+func flushBatchOrdered(ctx context.Context, st *store.Store, logger *logrus.Logger,
+	coll *mongo.Collection, b *Batch, stats StatsCollector,
+) {
+	if b.Empty() {
+		return
+	}
+	if err := st.BulkWriteOrdered(ctx, coll, b.Models); err != nil {
+		stats.OnWriteError()
+		logger.WithError(err).WithField("collection", coll.Name()).
+			Error("bulk write failed")
+	}
+	b.Reset()
+}

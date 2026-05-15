@@ -125,6 +125,31 @@ func metaMaxUpdate(meta bson.M) bson.M {
 // User write models  (ThinkingData user_* semantics)
 // ---------------------------------------------------------------------------
 
+// mergeFields merges meta and data fields into a single bson.M.
+func mergeFields(meta, data bson.M) bson.M {
+	all := make(bson.M, len(meta)+len(data))
+	for k, v := range meta {
+		all[k] = v
+	}
+	for k, v := range data {
+		all[k] = v
+	}
+	return all
+}
+
+// upsertWithOperator builds an upsert UpdateOneModel that protects meta
+// timestamps via $max/$set and applies the given MongoDB operator to the data.
+func upsertWithOperator(filter, meta bson.M, op string, data bson.M) mongo.WriteModel {
+	update := metaMaxUpdate(meta)
+	if len(data) > 0 {
+		update[op] = data
+	}
+	return mongo.NewUpdateOneModel().
+		SetFilter(filter).
+		SetUpdate(update).
+		SetUpsert(true)
+}
+
 // UserWriteModel builds the appropriate MongoDB write model for a user operation.
 // The user document is keyed by #user_id (the resolved TA user ID) so that all
 // user_* operations for the same user are applied to a single document.
@@ -142,14 +167,7 @@ func UserWriteModel(typ string, userID int64, doc bson.M) mongo.WriteModel {
 	case "user_set":
 		// Overwrite user properties, but only if this record is not older than
 		// what's already stored. Uses aggregation pipeline update (MongoDB 4.2+).
-		allFields := make(bson.M, len(meta)+len(data))
-		for k, v := range meta {
-			allFields[k] = v
-		}
-		for k, v := range data {
-			allFields[k] = v
-		}
-		pipeline := bson.A{bson.M{"$set": tsCondSet(ts, allFields)}}
+		pipeline := bson.A{bson.M{"$set": tsCondSet(ts, mergeFields(meta, data))}}
 		return mongo.NewUpdateOneModel().
 			SetFilter(filter).
 			SetUpdate(pipeline).
@@ -158,26 +176,12 @@ func UserWriteModel(typ string, userID int64, doc bson.M) mongo.WriteModel {
 	case "user_setOnce":
 		// Set properties only on insert; existing values are not overwritten.
 		// Meta timestamps use $max to only advance forward.
-		update := metaMaxUpdate(meta)
-		if len(data) > 0 {
-			update["$setOnInsert"] = data
-		}
-		return mongo.NewUpdateOneModel().
-			SetFilter(filter).
-			SetUpdate(update).
-			SetUpsert(true)
+		return upsertWithOperator(filter, meta, "$setOnInsert", data)
 
 	case "user_add":
 		// Increment numeric user properties. $inc is commutative so order doesn't
 		// matter for data fields. Meta timestamps use $max.
-		update := metaMaxUpdate(meta)
-		if len(data) > 0 {
-			update["$inc"] = data
-		}
-		return mongo.NewUpdateOneModel().
-			SetFilter(filter).
-			SetUpdate(update).
-			SetUpsert(true)
+		return upsertWithOperator(filter, meta, "$inc", data)
 
 	case "user_unset":
 		// Remove specified user properties, but only if this record is not older
@@ -209,39 +213,16 @@ func UserWriteModel(typ string, userID int64, doc bson.M) mongo.WriteModel {
 	case "user_append":
 		// Append values to array-type user properties. $push is additive,
 		// order doesn't affect correctness. Meta timestamps use $max.
-		push := toEachFields(data)
-		update := metaMaxUpdate(meta)
-		if len(push) > 0 {
-			update["$push"] = push
-		}
-		return mongo.NewUpdateOneModel().
-			SetFilter(filter).
-			SetUpdate(update).
-			SetUpsert(true)
+		return upsertWithOperator(filter, meta, "$push", toEachFields(data))
 
 	case "user_uniq_append":
 		// Append values to array-type properties with deduplication.
 		// $addToSet is idempotent. Meta timestamps use $max.
-		addToSet := toEachFields(data)
-		update := metaMaxUpdate(meta)
-		if len(addToSet) > 0 {
-			update["$addToSet"] = addToSet
-		}
-		return mongo.NewUpdateOneModel().
-			SetFilter(filter).
-			SetUpdate(update).
-			SetUpsert(true)
+		return upsertWithOperator(filter, meta, "$addToSet", toEachFields(data))
 
 	default:
 		// Fallback: same as user_set with timestamp protection.
-		allFields := make(bson.M, len(meta)+len(data))
-		for k, v := range meta {
-			allFields[k] = v
-		}
-		for k, v := range data {
-			allFields[k] = v
-		}
-		pipeline := bson.A{bson.M{"$set": tsCondSet(ts, allFields)}}
+		pipeline := bson.A{bson.M{"$set": tsCondSet(ts, mergeFields(meta, data))}}
 		return mongo.NewUpdateOneModel().
 			SetFilter(filter).
 			SetUpdate(pipeline).

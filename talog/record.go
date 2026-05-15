@@ -3,6 +3,10 @@ package talog
 
 import "strings"
 
+// EnvelopeKeys are the field names that may contain a nested TA JSON payload
+// when the log line uses an envelope format (e.g. structured logging wrappers).
+var EnvelopeKeys = []string{"msg", "message", "log"}
+
 // Record is a validated ThinkingData log record ready for storage.
 type Record struct {
 	// Type is the TA operation type (e.g. "user_set", "track").
@@ -28,7 +32,7 @@ const (
 
 // Category returns the storage category for a record.
 func (r *Record) Category() RecordCategory {
-	if strings.HasPrefix(r.Type, "user_") {
+	if IsUserType(r.Type) {
 		return CategoryUser
 	}
 	return CategoryEvent
@@ -43,32 +47,3 @@ func IsUserType(typ string) bool {
 func IsEventType(typ string) bool {
 	return strings.HasPrefix(typ, "track")
 }
-
-// Known TA operation types.
-var (
-	// _ts protection semantics for user_* types:
-	// - user_set / user_unset:
-	//   Use MongoDB aggregation pipeline with conditional update/removal.
-	//   Older records (incoming _ts < existing _ts) won't overwrite/remove fields.
-	// - user_setOnce / user_add / user_append / user_uniq_append:
-	//   Protect meta timestamps with $max, while data update semantics follow their operators
-	//   ($setOnInsert / $inc / $push / $addToSet).
-	//   Ordering guarantee is therefore weaker than user_set/user_unset.
-	// - user_del:
-	//   Delete the whole user record; no _ts check is performed.
-	UserTypes = map[string]struct{}{
-		"user_set":         {}, // conditional field overwrite guarded by _ts
-		"user_unset":       {}, // conditional field removal guarded by _ts
-		"user_setOnce":     {}, // data written only on insert; meta _ts protected by $max
-		"user_add":         {}, // meta _ts protected by $max; data uses $inc (commutative)
-		"user_append":      {}, // meta _ts protected by $max; data uses $push (array order may vary)
-		"user_uniq_append": {}, // meta _ts protected by $max; data uses $addToSet (idempotent)
-		"user_del":         {}, // no _ts check; record deletion
-	}
-
-	EventTypes = map[string]struct{}{
-		"track":           {},
-		"track_update":    {},
-		"track_overwrite": {},
-	}
-)

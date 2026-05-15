@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -205,7 +206,9 @@ func (ir *IdentityResolver) resolveWithBoth(
 
 	case accountExists && !distinctExists:
 		// account_id exists, distinct_id is new → bind distinct_id to account's user.
-		ir.atomicBindDistinctToAccount(ctx, accountMapping.UserID, distinctID)
+		if err := ir.atomicBindDistinctToAccount(ctx, accountMapping.UserID, distinctID); err != nil {
+			return 0, fmt.Errorf("bind distinct_id to account: %w", err)
+		}
 		ir.cacheMapping(accountMapping)
 		ir.distinctCache.Store(distinctID, accountMapping.UserID)
 		return accountMapping.UserID, nil
@@ -325,7 +328,9 @@ func (ir *IdentityResolver) atomicCreateForDistinctID(ctx context.Context, disti
 	}
 	if existing != nil && existing.UserID != userID {
 		// Race detected — another pod won. Remove our orphan doc.
-		ir.mapping.DeleteOne(ctx, bson.M{"#user_id": userID})
+		if _, delErr := ir.mapping.DeleteOne(ctx, bson.M{"#user_id": userID}); delErr != nil {
+			return 0, fmt.Errorf("delete orphan mapping after race: %w", delErr)
+		}
 		ir.cacheMapping(existing)
 		return existing.UserID, nil
 	}
@@ -357,7 +362,9 @@ func (ir *IdentityResolver) atomicCreateForBoth(ctx context.Context, accountID, 
 			}
 			if existing != nil {
 				// Try to bind distinct_id to the existing mapping.
-				ir.atomicBindDistinctToAccount(ctx, existing.UserID, distinctID)
+				if bindErr := ir.atomicBindDistinctToAccount(ctx, existing.UserID, distinctID); bindErr != nil {
+					return 0, fmt.Errorf("bind distinct_id after race: %w", bindErr)
+				}
 				ir.cacheMapping(existing)
 				ir.distinctCache.Store(distinctID, existing.UserID)
 				return existing.UserID, nil
@@ -375,11 +382,12 @@ func (ir *IdentityResolver) atomicCreateForBoth(ctx context.Context, accountID, 
 
 // atomicBindDistinctToAccount adds a distinct_id to an existing user's mapping.
 // $addToSet is naturally idempotent, safe for concurrent execution.
-func (ir *IdentityResolver) atomicBindDistinctToAccount(ctx context.Context, userID int64, distinctID string) {
-	ir.mapping.UpdateOne(ctx,
+func (ir *IdentityResolver) atomicBindDistinctToAccount(ctx context.Context, userID int64, distinctID string) error {
+	_, err := ir.mapping.UpdateOne(ctx,
 		bson.M{"#user_id": userID},
 		bson.M{"$addToSet": bson.M{"#distinct_ids": distinctID}},
 	)
+	return err
 }
 
 // atomicBindAccountToDistinct attempts to set account_id on a mapping that

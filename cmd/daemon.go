@@ -1,10 +1,9 @@
 package cmd
 
 import (
-	"os"
-	"os/signal"
-	"syscall"
+	"context"
 
+	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
 	"rocket-nano/tools/ta2mongo/config"
@@ -21,16 +20,16 @@ func NewDaemon() *cobra.Command {
 }
 
 func runDaemon(cmd *cobra.Command, _ []string) error {
-	cfg, err := config.Load(configFile)
+	cfg, logger, ctx, cancel, err := setup(cmd)
 	if err != nil {
 		return err
 	}
-
-	logger := newLogger(cfg)
-
-	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
+	return runDaemonWithConfig(cfg, logger, ctx)
+}
+
+func runDaemonWithConfig(cfg config.Config, logger *logrus.Logger, ctx context.Context) error {
 	d, err := daemon.New(ctx, cfg, logger)
 	if err != nil {
 		return err
