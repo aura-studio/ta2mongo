@@ -2,136 +2,168 @@ package config
 
 import (
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/spf13/viper"
 )
 
-type MongoConfig struct {
-	URI string `mapstructure:"uri"`
-	DB  string `mapstructure:"db"`
-}
+// Mode constants for the run mode configuration.
+const (
+	ModeDaemon = "daemon"
+	ModeOnce   = "once"
+	ModeIngest = "ingest"
+)
 
-type TaConfig struct {
-	LogPattern []string `mapstructure:"logPattern"`
-}
-
-type TailConfig struct {
-	RescanSeconds int `mapstructure:"rescanSeconds"`
-}
-
-type BatchConfig struct {
-	Size            int `mapstructure:"size"`
-	WorkerCount     int `mapstructure:"workerCount"`
-	FlushIntervalMs int `mapstructure:"flushIntervalMs"`
-}
-
-type RetryConfig struct {
-	MaxElapsedTime time.Duration `mapstructure:"maxElapsedTime"`
-}
-
-type LogConfig struct {
-	Level string `mapstructure:"level"`
-}
-
+// Config is the top-level configuration, mapping 1-to-1 with the YAML structure.
 type Config struct {
+	Mode  string      `mapstructure:"mode"`
 	Mongo MongoConfig `mapstructure:"mongo"`
-	Ta    TaConfig    `mapstructure:"ta"`
+	TA    TAConfig    `mapstructure:"ta"`
 	Tail  TailConfig  `mapstructure:"tail"`
 	Batch BatchConfig `mapstructure:"batch"`
 	Retry RetryConfig `mapstructure:"retry"`
 	Log   LogConfig   `mapstructure:"log"`
 }
 
-func DefaultConfig() Config {
-	cfg := Config{
-		Mongo: MongoConfig{
-			DB: "ta2mongo",
-		},
-		Ta: TaConfig{
-			LogPattern: []string{"/mnt/shared-data-log/ta\\.production-.*"}, // regex
-		},
-		Tail: TailConfig{
-			RescanSeconds: 30,
-		},
-		Batch: BatchConfig{
-			Size:            1000,
-			WorkerCount:     2,
-			FlushIntervalMs: 1000,
-		},
-		Retry: RetryConfig{
-			MaxElapsedTime: 10 * time.Second,
-		},
-		Log: LogConfig{
-			Level: "info",
-		},
-	}
-	return cfg
+// MongoConfig holds MongoDB connection parameters.
+type MongoConfig struct {
+	URI string `mapstructure:"uri"`
 }
 
-func LoadConfig(v *viper.Viper) (Config, error) {
-	cfg := DefaultConfig()
+// TAConfig holds ThinkingData log source settings.
+type TAConfig struct {
+	// LogPattern is a list of regex patterns matched against file paths.
+	LogPattern []string `mapstructure:"logPattern"`
+}
 
-	if v.IsSet("mongo.uri") {
-		cfg.Mongo.URI = v.GetString("mongo.uri")
-	}
-	if v.IsSet("mongo.db") {
-		cfg.Mongo.DB = v.GetString("mongo.db")
+// TailConfig controls the file-tailing behavior.
+type TailConfig struct {
+	RescanSeconds int `mapstructure:"rescanSeconds"`
+}
+
+// BatchConfig controls batching and parallelism of writes.
+type BatchConfig struct {
+	SizeMin int `mapstructure:"sizeMin"`
+	// SizeInitial is the effective batch size at "mid backlog".
+	SizeInitial int `mapstructure:"sizeInitial"`
+	SizeMax     int `mapstructure:"sizeMax"`
+
+	WorkerCount     int `mapstructure:"workerCount"`
+	WorkerChSize    int `mapstructure:"workerChSize"`
+	FlushIntervalMs int `mapstructure:"flushIntervalMs"`
+}
+
+// RetryConfig controls the exponential-backoff retry for bulk writes.
+type RetryConfig struct {
+	MaxElapsedTime time.Duration `mapstructure:"maxElapsedTime"`
+}
+
+// LogConfig controls logging output.
+type LogConfig struct {
+	Level string `mapstructure:"level"`
+}
+
+// Load reads the YAML config file specified by path, applies defaults,
+// validates the result and returns the final Config.
+func Load(path string) (Config, error) {
+	v := viper.New()
+	v.SetConfigFile(path)
+
+	// Set defaults so unspecified fields get reasonable values.
+	setDefaults(v)
+
+	if err := v.ReadInConfig(); err != nil {
+		return Config{}, fmt.Errorf("read config %q: %w", path, err)
 	}
 
-	if v.IsSet("ta.logPattern") {
-		cfg.Ta.LogPattern = v.GetStringSlice("ta.logPattern")
+	var cfg Config
+	if err := v.Unmarshal(&cfg); err != nil {
+		return Config{}, fmt.Errorf("unmarshal config: %w", err)
 	}
 
-	// tail.rescan 一定会开启：只需要配置 rescanSeconds
-	if v.IsSet("tail.rescanSeconds") {
-		cfg.Tail.RescanSeconds = v.GetInt("tail.rescanSeconds")
-	}
-
-	if v.IsSet("batch.size") {
-		cfg.Batch.Size = v.GetInt("batch.size")
-	}
-	if v.IsSet("batch.workerCount") {
-		cfg.Batch.WorkerCount = v.GetInt("batch.workerCount")
-	}
-	if v.IsSet("batch.flushIntervalMs") {
-		cfg.Batch.FlushIntervalMs = v.GetInt("batch.flushIntervalMs")
-	}
-
-	if v.IsSet("retry.maxElapsedTime") {
-		cfg.Retry.MaxElapsedTime = v.GetDuration("retry.maxElapsedTime")
-	}
-
-	if v.IsSet("log.level") {
-		cfg.Log.Level = v.GetString("log.level")
-	}
-
-	if err := cfg.Validate(); err != nil {
+	if err := cfg.validate(); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
 }
 
-func (c *Config) Validate() error {
-	if c.Mongo.URI == "" {
-		return fmt.Errorf("mongo.uri is required")
-	}
-	if c.Mongo.DB == "" {
-		return fmt.Errorf("mongo.db is required")
-	}
-	if len(c.Ta.LogPattern) == 0 {
-		return fmt.Errorf("ta.logPattern is required")
-	}
-	if c.Tail.RescanSeconds <= 0 {
-		return fmt.Errorf("tail.rescanSeconds must be > 0")
+func setDefaults(v *viper.Viper) {
+	v.SetDefault("mode", ModeDaemon)
+	v.SetDefault("tail.rescanSeconds", 30)
+
+	// Dynamic batch tuning defaults.
+	v.SetDefault("batch.sizeMin", 250)
+	v.SetDefault("batch.sizeInitial", 1000)
+	v.SetDefault("batch.sizeMax", 2000)
+
+	v.SetDefault("batch.workerCount", 2)
+	v.SetDefault("batch.workerChSize", 1000)
+	v.SetDefault("batch.flushIntervalMs", 1000)
+
+	v.SetDefault("retry.maxElapsedTime", "10s")
+	v.SetDefault("log.level", "info")
+}
+
+func (c *Config) validate() error {
+	switch c.Mode {
+	case ModeDaemon, ModeOnce, ModeIngest:
+		// valid
+	case "":
+		c.Mode = ModeDaemon
+	default:
+		return fmt.Errorf("config: mode must be one of %q, %q, %q; got %q", ModeDaemon, ModeOnce, ModeIngest, c.Mode)
 	}
 
-	// Safety nets (even though defaults exist)
-	if c.Batch.Size <= 0 {
-		c.Batch.Size = 1000
+	if c.Mongo.URI == "" {
+		return fmt.Errorf("config: mongo.uri is required")
 	}
+
+	if c.Tail.RescanSeconds <= 0 {
+		c.Tail.RescanSeconds = 30
+	}
+
+	// Ensure dynamic batch sizes are sane.
+	if c.Batch.SizeInitial <= 0 {
+		c.Batch.SizeInitial = 1000
+	}
+	if c.Batch.SizeMin <= 0 {
+		c.Batch.SizeMin = c.Batch.SizeInitial / 4
+		if c.Batch.SizeMin < 1 {
+			c.Batch.SizeMin = 1
+		}
+	}
+	if c.Batch.SizeMax <= 0 {
+		c.Batch.SizeMax = c.Batch.SizeInitial * 2
+	}
+
+	// Clamp ordering into a valid range: sizeMin <= sizeInitial <= sizeMax.
+	if c.Batch.SizeMin > c.Batch.SizeInitial {
+		c.Batch.SizeMin = c.Batch.SizeInitial
+	}
+	if c.Batch.SizeMax < c.Batch.SizeInitial {
+		c.Batch.SizeMax = c.Batch.SizeInitial
+	}
+	if c.Batch.SizeMax < c.Batch.SizeMin {
+		c.Batch.SizeMax = c.Batch.SizeMin
+	}
+
+	if c.Batch.SizeMin < 1 {
+		c.Batch.SizeMin = 1
+	}
+	if c.Batch.SizeInitial < 1 {
+		c.Batch.SizeInitial = 1
+	}
+	if c.Batch.SizeMax < 1 {
+		c.Batch.SizeMax = 1
+	}
+
 	if c.Batch.WorkerCount <= 0 {
 		c.Batch.WorkerCount = 2
+	}
+	if c.Batch.WorkerChSize <= 0 {
+		c.Batch.WorkerChSize = 1000
 	}
 	if c.Batch.FlushIntervalMs <= 0 {
 		c.Batch.FlushIntervalMs = 1000
@@ -140,9 +172,39 @@ func (c *Config) Validate() error {
 	if c.Retry.MaxElapsedTime <= 0 {
 		c.Retry.MaxElapsedTime = 10 * time.Second
 	}
-
 	if c.Log.Level == "" {
 		c.Log.Level = "info"
 	}
+
 	return nil
+}
+
+// MongoDBFromURI extracts the database name from a MongoDB URI path.
+// Example:
+// - mongodb://host:27017/ta2mongo => ta2mongo
+// - mongodb://host:27017           => error
+func MongoDBFromURI(uri string) (string, error) {
+	u, err := url.Parse(uri)
+	if err != nil {
+		return "", fmt.Errorf("parse mongo uri: %w", err)
+	}
+
+	// AWS DocumentDB / some MongoDB connection strings may not include a
+	// database name in the URI path (e.g. .../?:tls=true...).
+	// In that case we fall back to the project's default database name.
+	db := strings.Trim(u.Path, "/")
+	if db == "" {
+		return "ta2mongo", nil
+	}
+	return db, nil
+}
+
+// FlushInterval returns Batch.FlushIntervalMs as a time.Duration.
+func (c *Config) FlushInterval() time.Duration {
+	return time.Duration(c.Batch.FlushIntervalMs) * time.Millisecond
+}
+
+// RescanInterval returns Tail.RescanSeconds as a time.Duration.
+func (c *Config) RescanInterval() time.Duration {
+	return time.Duration(c.Tail.RescanSeconds) * time.Second
 }

@@ -1,10 +1,16 @@
-# ta2mongo 推荐两级 YAML 配置（mongo/ta/tail/batch/index/retry/log）
+# ta2mongo 配置文件
 #
-# daemon-only：只会启动 RunDaemon。
+# mode 决定运行模式：
+#   - daemon：持续追尾日志文件，增量导入（默认）
+#   - once：一次性读取所有匹配文件，处理完退出，输出统计摘要
+#   - ingest：同步阻塞上传模式（从 CLI 参数或 stdin 读取）
+#
+# 也可通过子命令显式指定：ta2mongo daemon / ta2mongo once / ta2mongo ingest
+
+mode: "daemon"
 
 mongo:
-  uri: "mongodb://localhost:27017"
-  db: "ta2mongo"
+  uri: "mongodb://localhost:27017/ta2mongo"
 
 ta:
   # 每个字符串是一个正则，用于匹配文件路径
@@ -12,15 +18,14 @@ ta:
     - "/mnt/shared-data-log/ta\\.production-.*"
 
 tail:
-  # rescan 一定会开启，因此只需要配置重扫间隔
   rescanSeconds: 30
 
 batch:
-  size: 1000
-  workerCount: 2
+  sizeMin: 100
+  sizeInitial: 200
+  sizeMax: 1000
+  workerCount: 8
   flushIntervalMs: 1000
-
-# index.ensureIndexes 现在始终开启：因此移除该配置项
 
 retry:
   maxElapsedTime: "10s"

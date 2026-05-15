@@ -1,7 +1,21 @@
 # ta2mongo 配置参数说明
 
-> 配置文件：`tools/ta2mongo/ta2mongo.yaml`  
-> 结构：两级 YAML（`mongo / ta / tail / batch / retry / log`）
+> 配置文件：`ta2mongo.yaml`（默认路径，可通过 `--config` 指定）  
+> 结构：两级 YAML（`mode / mongo / ta / tail / batch / retry / log`）
+
+---
+
+## mode
+运行模式选择
+
+- `mode` (string, optional)  
+  默认：`"daemon"`  
+  可选值：`"daemon"` / `"once"` / `"ingest"`  
+  - `daemon`：持续追尾日志文件，增量导入，不退出  
+  - `once`：daemon 的一次性版本，从文件开头读取所有匹配文件，处理完退出并输出统计摘要  
+  - `ingest`：同步阻塞上传模式（从 CLI 参数或 stdin 读取）  
+  
+  > 注：也可通过子命令显式指定模式（`ta2mongo daemon` / `ta2mongo once` / `ta2mongo ingest`），子命令优先级高于配置文件。
 
 ---
 
@@ -58,7 +72,7 @@ Mongo 写入重试策略
 
 - `retry.maxElapsedTime` (duration string, optional)  
   默认：`10s`  
-  使用指数退避重试（直到该时间耗尽）
+  使用指数退避重试（初始间隔 200ms，最大间隔 2s，直到该时间耗尽）
 
 ---
 
@@ -73,6 +87,9 @@ Mongo 写入重试策略
 
 ## ta2mongo.yaml 示例（当前仓库）
 ```yaml
+# mode 决定运行模式：daemon / once / ingest
+mode: "daemon"
+
 mongo:
   uri: "mongodb://localhost:27017"
   db: "ta2mongo"
@@ -94,3 +111,4 @@ retry:
 
 log:
   level: "info"
+```
