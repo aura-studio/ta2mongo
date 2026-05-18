@@ -1,15 +1,29 @@
 // Package main demonstrates logPattern glob patterns for both Linux and
-// Windows, covering absolute and relative paths.
+// Windows, covering all supported path formats.
 //
-// All patterns use Linux-style forward slashes uniformly. On Windows the
-// program auto-converts paths: /c/logs/... → C:\logs\... for directory
-// walking, and C:\logs\app.log → /c/logs/app.log for glob matching.
+// On Windows, patterns can be written in either format:
+//
+//	Linux format:   /c/logs/**/*.log          (recommended, portable)
+//	Windows format: C:\logs\**\*.log          (native, also supported)
+//
+// The program auto-converts paths for glob matching:
+//
+//	C:\logs\app.log  →  /c/logs/app.log       (normalize for matching)
+//	/c/logs          →  C:\logs               (native for directory walk)
+//
+// On Linux/WSL, Windows-style paths are also supported. The program
+// auto-detects the WSL drive mount point (e.g. /mnt/c) and converts:
+//
+//	C:\logs\app.log  →  /mnt/c/logs/app.log   (WSL)
+//	/c/logs          →  /mnt/c/logs            (WSL, drive remapping)
+//	logs\app.log     →  logs/app.log           (backslash → forward slash)
 package main
 
 import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 )
 
@@ -37,6 +51,13 @@ func normalizeWindowsPath(path string) string {
 		path = "/" + drive + rest
 	}
 	return strings.ReplaceAll(path, `\`, "/")
+}
+
+func normalizePath(path string) string {
+	if runtime.GOOS != "windows" {
+		return path
+	}
+	return normalizeWindowsPath(path)
 }
 
 // ---------------------------------------------------------------------------
@@ -82,175 +103,240 @@ func doGlobMatch(patParts, nameParts []string) bool {
 }
 
 // ---------------------------------------------------------------------------
+// Demo helpers
+// ---------------------------------------------------------------------------
+
+func printSection(title string) {
+	fmt.Println()
+	fmt.Printf("--- %s ---\n", title)
+	fmt.Println()
+}
+
+func printGlobResult(pattern, path string, matched bool) {
+	sym := "x"
+	if matched {
+		sym = "v"
+	}
+	fmt.Printf("  %-45s  %-45s  [%s]\n", pattern, path, sym)
+}
+
+func printGlobHeader() {
+	fmt.Printf("  %-45s  %-45s  %s\n", "Pattern", "Path", "Match")
+	fmt.Println("  " + strings.Repeat("-", 100))
+}
+
+func printConvHeader() {
+	fmt.Printf("  %-45s  %-45s  → %-35s  %s\n",
+		"Pattern", "OS Path", "Normalized", "Match")
+	fmt.Println("  " + strings.Repeat("-", 140))
+}
+
+func printConvResult(pattern, osPath, normalized string, matched bool) {
+	sym := "x"
+	if matched {
+		sym = "v"
+	}
+	fmt.Printf("  %-45s  %-45s  → %-35s  [%s]\n",
+		pattern, osPath, normalized, sym)
+}
+
+// stripDotSlash strips "./" or ".\" prefix (same as discoverFiles).
+func stripDotSlash(p string) string {
+	if strings.HasPrefix(p, "./") || strings.HasPrefix(p, `.\`) {
+		return p[2:]
+	}
+	return p
+}
+
+// ---------------------------------------------------------------------------
 // Demo
 // ---------------------------------------------------------------------------
 
 func main() {
 	fmt.Println("========================================")
 	fmt.Println("  logPattern Glob Matching Examples")
+	fmt.Printf("  (running on %s/%s)\n", runtime.GOOS, runtime.GOARCH)
 	fmt.Println("========================================")
 
-	// -----------------------------------------------------------------
+	// =================================================================
 	// 1. Linux absolute paths
-	// -----------------------------------------------------------------
-	fmt.Println()
-	fmt.Println("--- Linux Absolute Paths ---")
-	fmt.Println()
+	// =================================================================
+	printSection("1. Linux Absolute Paths")
+	printGlobHeader()
 
-	linuxCases := []struct {
-		pattern string
-		path    string
-	}{
-		// * matches any filename
+	for _, tc := range []struct{ pattern, path string }{
 		{"/var/log/app/*.log", "/var/log/app/access.log"},
 		{"/var/log/app/*.log", "/var/log/app/error.log"},
 		{"/var/log/app/*.log", "/var/log/app/readme.txt"},
-		// ** matches any depth
 		{"/var/log/**/*.log", "/var/log/app/access.log"},
 		{"/var/log/**/*.log", "/var/log/app/sub/deep.log"},
 		{"/var/log/**/*.log", "/var/log/sys.log"},
-		// ? matches single char
 		{"/var/log/app-?.log", "/var/log/app-1.log"},
 		{"/var/log/app-?.log", "/var/log/app-12.log"},
-		// [...] matches character class
 		{"/var/log/app-[0-9].log", "/var/log/app-3.log"},
 		{"/var/log/app-[0-9].log", "/var/log/app-x.log"},
+	} {
+		printGlobResult(tc.pattern, tc.path, globMatch(tc.pattern, tc.path))
 	}
-	printCases(linuxCases)
 
-	// -----------------------------------------------------------------
-	// 2. Linux relative paths
-	// -----------------------------------------------------------------
-	fmt.Println()
-	fmt.Println("--- Linux Relative Paths ---")
-	fmt.Println()
+	// =================================================================
+	// 2. Linux relative paths (including ./ and ../)
+	// =================================================================
+	printSection("2. Linux Relative Paths (including ./ and ../)")
+	printGlobHeader()
 
-	linuxRelCases := []struct {
-		pattern string
-		path    string
-	}{
+	for _, tc := range []struct{ pattern, path string }{
+		// Basic relative
 		{"logs/*.log", "logs/app.log"},
 		{"logs/*.log", "logs/sub/app.log"},
 		{"logs/**/*.log", "logs/sub/deep/app.log"},
-		{"./logs/*.log", "logs/app.log"},
 		{"**/*.log", "any/path/deep/app.log"},
 		{"*.log", "app.log"},
+		// ./ prefix (stripped before matching, same as discoverFiles)
+		{"./logs/*.log", "logs/app.log"},
+		{"./logs/**/*.log", "logs/sub/app.log"},
+		// ../ prefix (preserved, WalkDir returns paths with ../ prefix)
+		{"../logs/*.log", "../logs/app.log"},
+		{"../logs/**/*.log", "../logs/sub/deep/app.log"},
+	} {
+		matchPat := stripDotSlash(tc.pattern)
+		printGlobResult(tc.pattern, tc.path, globMatch(matchPat, tc.path))
 	}
-	printCases(linuxRelCases)
 
-	// -----------------------------------------------------------------
-	// 3. Windows absolute paths (written in Linux format, auto-converted)
-	// -----------------------------------------------------------------
-	fmt.Println()
-	fmt.Println("--- Windows Absolute Paths (Linux format → auto conversion) ---")
-	fmt.Println()
+	// =================================================================
+	// 3. Windows absolute paths — Linux-format pattern (recommended)
+	// =================================================================
+	printSection("3. Windows Absolute Paths — Linux-format pattern (recommended)")
+	printConvHeader()
 
-	winCases := []struct {
-		pattern string   // user writes in Linux format
-		winPath string   // OS returns Windows path
+	for _, tc := range []struct {
+		pattern string
+		winPath string
 	}{
 		{"/c/logs/*.log", `C:\logs\access.log`},
 		{"/c/logs/*.log", `C:\logs\error.log`},
 		{"/c/logs/*.log", `C:\logs\readme.txt`},
 		{"/d/app/logs/**/*.log", `D:\app\logs\sub\deep.log`},
 		{"/c/Program Files/app/*.log", `C:\Program Files\app\error.log`},
-	}
-
-	fmt.Printf("  %-40s  %-40s  → converted → %-30s  %s\n",
-		"Pattern", "Windows Path", "Normalized", "Match")
-	fmt.Println("  " + strings.Repeat("-", 150))
-	for _, tc := range winCases {
+	} {
 		normalized := normalizeWindowsPath(tc.winPath)
-		// Strip "./" from pattern before matching (same as discoverFiles)
-		matchPat := tc.pattern
-		if strings.HasPrefix(matchPat, "./") {
-			matchPat = matchPat[2:]
-		}
-		matched := globMatch(matchPat, normalized)
-		symbol := "x"
-		if matched {
-			symbol = "v"
-		}
-		fmt.Printf("  %-40s  %-40s  → converted → %-30s  [%s]\n",
-			tc.pattern, tc.winPath, normalized, symbol)
+		matched := globMatch(tc.pattern, normalized)
+		printConvResult(tc.pattern, tc.winPath, normalized, matched)
 	}
 
-	// -----------------------------------------------------------------
-	// 4. Windows relative paths
-	// -----------------------------------------------------------------
+	// =================================================================
+	// 4. Windows absolute paths — native backslash pattern (also works)
+	// =================================================================
+	printSection("4. Windows Absolute Paths — native backslash pattern")
+	fmt.Println("  (pattern is normalized to forward slashes before matching)")
 	fmt.Println()
-	fmt.Println("--- Windows Relative Paths ---")
-	fmt.Println()
+	printConvHeader()
 
-	winRelCases := []struct {
+	for _, tc := range []struct {
+		pattern string // Windows-native pattern with backslashes
+		winPath string // OS returns this
+	}{
+		{`C:\logs\*.log`, `C:\logs\access.log`},
+		{`C:\logs\*.log`, `C:\logs\readme.txt`},
+		{`D:\app\logs\**\*.log`, `D:\app\logs\sub\deep.log`},
+		{`C:\Program Files\app\*.log`, `C:\Program Files\app\error.log`},
+	} {
+		// Both pattern and path are normalized (same as discoverFiles)
+		normPat := normalizeWindowsPath(tc.pattern)
+		normPath := normalizeWindowsPath(tc.winPath)
+		matched := globMatch(normPat, normPath)
+		printConvResult(tc.pattern, tc.winPath, normPath, matched)
+	}
+
+	// =================================================================
+	// 5. Windows relative paths — various formats
+	// =================================================================
+	printSection("5. Windows Relative Paths — various formats")
+	fmt.Println("  (all patterns and paths normalized to forward slashes)")
+	fmt.Println()
+	printConvHeader()
+
+	for _, tc := range []struct {
 		pattern string
 		winPath string
 	}{
+		// Forward slash pattern, backslash path
 		{"logs/*.log", `logs\app.log`},
 		{"logs/**/*.log", `logs\sub\deep\app.log`},
 		{"**/*.log", `any\path\app.log`},
-		{"*.log", `app.log`},
+		// Backslash pattern, backslash path (Windows-native throughout)
+		{`logs\*.log`, `logs\app.log`},
+		{`logs\**\*.log`, `logs\sub\deep\app.log`},
+		// .\ prefix (Windows equivalent of ./)
+		{`.\logs\*.log`, `logs\app.log`},
+		{`.\logs\**\*.log`, `logs\sub\deep\app.log`},
+		// ..\ prefix (Windows equivalent of ../)
+		{`..\logs\*.log`, `..\logs\app.log`},
+		{`..\logs\**\*.log`, `..\logs\sub\deep\app.log`},
+	} {
+		normPat := normalizeWindowsPath(stripDotSlash(tc.pattern))
+		normPath := normalizeWindowsPath(tc.winPath)
+		matched := globMatch(normPat, normPath)
+		printConvResult(tc.pattern, tc.winPath, normPath, matched)
 	}
 
-	fmt.Printf("  %-40s  %-40s  → converted → %-30s  %s\n",
-		"Pattern", "Windows Path", "Normalized", "Match")
-	fmt.Println("  " + strings.Repeat("-", 150))
-	for _, tc := range winRelCases {
-		normalized := normalizeWindowsPath(tc.winPath)
-		matchPat := tc.pattern
-		if strings.HasPrefix(matchPat, "./") {
-			matchPat = matchPat[2:]
-		}
-		matched := globMatch(matchPat, normalized)
-		symbol := "x"
-		if matched {
-			symbol = "v"
-		}
-		fmt.Printf("  %-40s  %-40s  → converted → %-30s  [%s]\n",
-			tc.pattern, tc.winPath, normalized, symbol)
-	}
+	// =================================================================
+	// 6. Path conversion summary
+	// =================================================================
+	printSection("6. Path Conversion: toWindowsPath (Linux → Windows)")
 
-	// -----------------------------------------------------------------
-	// 5. Path conversion summary
-	// -----------------------------------------------------------------
-	fmt.Println()
-	fmt.Println("--- Path Conversion Summary ---")
-	fmt.Println()
 	convCases := []struct {
 		input string
 		desc  string
 	}{
 		{"/c/logs/app/*.log", "drive C absolute"},
 		{"/d/data/**/*.log", "drive D absolute"},
-		{"logs/*.log", "relative"},
-		{"./logs/**/*.log", "relative with ./"},
-		{"**/*.log", "recursive from CWD"},
-		{"/var/log/app/*.log", "Linux absolute (no drive)"},
+		{"logs/*.log", "relative (no change)"},
+		{"./logs/**/*.log", "dot-slash relative (no change)"},
+		{"../logs/*.log", "dot-dot-slash relative (no change)"},
+		{"**/*.log", "recursive from CWD (no change)"},
+		{"/var/log/app/*.log", "Linux absolute (no change)"},
 	}
-	fmt.Printf("  %-35s  %-15s  → Windows: %s\n", "Linux Pattern", "Type", "Converted")
-	fmt.Println("  " + strings.Repeat("-", 80))
+	fmt.Printf("  %-40s  %-25s  → %s\n", "Linux Pattern", "Type", "Windows Path")
+	fmt.Println("  " + strings.Repeat("-", 100))
 	for _, c := range convCases {
-		fmt.Printf("  %-35s  %-15s  → Windows: %s\n", c.input, c.desc, toWindowsPath(c.input))
+		fmt.Printf("  %-40s  %-25s  → %s\n", c.input, c.desc, toWindowsPath(c.input))
 	}
-}
 
-func printCases(cases []struct {
-	pattern string
-	path    string
-}) {
-	fmt.Printf("  %-40s  %-40s  %s\n", "Pattern", "Path", "Match")
-	fmt.Println("  " + strings.Repeat("-", 90))
-	for _, tc := range cases {
-		// Strip "./" prefix (same as discoverFiles does).
-		matchPat := tc.pattern
-		if strings.HasPrefix(matchPat, "./") {
-			matchPat = matchPat[2:]
-		}
-		matched := globMatch(matchPat, tc.path)
-		symbol := "x"
-		if matched {
-			symbol = "v"
-		}
-		fmt.Printf("  %-40s  %-40s  [%s]\n", tc.pattern, tc.path, symbol)
+	// =================================================================
+	// 7. Cross-platform compatibility matrix
+	// =================================================================
+	printSection("7. Cross-Platform Compatibility Matrix")
+	fmt.Println("  All path formats now work on BOTH Linux and Windows.")
+	fmt.Println("  On Linux/WSL, Windows paths are auto-converted (C:\\ → /mnt/c/, \\ → /).")
+	fmt.Println("  WSL drive mount prefix is auto-detected (e.g. /mnt/c or /c).")
+	fmt.Println()
+
+	matrix := []struct {
+		format  string
+		example string
+		linux   string
+		windows string
+	}{
+		{"Linux relative", "logs/ta.*.log", "PASS", "PASS"},
+		{"Linux absolute", "/var/log/ta.*.log", "PASS", "PASS"},
+		{"Linux drive-letter abs", "/c/logs/ta.*.log", "PASS*", "PASS"},
+		{`Windows absolute`, `C:\logs\ta.*.log`, "PASS*", "PASS"},
+		{`Windows relative`, `logs\ta.*.log`, "PASS", "PASS"},
+		{"./ prefix", "./logs/ta.*.log", "PASS", "PASS"},
+		{`.\  prefix`, `.\logs\ta.*.log`, "PASS", "PASS"},
+		{"../ prefix", "../logs/ta.*.log", "PASS", "PASS"},
+		{`..\  prefix`, `..\logs\ta.*.log`, "PASS", "PASS"},
 	}
+
+	fmt.Printf("  %-25s  %-30s  %-8s  %s\n", "Format", "Example", "Linux", "Windows")
+	fmt.Println("  " + strings.Repeat("-", 80))
+	for _, m := range matrix {
+		fmt.Printf("  %-25s  %-30s  %-8s  %s\n", m.format, m.example, m.linux, m.windows)
+	}
+	fmt.Println()
+	fmt.Println("  * Drive-letter paths on Linux require WSL or a /c/ mount point.")
+	fmt.Println()
+	fmt.Println("  Recommendation: use Linux-style forward-slash patterns for portability.")
+	fmt.Println("  Windows-native backslash patterns are auto-normalized on all platforms.")
 }

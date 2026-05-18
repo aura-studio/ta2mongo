@@ -5,6 +5,7 @@ package tailer
 import (
 	"context"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -23,6 +24,25 @@ import (
 // driveLetterRe matches a Linux-style path starting with a single drive
 // letter, e.g. "/c/..." or "/D/...".
 var driveLetterRe = regexp.MustCompile(`^/([a-zA-Z])/`)
+
+// wslDriveRoot is the directory prefix where Windows drive letters are
+// mounted on WSL/Linux (e.g. "/mnt/"). Detected once at init time.
+// On Windows this is unused; on plain Linux (no WSL drives) it defaults
+// to "/".
+var wslDriveRoot = detectDriveRoot()
+
+func detectDriveRoot() string {
+	if runtime.GOOS == "windows" {
+		return "/" // unused on Windows, safe default
+	}
+	// Probe common WSL mount points; prefer /mnt/c, fall back to /c.
+	for _, prefix := range []string{"/mnt/", "/"} {
+		if fi, err := os.Stat(prefix + "c"); err == nil && fi.IsDir() {
+			return prefix
+		}
+	}
+	return "/"
+}
 
 // toWindowsPath converts a Linux-style path to a Windows path.
 //
@@ -53,23 +73,63 @@ func normalizeWindowsPath(path string) string {
 	return strings.ReplaceAll(path, `\`, "/")
 }
 
-// toNativePath converts a Linux-style path to OS-native format.
-// On Windows it calls toWindowsPath; on other OS it returns input unchanged.
-func toNativePath(path string) string {
-	if runtime.GOOS != "windows" {
-		return path
+// toLinuxNativePath converts any path to Linux-native format, handling
+// Windows drive letters and backslashes. On WSL it maps drive letters to
+// the detected mount point (e.g. /mnt/c/).
+//
+//	C:\logs\app.log       →  /mnt/c/logs/app.log   (WSL)
+//	/c/logs/app.log       →  /mnt/c/logs/app.log   (WSL, drives at /mnt/)
+//	/c/logs/app.log       →  /c/logs/app.log        (drives at /)
+//	logs\app.log          →  logs/app.log
+//	/var/log/app.log      →  /var/log/app.log       (unchanged)
+func toLinuxNativePath(path string) string {
+	// Handle Windows drive letter: C:\...
+	if len(path) >= 2 && path[1] == ':' {
+		drive := strings.ToLower(string(path[0]))
+		rest := strings.ReplaceAll(path[2:], `\`, "/")
+		return wslDriveRoot + drive + rest
 	}
-	return toWindowsPath(path)
+	// Handle Linux-style drive letter: /c/...
+	// Only remap when drives are at a prefix other than "/" (e.g. /mnt/).
+	if wslDriveRoot != "/" {
+		if m := driveLetterRe.FindStringSubmatch(path); m != nil {
+			drive := strings.ToLower(m[1])
+			rest := path[len(m[0]):]
+			return wslDriveRoot + drive + "/" + rest
+		}
+	}
+	// Just replace backslashes.
+	return strings.ReplaceAll(path, `\`, "/")
 }
 
-// normalizePath converts an OS-native file path to Linux-style forward-slash
-// format. On Windows it calls normalizeWindowsPath; on other OS returns input
-// unchanged.
-func normalizePath(path string) string {
-	if runtime.GOOS != "windows" {
-		return path
+// toNativePath converts a path to OS-native format for use with
+// filepath.WalkDir and other filesystem calls.
+//
+//   - On Windows: /c/logs    →  C:\logs            (via toWindowsPath)
+//   - On Linux:   C:\logs    →  /mnt/c/logs        (via toLinuxNativePath)
+//   - On Linux:   /c/logs    →  /mnt/c/logs        (WSL drive remapping)
+//   - On Linux:   logs\app   →  logs/app           (backslash fix)
+//
+// Paths already in native format pass through unchanged.
+func toNativePath(path string) string {
+	if runtime.GOOS == "windows" {
+		return toWindowsPath(path)
 	}
-	return normalizeWindowsPath(path)
+	return toLinuxNativePath(path)
+}
+
+// normalizePath converts any file path to a canonical forward-slash format
+// for glob matching. On all platforms, Windows-style paths are converted:
+//
+//   - On Windows:  C:\logs\app.log  →  /c/logs/app.log
+//   - On Linux:    C:\logs\app.log  →  /mnt/c/logs/app.log   (WSL)
+//   - On Linux:    /mnt/c/logs/x    →  /mnt/c/logs/x         (unchanged)
+//   - Everywhere:  logs/app.log     →  logs/app.log           (unchanged)
+func normalizePath(path string) string {
+	if runtime.GOOS == "windows" {
+		return normalizeWindowsPath(path)
+	}
+	return toLinuxNativePath(path)
 }
 
 // ---------------------------------------------------------------------------
