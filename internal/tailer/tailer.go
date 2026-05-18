@@ -25,17 +25,17 @@ import (
 // letter, e.g. "/c/..." or "/D/...".
 var driveLetterRe = regexp.MustCompile(`^/([a-zA-Z])/`)
 
-// wslDriveRoot is the directory prefix where Windows drive letters are
-// mounted on WSL/Linux (e.g. "/mnt/"). Detected once at init time.
-// On Windows this is unused; on plain Linux (no WSL drives) it defaults
+// linuxDriveRoot is the directory prefix where Windows drive letters are
+// mounted on Linux (e.g. "/mnt/"). Detected once at init time.
+// On Windows this is unused; on Linux without drive mounts it defaults
 // to "/".
-var wslDriveRoot = detectDriveRoot()
+var linuxDriveRoot = detectDriveRoot()
 
 func detectDriveRoot() string {
 	if runtime.GOOS == "windows" {
 		return "/" // unused on Windows, safe default
 	}
-	// Probe common WSL mount points; prefer /mnt/c, fall back to /c.
+	// Probe common Linux mount points; prefer /mnt/c, fall back to /c.
 	for _, prefix := range []string{"/mnt/", "/"} {
 		if fi, err := os.Stat(prefix + "c"); err == nil && fi.IsDir() {
 			return prefix
@@ -74,11 +74,11 @@ func normalizeWindowsPath(path string) string {
 }
 
 // toLinuxNativePath converts any path to Linux-native format, handling
-// Windows drive letters and backslashes. On WSL it maps drive letters to
-// the detected mount point (e.g. /mnt/c/).
+// Windows drive letters and backslashes. It maps drive letters to the
+// detected mount point (e.g. /mnt/c/).
 //
-//	C:\logs\app.log       →  /mnt/c/logs/app.log   (WSL)
-//	/c/logs/app.log       →  /mnt/c/logs/app.log   (WSL, drives at /mnt/)
+//	C:\logs\app.log       →  /mnt/c/logs/app.log   (drives at /mnt/)
+//	/c/logs/app.log       →  /mnt/c/logs/app.log   (drives at /mnt/)
 //	/c/logs/app.log       →  /c/logs/app.log        (drives at /)
 //	logs\app.log          →  logs/app.log
 //	/var/log/app.log      →  /var/log/app.log       (unchanged)
@@ -87,15 +87,15 @@ func toLinuxNativePath(path string) string {
 	if len(path) >= 2 && path[1] == ':' {
 		drive := strings.ToLower(string(path[0]))
 		rest := strings.ReplaceAll(path[2:], `\`, "/")
-		return wslDriveRoot + drive + rest
+		return linuxDriveRoot + drive + rest
 	}
 	// Handle Linux-style drive letter: /c/...
 	// Only remap when drives are at a prefix other than "/" (e.g. /mnt/).
-	if wslDriveRoot != "/" {
+	if linuxDriveRoot != "/" {
 		if m := driveLetterRe.FindStringSubmatch(path); m != nil {
 			drive := strings.ToLower(m[1])
 			rest := path[len(m[0]):]
-			return wslDriveRoot + drive + "/" + rest
+			return linuxDriveRoot + drive + "/" + rest
 		}
 	}
 	// Just replace backslashes.
@@ -107,7 +107,7 @@ func toLinuxNativePath(path string) string {
 //
 //   - On Windows: /c/logs    →  C:\logs            (via toWindowsPath)
 //   - On Linux:   C:\logs    →  /mnt/c/logs        (via toLinuxNativePath)
-//   - On Linux:   /c/logs    →  /mnt/c/logs        (WSL drive remapping)
+//   - On Linux:   /c/logs    →  /mnt/c/logs        (drive remapping)
 //   - On Linux:   logs\app   →  logs/app           (backslash fix)
 //
 // Paths already in native format pass through unchanged.
@@ -122,7 +122,7 @@ func toNativePath(path string) string {
 // for glob matching. On all platforms, Windows-style paths are converted:
 //
 //   - On Windows:  C:\logs\app.log  →  /c/logs/app.log
-//   - On Linux:    C:\logs\app.log  →  /mnt/c/logs/app.log   (WSL)
+//   - On Linux:    C:\logs\app.log  →  /mnt/c/logs/app.log
 //   - On Linux:    /mnt/c/logs/x    →  /mnt/c/logs/x         (unchanged)
 //   - Everywhere:  logs/app.log     →  logs/app.log           (unchanged)
 func normalizePath(path string) string {

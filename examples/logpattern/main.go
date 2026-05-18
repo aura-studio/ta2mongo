@@ -11,11 +11,11 @@
 //	C:\logs\app.log  →  /c/logs/app.log       (normalize for matching)
 //	/c/logs          →  C:\logs               (native for directory walk)
 //
-// On Linux/WSL, Windows-style paths are also supported. The program
-// auto-detects the WSL drive mount point (e.g. /mnt/c) and converts:
+// On Linux, Windows-style paths are also supported. The program
+// auto-detects the drive mount point (e.g. /mnt/c or /c) and converts:
 //
-//	C:\logs\app.log  →  /mnt/c/logs/app.log   (WSL)
-//	/c/logs          →  /mnt/c/logs            (WSL, drive remapping)
+//	C:\logs\app.log  →  /mnt/c/logs/app.log   (drives at /mnt/)
+//	/c/logs          →  /mnt/c/logs            (drive remapping)
 //	logs\app.log     →  logs/app.log           (backslash → forward slash)
 package main
 
@@ -308,8 +308,8 @@ func main() {
 	// =================================================================
 	printSection("7. Cross-Platform Compatibility Matrix")
 	fmt.Println("  All path formats now work on BOTH Linux and Windows.")
-	fmt.Println("  On Linux/WSL, Windows paths are auto-converted (C:\\ → /mnt/c/, \\ → /).")
-	fmt.Println("  WSL drive mount prefix is auto-detected (e.g. /mnt/c or /c).")
+	fmt.Println("  On Linux, Windows paths are auto-converted (C:\\ → /mnt/c/, \\ → /).")
+	fmt.Println("  Drive mount prefix is auto-detected (e.g. /mnt/c or /c).")
 	fmt.Println()
 
 	matrix := []struct {
@@ -335,7 +335,7 @@ func main() {
 		fmt.Printf("  %-25s  %-30s  %-8s  %s\n", m.format, m.example, m.linux, m.windows)
 	}
 	fmt.Println()
-	fmt.Println("  * Drive-letter paths on Linux require WSL or a /c/ mount point.")
+	fmt.Println("  * Drive-letter paths on Linux require a /mnt/c/ or /c/ mount point.")
 	fmt.Println()
 	fmt.Println("  Recommendation: use Linux-style forward-slash patterns for portability.")
 	fmt.Println("  Windows-native backslash patterns are auto-normalized on all platforms.")
