@@ -294,6 +294,11 @@ func discoverFiles(patterns []string, logger *logrus.Logger) []string {
 		if strings.HasPrefix(matchPattern, "./") || strings.HasPrefix(matchPattern, `.\`) {
 			matchPattern = matchPattern[2:]
 		}
+		// Normalize the pattern to forward slashes so it matches the
+		// normalized (forward-slash) paths returned by normalizePath.
+		// Without this, Windows-style patterns like C:\logs\*.log would
+		// fail to match against /c/logs/app.log.
+		matchPattern = normalizePath(matchPattern)
 
 		base := globBaseDir(pattern)
 		logger.WithFields(logrus.Fields{

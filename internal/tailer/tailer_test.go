@@ -213,7 +213,10 @@ func TestGlobBaseDir(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := globBaseDir(tt.pattern)
+			// globBaseDir may return OS-native separators (via
+			// filepath.Dir / toNativePath), so normalise to forward
+			// slashes for a platform-independent comparison.
+			got := filepath.ToSlash(globBaseDir(tt.pattern))
 			if got != tt.want {
 				t.Errorf("globBaseDir(%q) = %q, want %q", tt.pattern, got, tt.want)
 			}
