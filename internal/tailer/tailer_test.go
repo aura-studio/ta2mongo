@@ -11,95 +11,223 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// regexBaseDir tests
+// toWindowsPath / normalizeWindowsPath tests
 // ---------------------------------------------------------------------------
 
-func TestRegexBaseDir(t *testing.T) {
+func TestToWindowsPath(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"drive c", "/c/xxx/ta.*.log", `C:\xxx\ta.*.log`},
+		{"drive d", "/d/logs/app.log", `D:\logs\app.log`},
+		{"drive upper", "/D/data/logs/test.log", `D:\data\logs\test.log`},
+		{"spaces in path", "/c/Program Files/app/*.log", `C:\Program Files\app\*.log`},
+		{"no drive letter", "*.log", "*.log"},
+		{"linux absolute", "/var/log/app/*.log", "/var/log/app/*.log"},
+		{"empty", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := toWindowsPath(tt.input)
+			if got != tt.want {
+				t.Errorf("toWindowsPath(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeWindowsPath(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"drive c", `C:\xxx\ta.2024.log`, "/c/xxx/ta.2024.log"},
+		{"drive d", `D:\logs\app.log`, "/d/logs/app.log"},
+		{"with spaces", `C:\Program Files\app\error.log`, "/c/Program Files/app/error.log"},
+		{"already forward slash", "/var/log/app.log", "/var/log/app.log"},
+		{"empty", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := normalizeWindowsPath(tt.input)
+			if got != tt.want {
+				t.Errorf("normalizeWindowsPath(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRoundTrip(t *testing.T) {
+	cases := []string{
+		"/c/xxx/ta.log",
+		"/d/logs/app.log",
+		"/e/data/deep/file.txt",
+	}
+	for _, c := range cases {
+		win := toWindowsPath(c)
+		back := normalizeWindowsPath(win)
+		if back != c {
+			t.Errorf("roundtrip(%q): toWindows=%q, back=%q", c, win, back)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// globMatch tests
+// ---------------------------------------------------------------------------
+
+func TestGlobMatch(t *testing.T) {
 	tests := []struct {
 		name    string
 		pattern string
-		want    string
+		path    string
+		want    bool
 	}{
-		{
-			name:    "pure literal path",
-			pattern: "/var/log/app/access.log",
-			want:    "/var/log/app",
-		},
-		{
-			name:    "regex with dot-star after dir",
-			pattern: "/var/log/app/.*\\.log",
-			// '.' is a metachar, prefix="/var/log/app/", trimmed="/var/log/app", Dir -> "/var/log"
-			want: "/var/log",
-		},
-		{
-			name:    "regex starts at first component",
-			pattern: "/var/log/.*/access\\.log",
-			// '.' at "/var/log/.", prefix="/var/log/", trimmed="/var/log", Dir -> "/var"
-			want: "/var",
-		},
-		{
-			name:    "metachar at beginning",
-			pattern: ".*\\.log",
-			want:    string(filepath.Separator),
-		},
-		{
-			name:    "bracket expression in filename",
-			pattern: "/data/logs/[0-9]+\\.log",
-			// '[' is a metachar, prefix="/data/logs/", trimmed="/data/logs", Dir -> "/data"
-			want: "/data",
-		},
-		{
-			name:    "question mark metachar",
-			pattern: "/data/logs/app?.log",
-			want:    "/data/logs",
-		},
-		{
-			name:    "plus metachar",
-			pattern: "/data/logs/app+\\.log",
-			want:    "/data/logs",
-		},
-		{
-			name:    "parentheses group",
-			pattern: "/data/logs/(access|error)\\.log",
-			// '(' is a metachar, prefix="/data/logs/", trimmed="/data/logs", Dir -> "/data"
-			want: "/data",
-		},
-		{
-			name:    "pipe alternation without prefix",
-			pattern: "(access|error)\\.log",
-			want:    string(filepath.Separator),
-		},
-		{
-			name:    "caret anchor",
-			pattern: "^/var/log/access\\.log",
-			want:    string(filepath.Separator),
-		},
-		{
-			name:    "trailing slash before metachar",
-			pattern: "/var/log/.*",
-			// '.' is a metachar, prefix="/var/log/", trimmed="/var/log", Dir -> "/var"
-			want: "/var",
-		},
-	}
+		// Basic * matching
+		{"star matches filename", "logs/*.log", "logs/app.log", true},
+		{"star no match extension", "logs/*.log", "logs/app.txt", false},
+		{"star matches prefix", "logs/ta.*.log", "logs/ta.2024.log", true},
+		{"star does not cross slash", "logs/*.log", "logs/sub/app.log", false},
 
+		// ** recursive matching
+		{"doublestar matches zero levels", "/var/log/**/*.log", "/var/log/app.log", true},
+		{"doublestar matches one level", "/var/log/**/*.log", "/var/log/sub/app.log", true},
+		{"doublestar matches deep", "/var/log/**/*.log", "/var/log/a/b/c/app.log", true},
+		{"doublestar no match ext", "/var/log/**/*.log", "/var/log/sub/app.txt", false},
+		{"leading doublestar", "**/*.log", "any/path/app.log", true},
+		{"trailing doublestar", "/var/log/**", "/var/log/a/b/c.txt", true},
+		{"doublestar alone", "**", "any/path/file.log", true},
+
+		// ? single char matching
+		{"question mark match", "logs/app?.log", "logs/app1.log", true},
+		{"question mark no match", "logs/app?.log", "logs/app12.log", false},
+
+		// [...] character class
+		{"bracket match", "logs/app[0-9].log", "logs/app3.log", true},
+		{"bracket no match", "logs/app[0-9].log", "logs/appx.log", false},
+
+		// Absolute paths
+		{"absolute match", "/var/log/app/*.log", "/var/log/app/access.log", true},
+		{"absolute no match", "/var/log/app/*.log", "/var/log/other/access.log", false},
+
+		// Windows-style paths (after normalization to forward slashes)
+		{"win drive path", "/c/xxx/*.log", "/c/xxx/ta.2024.log", true},
+		{"win drive deep", "/c/logs/**/*.log", "/c/logs/sub/app.log", true},
+
+		// Edge cases
+		{"exact match", "app.log", "app.log", true},
+		{"no match", "app.log", "other.log", false},
+		{"empty pattern empty path", "", "", true},
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := regexBaseDir(tt.pattern)
+			got := globMatch(tt.pattern, tt.path)
 			if got != tt.want {
-				t.Errorf("regexBaseDir(%q) = %q, want %q", tt.pattern, got, tt.want)
+				t.Errorf("globMatch(%q, %q) = %v, want %v", tt.pattern, tt.path, got, tt.want)
 			}
 		})
 	}
 }
 
 // ---------------------------------------------------------------------------
-// discoverFiles / pattern matching tests
+// globBaseDir tests
+// ---------------------------------------------------------------------------
+
+func TestGlobBaseDir(t *testing.T) {
+	tests := []struct {
+		name    string
+		pattern string
+		want    string
+	}{
+		// Absolute paths
+		{
+			name:    "pure literal path",
+			pattern: "/var/log/app/access.log",
+			want:    "/var/log/app",
+		},
+		{
+			name:    "star in filename",
+			pattern: "/var/log/app/*.log",
+			want:    "/var/log/app",
+		},
+		{
+			name:    "doublestar in middle",
+			pattern: "/var/log/**/*.log",
+			want:    "/var/log",
+		},
+		{
+			name:    "star at beginning",
+			pattern: "*.log",
+			want:    ".",
+		},
+		{
+			name:    "doublestar at beginning",
+			pattern: "**/*.log",
+			want:    ".",
+		},
+		{
+			name:    "bracket in filename",
+			pattern: "/data/logs/app[0-9].log",
+			want:    "/data/logs",
+		},
+		{
+			name:    "question mark in filename",
+			pattern: "/data/logs/app?.log",
+			want:    "/data/logs",
+		},
+		{
+			name:    "trailing star",
+			pattern: "/var/log/*",
+			want:    "/var/log",
+		},
+		// Relative paths
+		{
+			name:    "relative with star",
+			pattern: "logs/ta.*.log",
+			want:    "logs",
+		},
+		{
+			name:    "relative dot-slash",
+			pattern: "./logs/*.log",
+			want:    "./logs",
+		},
+		{
+			name:    "relative dot-slash deep",
+			pattern: "./data/logs/app[0-9].log",
+			want:    "./data/logs",
+		},
+		{
+			name:    "relative multi-level literal",
+			pattern: "data/logs/app.log",
+			want:    "data/logs",
+		},
+		{
+			name:    "relative dot-slash with doublestar",
+			pattern: "./**/*.log",
+			want:    ".",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := globBaseDir(tt.pattern)
+			if got != tt.want {
+				t.Errorf("globBaseDir(%q) = %q, want %q", tt.pattern, got, tt.want)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// discoverFiles tests (using glob patterns)
 // ---------------------------------------------------------------------------
 
 func TestDiscoverFiles_BasicPattern(t *testing.T) {
 	dir := t.TempDir()
 
-	// Create some test files.
 	files := []string{
 		filepath.Join(dir, "access.log"),
 		filepath.Join(dir, "error.log"),
@@ -114,15 +242,14 @@ func TestDiscoverFiles_BasicPattern(t *testing.T) {
 	logger := logrus.New()
 	logger.SetOutput(os.Stderr)
 
-	// Pattern matches only .log files.
-	pattern := dir + "/.*\\.log"
+	// Glob pattern matches only .log files.
+	pattern := dir + "/*.log"
 	result := discoverFiles([]string{pattern}, logger)
 
 	if len(result) != 2 {
 		t.Fatalf("expected 2 files, got %d: %v", len(result), result)
 	}
 
-	// Verify both .log files are found.
 	found := map[string]bool{}
 	for _, r := range result {
 		found[r] = true
@@ -132,9 +259,8 @@ func TestDiscoverFiles_BasicPattern(t *testing.T) {
 			t.Errorf("expected %q in results, got %v", expect, result)
 		}
 	}
-	// app.txt should not be in results.
 	if found[files[2]] {
-		t.Errorf("app.txt should not match .log pattern, got %v", result)
+		t.Errorf("app.txt should not match *.log pattern, got %v", result)
 	}
 }
 
@@ -145,17 +271,6 @@ func TestDiscoverFiles_EmptyPattern(t *testing.T) {
 	result := discoverFiles([]string{""}, logger)
 	if len(result) != 0 {
 		t.Errorf("expected 0 files for empty pattern, got %d: %v", len(result), result)
-	}
-}
-
-func TestDiscoverFiles_InvalidRegex(t *testing.T) {
-	logger := logrus.New()
-	logger.SetOutput(os.Stderr)
-
-	// Unclosed bracket is invalid regex.
-	result := discoverFiles([]string{"[invalid"}, logger)
-	if len(result) != 0 {
-		t.Errorf("expected 0 files for invalid regex, got %d: %v", len(result), result)
 	}
 }
 
@@ -171,8 +286,8 @@ func TestDiscoverFiles_Deduplication(t *testing.T) {
 	logger.SetOutput(os.Stderr)
 
 	// Two patterns that match the same file.
-	p1 := dir + "/.*\\.log"
-	p2 := dir + "/access\\.log"
+	p1 := dir + "/*.log"
+	p2 := dir + "/access.log"
 	result := discoverFiles([]string{p1, p2}, logger)
 
 	if len(result) != 1 {
@@ -180,7 +295,7 @@ func TestDiscoverFiles_Deduplication(t *testing.T) {
 	}
 }
 
-func TestDiscoverFiles_SubdirectoryPattern(t *testing.T) {
+func TestDiscoverFiles_SubdirectoryWithDoublestar(t *testing.T) {
 	dir := t.TempDir()
 
 	sub := filepath.Join(dir, "sub")
@@ -195,8 +310,8 @@ func TestDiscoverFiles_SubdirectoryPattern(t *testing.T) {
 	logger := logrus.New()
 	logger.SetOutput(os.Stderr)
 
-	// Pattern should match files in subdirectories.
-	pattern := dir + "/.*\\.log"
+	// ** should match files in subdirectories.
+	pattern := dir + "/**/*.log"
 	result := discoverFiles([]string{pattern}, logger)
 
 	if len(result) != 1 {
@@ -222,10 +337,9 @@ func TestDiscoverFiles_MultiplePatterns(t *testing.T) {
 	logger := logrus.New()
 	logger.SetOutput(os.Stderr)
 
-	// Two different patterns matching different files.
 	patterns := []string{
-		dir + "/.*\\.log",
-		dir + "/.*\\.txt",
+		dir + "/*.log",
+		dir + "/*.txt",
 	}
 	result := discoverFiles(patterns, logger)
 
@@ -252,10 +366,102 @@ func TestDiscoverFiles_NonexistentDirectory(t *testing.T) {
 	logger := logrus.New()
 	logger.SetOutput(os.Stderr)
 
-	// Pattern pointing to a directory that does not exist.
-	result := discoverFiles([]string{"/nonexistent/dir/.*\\.log"}, logger)
+	result := discoverFiles([]string{"/nonexistent/dir/*.log"}, logger)
 	if len(result) != 0 {
 		t.Errorf("expected 0 files for nonexistent dir, got %d: %v", len(result), result)
+	}
+}
+
+func TestDiscoverFiles_RelativePath(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "logs")
+	if err := os.MkdirAll(sub, 0755); err != nil {
+		t.Fatal(err)
+	}
+	f1 := filepath.Join(sub, "ta.2024.log")
+	f2 := filepath.Join(sub, "ta.2025.log")
+	f3 := filepath.Join(sub, "readme.txt")
+	for _, f := range []string{f1, f2, f3} {
+		if err := os.WriteFile(f, []byte("test"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	orig, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(orig) })
+
+	logger := logrus.New()
+	logger.SetOutput(os.Stderr)
+
+	pattern := "logs/ta.*.log"
+	result := discoverFiles([]string{pattern}, logger)
+
+	if len(result) != 2 {
+		t.Fatalf("expected 2 files, got %d: %v", len(result), result)
+	}
+}
+
+func TestDiscoverFiles_DotSlashRelativePath(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "logs")
+	if err := os.MkdirAll(sub, 0755); err != nil {
+		t.Fatal(err)
+	}
+	f := filepath.Join(sub, "app.log")
+	if err := os.WriteFile(f, []byte("test"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	orig, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(orig) })
+
+	logger := logrus.New()
+	logger.SetOutput(os.Stderr)
+
+	pattern := "./logs/*.log"
+	result := discoverFiles([]string{pattern}, logger)
+
+	if len(result) != 1 {
+		t.Fatalf("expected 1 file, got %d: %v", len(result), result)
+	}
+}
+
+func TestDiscoverFiles_DoublestarRelative(t *testing.T) {
+	dir := t.TempDir()
+	deep := filepath.Join(dir, "a", "b", "c")
+	if err := os.MkdirAll(deep, 0755); err != nil {
+		t.Fatal(err)
+	}
+	f := filepath.Join(deep, "app.log")
+	if err := os.WriteFile(f, []byte("test"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Also create a top-level log.
+	fTop := filepath.Join(dir, "top.log")
+	if err := os.WriteFile(fTop, []byte("test"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	orig, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(orig) })
+
+	logger := logrus.New()
+	logger.SetOutput(os.Stderr)
+
+	pattern := "**/*.log"
+	result := discoverFiles([]string{pattern}, logger)
+
+	if len(result) != 2 {
+		t.Fatalf("expected 2 files, got %d: %v", len(result), result)
 	}
 }
 
@@ -266,7 +472,6 @@ func TestDiscoverFiles_NonexistentDirectory(t *testing.T) {
 func TestRescan_PicksUpNewFiles(t *testing.T) {
 	dir := t.TempDir()
 
-	// Create an initial file.
 	f1 := filepath.Join(dir, "first.log")
 	if err := os.WriteFile(f1, []byte("line1\n"), 0644); err != nil {
 		t.Fatal(err)
@@ -275,7 +480,7 @@ func TestRescan_PicksUpNewFiles(t *testing.T) {
 	logger := logrus.New()
 	logger.SetOutput(os.Stderr)
 
-	pattern := dir + "/.*\\.log"
+	pattern := dir + "/*.log"
 	tailer := New([]string{pattern}, 100*time.Millisecond, logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -283,10 +488,8 @@ func TestRescan_PicksUpNewFiles(t *testing.T) {
 
 	out := tailer.Run(ctx)
 
-	// Wait for initial scan to complete.
 	time.Sleep(200 * time.Millisecond)
 
-	// tailer should have discovered the first file.
 	tailer.mu.Lock()
 	initialCount := len(tailer.tailed)
 	tailer.mu.Unlock()
@@ -295,13 +498,11 @@ func TestRescan_PicksUpNewFiles(t *testing.T) {
 		t.Fatalf("expected 1 tailed file after initial scan, got %d", initialCount)
 	}
 
-	// Create a new file after the initial scan.
 	f2 := filepath.Join(dir, "second.log")
 	if err := os.WriteFile(f2, []byte("line2\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	// Wait for rescan (interval is 100ms, wait enough for at least 2 ticks).
 	time.Sleep(400 * time.Millisecond)
 
 	tailer.mu.Lock()
@@ -313,7 +514,6 @@ func TestRescan_PicksUpNewFiles(t *testing.T) {
 	}
 
 	cancel()
-	// Drain the channel to avoid goroutine leaks.
 	for range out {
 	}
 }
@@ -329,7 +529,7 @@ func TestRescan_DoesNotDuplicateExistingFiles(t *testing.T) {
 	logger := logrus.New()
 	logger.SetOutput(os.Stderr)
 
-	pattern := dir + "/.*\\.log"
+	pattern := dir + "/*.log"
 	tailer := New([]string{pattern}, 100*time.Millisecond, logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -337,7 +537,6 @@ func TestRescan_DoesNotDuplicateExistingFiles(t *testing.T) {
 
 	out := tailer.Run(ctx)
 
-	// Wait for initial scan + a couple of rescans.
 	time.Sleep(500 * time.Millisecond)
 
 	tailer.mu.Lock()
@@ -363,7 +562,7 @@ func TestRescan_StreamsNewLinesFromNewFile(t *testing.T) {
 	logger := logrus.New()
 	logger.SetOutput(os.Stderr)
 
-	pattern := dir + "/.*\\.log"
+	pattern := dir + "/*.log"
 	tailer := New([]string{pattern}, 100*time.Millisecond, logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -371,20 +570,15 @@ func TestRescan_StreamsNewLinesFromNewFile(t *testing.T) {
 
 	out := tailer.Run(ctx)
 
-	// Wait for initial (empty) scan.
 	time.Sleep(150 * time.Millisecond)
 
-	// Create a new file that the rescan should pick up. Since tailing starts
-	// from the end of the file, we need to write *after* tailing starts.
 	f := filepath.Join(dir, "new.log")
 	if err := os.WriteFile(f, []byte(""), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	// Wait for rescan to discover and start tailing the file.
 	time.Sleep(300 * time.Millisecond)
 
-	// Now append a line to the file -- the tailer should stream it.
 	fd, err := os.OpenFile(f, os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
 		t.Fatal(err)
@@ -392,7 +586,6 @@ func TestRescan_StreamsNewLinesFromNewFile(t *testing.T) {
 	_, _ = fd.WriteString("hello from rescan\n")
 	fd.Close()
 
-	// Read from channel with timeout.
 	select {
 	case line := <-out:
 		if line != "hello from rescan" {

@@ -1,4 +1,4 @@
-// Package tailer discovers log files by regex patterns and tails them,
+// Package tailer discovers log files by glob patterns and tails them,
 // streaming new lines into a channel. It periodically rescans for new files.
 package tailer
 
@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -15,7 +16,124 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// Tailer watches for log files matching regex patterns and tails them
+// ---------------------------------------------------------------------------
+// Cross-platform path helpers (Linux ↔ Windows)
+// ---------------------------------------------------------------------------
+
+// driveLetterRe matches a Linux-style path starting with a single drive
+// letter, e.g. "/c/..." or "/D/...".
+var driveLetterRe = regexp.MustCompile(`^/([a-zA-Z])/`)
+
+// toWindowsPath converts a Linux-style path to a Windows path.
+//
+//	/c/xxx/ta.log  →  C:\xxx\ta.log
+//	/var/log/...   →  unchanged (not a single-letter drive)
+//	*.log          →  unchanged (relative pattern)
+func toWindowsPath(path string) string {
+	m := driveLetterRe.FindStringSubmatch(path)
+	if m == nil {
+		return path
+	}
+	drive := strings.ToUpper(m[1])
+	rest := path[len(m[0]):]
+	rest = strings.ReplaceAll(rest, "/", `\`)
+	return drive + `:\` + rest
+}
+
+// normalizeWindowsPath converts a Windows file path to Linux-style format
+// so that it can be matched against a Linux-style glob pattern.
+//
+//	C:\xxx\app.log  →  /c/xxx/app.log
+func normalizeWindowsPath(path string) string {
+	if len(path) >= 2 && path[1] == ':' {
+		drive := strings.ToLower(string(path[0]))
+		rest := path[2:]
+		path = "/" + drive + rest
+	}
+	return strings.ReplaceAll(path, `\`, "/")
+}
+
+// toNativePath converts a Linux-style path to OS-native format.
+// On Windows it calls toWindowsPath; on other OS it returns input unchanged.
+func toNativePath(path string) string {
+	if runtime.GOOS != "windows" {
+		return path
+	}
+	return toWindowsPath(path)
+}
+
+// normalizePath converts an OS-native file path to Linux-style forward-slash
+// format. On Windows it calls normalizeWindowsPath; on other OS returns input
+// unchanged.
+func normalizePath(path string) string {
+	if runtime.GOOS != "windows" {
+		return path
+	}
+	return normalizeWindowsPath(path)
+}
+
+// ---------------------------------------------------------------------------
+// Glob matching (supports ** for recursive directory matching)
+// ---------------------------------------------------------------------------
+
+// globMatch matches name against a glob pattern. Both must use forward
+// slashes. Supported wildcards:
+//
+//	*      matches any sequence of non-separator characters
+//	**     matches zero or more directory levels
+//	?      matches any single non-separator character
+//	[...]  matches a character class
+func globMatch(pattern, name string) bool {
+	return doGlobMatch(
+		strings.Split(pattern, "/"),
+		strings.Split(name, "/"),
+	)
+}
+
+// doGlobMatch performs segment-level recursive glob matching.
+func doGlobMatch(patParts, nameParts []string) bool {
+	for len(patParts) > 0 {
+		seg := patParts[0]
+
+		if seg == "**" {
+			patParts = patParts[1:]
+			// Consume consecutive ** segments.
+			for len(patParts) > 0 && patParts[0] == "**" {
+				patParts = patParts[1:]
+			}
+			if len(patParts) == 0 {
+				return true // trailing ** matches everything
+			}
+			// Try matching remaining pattern at every depth.
+			for i := 0; i <= len(nameParts); i++ {
+				if doGlobMatch(patParts, nameParts[i:]) {
+					return true
+				}
+			}
+			return false
+		}
+
+		if len(nameParts) == 0 {
+			return false
+		}
+
+		matched, _ := filepath.Match(seg, nameParts[0])
+		if !matched {
+			return false
+		}
+
+		patParts = patParts[1:]
+		nameParts = nameParts[1:]
+	}
+
+	return len(nameParts) == 0
+}
+
+// ---------------------------------------------------------------------------
+// Tailer
+// ---------------------------------------------------------------------------
+
+// Tailer watches for log files matching glob patterns and tails them
 // from the end, sending new lines to an output channel.
 type Tailer struct {
 	patterns       []string
@@ -27,7 +145,7 @@ type Tailer struct {
 	tails  map[string]*tail.Tail // active tail handles for cleanup
 }
 
-// New creates a Tailer that watches the given regex patterns.
+// New creates a Tailer that watches the given glob patterns.
 func New(patterns []string, rescanInterval time.Duration, logger *logrus.Logger) *Tailer {
 	return &Tailer{
 		patterns:       patterns,
@@ -150,16 +268,16 @@ func (t *Tailer) stopAll() {
 }
 
 // ---------------------------------------------------------------------------
-// File discovery (replaces the old "matches" package)
+// File discovery
 // ---------------------------------------------------------------------------
 
-// DiscoverFiles walks directories matching regex patterns and returns
+// DiscoverFiles walks directories matching glob patterns and returns
 // deduplicated file paths. This is exported for use by the once package.
 func DiscoverFiles(patterns []string, logger *logrus.Logger) []string {
 	return discoverFiles(patterns, logger)
 }
 
-// discoverFiles walks directories matching regex patterns and returns
+// discoverFiles walks directories matching glob patterns and returns
 // deduplicated file paths.
 func discoverFiles(patterns []string, logger *logrus.Logger) []string {
 	seen := make(map[string]struct{})
@@ -169,13 +287,15 @@ func discoverFiles(patterns []string, logger *logrus.Logger) []string {
 		if pattern == "" {
 			continue
 		}
-		re, err := regexp.Compile(pattern)
-		if err != nil {
-			logger.WithError(err).WithField("pattern", pattern).Warn("invalid logPattern regex, skipped")
-			continue
+
+		// Strip leading "./" or ".\" from pattern before matching,
+		// because filepath.WalkDir never returns paths with "./" prefix.
+		matchPattern := pattern
+		if strings.HasPrefix(matchPattern, "./") || strings.HasPrefix(matchPattern, `.\`) {
+			matchPattern = matchPattern[2:]
 		}
 
-		base := regexBaseDir(pattern)
+		base := globBaseDir(pattern)
 		logger.WithFields(logrus.Fields{
 			"pattern":  pattern,
 			"walk_dir": base,
@@ -189,7 +309,10 @@ func discoverFiles(patterns []string, logger *logrus.Logger) []string {
 			if d == nil || d.IsDir() {
 				return nil
 			}
-			if re.MatchString(path) {
+			// Normalize the OS-native path to forward slashes so that the
+			// glob pattern (written in Linux format) can match it.
+			normalized := normalizePath(path)
+			if globMatch(matchPattern, normalized) {
 				if _, ok := seen[path]; !ok {
 					seen[path] = struct{}{}
 					result = append(result, path)
@@ -203,33 +326,63 @@ func discoverFiles(patterns []string, logger *logrus.Logger) []string {
 		}
 
 		logger.WithFields(logrus.Fields{
-			"pattern":      pattern,
-			"walk_dir":     base,
+			"pattern":       pattern,
+			"walk_dir":      base,
 			"files_matched": matched,
 		}).Info("tailer: scan complete")
 	}
 	return result
 }
 
-// regexBaseDir derives a walk root directory from a regex pattern by taking
-// the literal prefix before the first regex metacharacter.
-func regexBaseDir(pattern string) string {
-	const metas = `^$.*+?()[]{}|\`
-	idx := -1
-	for i, r := range pattern {
-		if strings.ContainsRune(metas, r) {
-			idx = i
-			break
-		}
+// globBaseDir derives a walk root directory from a glob pattern by taking
+// the literal prefix before the first glob metacharacter (*, ?, [).
+//
+// It handles both absolute and relative paths:
+//
+//	/var/log/app/*.log   →  /var/log/app     (absolute, Linux)
+//	/c/xxx/ta.*.log      →  C:\xxx           (absolute, Windows via toNativePath)
+//	logs/ta.*.log        →  logs             (relative)
+//	./logs/*.log         →  logs             (relative with dot prefix)
+//	**/*.log             →  .                (no literal prefix → current dir)
+//	*.log                →  .                (no literal prefix → current dir)
+func globBaseDir(pattern string) string {
+	// Handle "./" or ".\" prefix: skip it when scanning for metacharacters
+	// so that the leading dot is not mistaken for a glob metacharacter.
+	dotPrefix := ""
+	scan := pattern
+	if strings.HasPrefix(scan, "./") || strings.HasPrefix(scan, `.\`) {
+		dotPrefix = scan[:2]
+		scan = scan[2:]
 	}
 
-	prefix := pattern
-	if idx >= 0 {
-		prefix = pattern[:idx]
+	idx := strings.IndexAny(scan, "*?[")
+
+	if idx < 0 {
+		// No metacharacters — the entire pattern is a literal path.
+		full := dotPrefix + scan
+		full = strings.TrimRight(full, `/\`)
+		if full == "" || full == "." {
+			return "."
+		}
+		native := toNativePath(full)
+		return filepath.Dir(native)
 	}
-	prefix = strings.TrimRight(prefix, `/\`)
-	if prefix == "" {
-		return string(filepath.Separator)
+
+	// Find the last directory separator before the first metacharacter.
+	// Everything up to that separator is the walk root.
+	prefix := scan[:idx]
+	lastSep := strings.LastIndexAny(prefix, `/\`)
+	if lastSep >= 0 {
+		dir := dotPrefix + prefix[:lastSep]
+		if dir == "" {
+			return "."
+		}
+		return toNativePath(dir)
 	}
-	return filepath.Dir(prefix)
+
+	// No separator before metachar — the metachar is in the first segment.
+	if dotPrefix != "" {
+		return "."
+	}
+	return "."
 }
