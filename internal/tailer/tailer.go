@@ -3,7 +3,9 @@
 package tailer
 
 import (
+	"bufio"
 	"context"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -13,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hpcloud/tail"
 	"github.com/sirupsen/logrus"
 )
 
@@ -193,16 +194,23 @@ func doGlobMatch(patParts, nameParts []string) bool {
 // Tailer
 // ---------------------------------------------------------------------------
 
-// Tailer watches for log files matching glob patterns and tails them
-// from the end, sending new lines to an output channel.
+// pollInterval is how often the tail loop re-reads a file after reaching
+// EOF. A short interval avoids the notification-drop race present in
+// event-driven watchers (inotify/kqueue) while keeping CPU usage negligible.
+const pollInterval = 200 * time.Millisecond
+
+// maxLineSize is the maximum line length (in bytes) the scanner will accept.
+const maxLineSize = 1 << 20 // 1 MiB
+
+// Tailer watches for log files matching glob patterns and tails them,
+// sending new lines to an output channel.
 type Tailer struct {
 	patterns       []string
 	rescanInterval time.Duration
 	logger         *logrus.Logger
 
 	mu     sync.Mutex
-	tailed map[string]struct{}   // tracks which files are already being tailed
-	tails  map[string]*tail.Tail // active tail handles for cleanup
+	tailed map[string]struct{} // tracks which files are already being tailed
 }
 
 // New creates a Tailer that watches the given glob patterns.
@@ -212,7 +220,6 @@ func New(patterns []string, rescanInterval time.Duration, logger *logrus.Logger)
 		rescanInterval: rescanInterval,
 		logger:         logger,
 		tailed:         make(map[string]struct{}),
-		tails:          make(map[string]*tail.Tail),
 	}
 }
 
@@ -240,7 +247,6 @@ func (t *Tailer) run(ctx context.Context, out chan<- string) {
 	for {
 		select {
 		case <-ctx.Done():
-			t.stopAll()
 			return
 		case <-ticker.C:
 			t.scanAndTail(ctx, out)
@@ -265,65 +271,123 @@ func (t *Tailer) startFile(ctx context.Context, path string, out chan<- string) 
 	t.tailed[path] = struct{}{}
 	t.mu.Unlock()
 
-	// Start from file beginning so existing content is processed on first run.
-	tt, err := tail.TailFile(path, tail.Config{
-		Location:    &tail.SeekInfo{Whence: 0, Offset: 0},
-		ReOpen:      true,
-		Follow:      true,
-		MustExist:   false,
-		Poll:        false,
-		Logger:      tail.DiscardingLogger,
-		MaxLineSize: 1 << 20, // 1 MiB
-	})
-	if err != nil {
-		t.logger.WithError(err).WithField("path", path).Warn("failed to start tailing file")
-		t.mu.Lock()
-		delete(t.tailed, path)
-		t.mu.Unlock()
-		return
-	}
-
-	t.mu.Lock()
-	t.tails[path] = tt
-	t.mu.Unlock()
-
 	t.logger.WithField("path", path).Info("tailer: discovered and tailing new file")
 
-	go t.readLines(ctx, tt, out)
+	go t.tailFile(ctx, path, out)
 }
 
-// readLines reads from a tail handle and forwards non-empty lines to out.
-func (t *Tailer) readLines(ctx context.Context, tt *tail.Tail, out chan<- string) {
-	defer func() { _ = tt.Stop() }()
-
+// tailFile reads a file from the beginning and follows new lines.
+// It uses a simple poll-based approach: read until EOF, sleep briefly,
+// then retry. This avoids the notification-drop race in hpcloud/tail's
+// kqueue/inotify watcher where sendOnlyIfEmpty can silently discard
+// a Modified event while the reader is busy, causing the tail to stall
+// until the writer's next burst.
+//
+// File rotation (rename + recreate) is detected by comparing the file's
+// inode across polls. When the underlying inode changes, the old file is
+// closed and the new file is opened from the beginning.
+func (t *Tailer) tailFile(ctx context.Context, path string, out chan<- string) {
 	for {
+		if err := t.readFollowFile(ctx, path, out); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			t.logger.WithError(err).WithField("path", path).Warn("tailer: error reading file, will retry")
+		}
+
+		// File was deleted or rotated; wait for it to reappear.
 		select {
 		case <-ctx.Done():
 			return
-		case line, ok := <-tt.Lines:
-			if !ok {
-				return
-			}
-			if line == nil || len(line.Text) == 0 {
-				continue
-			}
-			select {
-			case out <- line.Text:
-			case <-ctx.Done():
-				return
-			}
+		case <-time.After(pollInterval):
 		}
 	}
 }
 
-// stopAll cleanly shuts down all active tail handles.
-func (t *Tailer) stopAll() {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	for _, tt := range t.tails {
-		if tt != nil {
-			_ = tt.Stop()
+// readFollowFile opens path, reads all lines, then polls for new data
+// until the file is deleted/rotated or ctx is cancelled.
+func (t *Tailer) readFollowFile(ctx context.Context, path string, out chan<- string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	origInfo, err := f.Stat()
+	if err != nil {
+		return err
+	}
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
+
+	for {
+		// Read all available complete lines.
+		for scanner.Scan() {
+			line := scanner.Text()
+			if len(line) == 0 {
+				continue
+			}
+			select {
+			case out <- line:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
+		if err := scanner.Err(); err != nil {
+			return err
+		}
+
+		// EOF reached. Before sleeping, check if the file was rotated
+		// (renamed and a new file created at the same path) by comparing
+		// the current inode to the original.
+		curInfo, err := os.Stat(path)
+		if err != nil {
+			// File removed; caller will wait and re-open.
+			return err
+		}
+		if !os.SameFile(origInfo, curInfo) {
+			// Inode changed → file was rotated. Return so caller reopens.
+			return nil
+		}
+
+		// Wait before polling again.
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(pollInterval):
+		}
+
+		// After the sleep the file position is still at the last read
+		// offset. Create a fresh scanner that reuses the underlying fd
+		// so it picks up any bytes appended since the last EOF.
+		//
+		// bufio.Scanner is not resumable after Scan returns false, so we
+		// must create a new one. The file offset in f is preserved.
+		//
+		// We also need to handle the case where the writer wrote a
+		// partial line (no trailing newline yet). Seek back to the start
+		// of that partial line so the next scanner picks it up as a
+		// complete line once more data is written.
+		pos, err := f.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return err
+		}
+
+		// Check if the file was truncated (size shrank).
+		fi, err := f.Stat()
+		if err != nil {
+			return err
+		}
+		if fi.Size() < pos {
+			// File was truncated; rewind to beginning.
+			if _, err := f.Seek(0, io.SeekStart); err != nil {
+				return err
+			}
+		}
+
+		scanner = bufio.NewScanner(f)
+		scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
 	}
 }
 

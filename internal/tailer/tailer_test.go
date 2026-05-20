@@ -544,14 +544,157 @@ func TestRescan_DoesNotDuplicateExistingFiles(t *testing.T) {
 
 	tailer.mu.Lock()
 	count := len(tailer.tailed)
-	tailCount := len(tailer.tails)
 	tailer.mu.Unlock()
 
 	if count != 1 {
 		t.Errorf("expected 1 tailed entry, got %d", count)
 	}
-	if tailCount != 1 {
-		t.Errorf("expected 1 tail handle, got %d", tailCount)
+
+	cancel()
+	for range out {
+	}
+}
+
+// TestContinuousWrite_TailerKeepsUp simulates the scenario where lumberjack
+// (or any writer) continuously appends lines to a file while the tailer is
+// reading. The tailer must not get stuck.
+func TestContinuousWrite_TailerKeepsUp(t *testing.T) {
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "app.log")
+
+	// Create the file first.
+	if err := os.WriteFile(logFile, []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	logger := logrus.New()
+	logger.SetOutput(os.Stderr)
+
+	pattern := dir + "/*.log"
+	tailer := New([]string{pattern}, 30*time.Second, logger)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	out := tailer.Run(ctx)
+
+	// Wait for tailer to discover and start tailing.
+	time.Sleep(200 * time.Millisecond)
+
+	// Simulate lumberjack: open in O_APPEND|O_WRONLY and write rapidly
+	// in bursts, keeping the fd open the entire time (exactly how
+	// lumberjack behaves).
+	totalLines := 5000
+	writerDone := make(chan struct{})
+	go func() {
+		defer close(writerDone)
+		fd, err := os.OpenFile(logFile, os.O_APPEND|os.O_WRONLY, 0644)
+		if err != nil {
+			t.Errorf("writer: open failed: %v", err)
+			return
+		}
+		defer fd.Close()
+
+		for i := 0; i < totalLines; i++ {
+			_, _ = fd.WriteString("line content here\n")
+			// Write in bursts: 50 lines, then 1ms pause.
+			if i%50 == 49 {
+				time.Sleep(1 * time.Millisecond)
+			}
+		}
+	}()
+
+	// Drain the tailer output and count received lines.
+	received := 0
+	deadline := time.After(30 * time.Second)
+	for received < totalLines {
+		select {
+		case _, ok := <-out:
+			if !ok {
+				t.Fatalf("tailer output closed after %d lines (expected %d)", received, totalLines)
+			}
+			received++
+		case <-deadline:
+			t.Fatalf("tailer stuck: received only %d/%d lines", received, totalLines)
+		}
+	}
+
+	<-writerDone
+	cancel()
+	for range out {
+	}
+}
+
+// TestContinuousWrite_SlowConsumer simulates the real-world scenario:
+// lumberjack writes rapidly while the tailer's consumer (pipeline) is slow.
+// When the output channel fills up, the tailer's readLines goroutine blocks
+// on `out <- line.Text`. This means hpcloud/tail's `sendLine()` blocks on
+// `tail.Lines <- &Line{...}` (unbuffered channel), stalling the tail loop.
+// The tail loop can't call waitForChanges(), so kqueue notifications pile up
+// and get dropped by sendOnlyIfEmpty. After the consumer resumes (or the
+// writer stops), the tailer must recover.
+func TestContinuousWrite_SlowConsumer(t *testing.T) {
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "app.log")
+
+	if err := os.WriteFile(logFile, []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	logger := logrus.New()
+	logger.SetOutput(os.Stderr)
+
+	pattern := dir + "/*.log"
+	tailer := New([]string{pattern}, 30*time.Second, logger)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	out := tailer.Run(ctx)
+	time.Sleep(200 * time.Millisecond)
+
+	// Write 100 lines rapidly, then stop (simulating lumberjack stopping).
+	totalLines := 100
+	fd, err := os.OpenFile(logFile, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < totalLines; i++ {
+		_, _ = fd.WriteString("line content here\n")
+	}
+	fd.Close()
+
+	// Don't read from out for 2 seconds — simulate slow pipeline consumer.
+	// During this time the tailer's out channel (cap=2000) fills, and the
+	// hpcloud/tail internal Lines channel (unbuffered) causes backpressure.
+	time.Sleep(2 * time.Second)
+
+	// Now write more lines AFTER the pause — these are the ones that may
+	// be missed if the notification was dropped.
+	fd2, err := os.OpenFile(logFile, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moreLines := 50
+	for i := 0; i < moreLines; i++ {
+		_, _ = fd2.WriteString("after-pause line\n")
+	}
+	fd2.Close()
+
+	// Now drain everything. We should get all totalLines + moreLines.
+	received := 0
+	expected := totalLines + moreLines
+	deadline := time.After(10 * time.Second)
+	for received < expected {
+		select {
+		case _, ok := <-out:
+			if !ok {
+				t.Fatalf("tailer output closed after %d lines (expected %d)", received, expected)
+			}
+			received++
+		case <-deadline:
+			t.Fatalf("tailer stuck: received only %d/%d lines", received, expected)
+		}
 	}
 
 	cancel()
