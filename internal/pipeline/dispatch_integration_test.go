@@ -221,3 +221,58 @@ func TestDispatch_ConcurrentProducers(t *testing.T) {
 		t.Errorf("expected %d total lines, got %d", expected, total)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Test for head-of-line blocking prevention
+// ---------------------------------------------------------------------------
+
+func TestDispatch_NoBlockWhenWorkerChannelFull(t *testing.T) {
+	ctx := context.Background()
+	n := 4
+	workerChs := make([]chan string, n)
+	for i := range workerChs {
+		workerChs[i] = make(chan string, 5)
+	}
+
+	lineCh := make(chan string, 100)
+
+	// Pre-fill worker 0's channel to simulate a slow worker (e.g. MongoDB flush).
+	for range 5 {
+		workerChs[0] <- "stuck"
+	}
+
+	// Drain workers 1,2,3 so they always accept lines (simulating healthy workers).
+	var wg sync.WaitGroup
+	for i := 1; i < n; i++ {
+		wg.Add(1)
+		go func(ch <-chan string) {
+			defer wg.Done()
+			for range ch {
+			}
+		}(workerChs[i])
+	}
+
+	// Generate lines that all route to worker 0. The fixed dispatcher
+	// should spill them to workers 1/2/3 instead of blocking.
+	totalLines := 50
+	go func() {
+		for i := 0; i < totalLines; i++ {
+			lineCh <- fmt.Sprintf(`{"#account_id":"blocked_user","#type":"track","#event_name":"e","#time":"2024-01-01","#uuid":"blk-%d"}`, i)
+		}
+		close(lineCh)
+	}()
+
+	done := make(chan struct{})
+	go func() {
+		Dispatch(ctx, lineCh, workerChs)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Dispatch blocked when all lines route to a full worker — head-of-line blocking")
+	}
+
+	wg.Wait()
+}
