@@ -114,10 +114,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 		"workers":        d.cfg.BatchWorkers,
 		"batch_size":     d.cfg.BatchSize,
 		"flush_interval": d.cfg.FlushInterval,
+		"tail_mode":      d.cfg.TailMode,
 	}).Info("daemon: starting pipeline")
 
 	// Start the tailer; it returns a channel of log lines.
-	t := tailer.New(d.cfg.LogPattern, d.cfg.RescanInterval, d.logger)
+	t := tailer.New(d.cfg.LogPattern, d.cfg.RescanInterval, d.cfg.TailMode, d.logger)
 	lineCh := t.Run(ctx)
 
 	// Create stats collector for periodic reporting.

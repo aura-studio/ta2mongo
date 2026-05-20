@@ -53,6 +53,7 @@ func addCommonFlags(flags *pflag.FlagSet) {
 	flags.Duration("flushInterval", 0, "how often workers flush partial batches (default 1s)")
 	flags.Duration("maxElapsedTime", 0, "max total retry time for bulk writes (default 10s)")
 	flags.String("logLevel", "", "log level: debug, info, warn, error (default info)")
+	flags.String("tailMode", "", "file-tailing strategy: poll or event (default poll)")
 }
 
 // setup loads configuration from file + env + flags, creates a logger, and sets

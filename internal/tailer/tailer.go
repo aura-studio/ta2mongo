@@ -15,7 +15,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hpcloud/tail"
 	"github.com/sirupsen/logrus"
+
+	"rocket-nano/tools/tango/config"
 )
 
 // ---------------------------------------------------------------------------
@@ -207,6 +210,7 @@ const maxLineSize = 1 << 20 // 1 MiB
 type Tailer struct {
 	patterns       []string
 	rescanInterval time.Duration
+	tailMode       string // config.TailModePoll or config.TailModeEvent
 	logger         *logrus.Logger
 
 	mu     sync.Mutex
@@ -214,10 +218,16 @@ type Tailer struct {
 }
 
 // New creates a Tailer that watches the given glob patterns.
-func New(patterns []string, rescanInterval time.Duration, logger *logrus.Logger) *Tailer {
+// tailMode selects the file-watching strategy: config.TailModePoll (default)
+// or config.TailModeEvent.
+func New(patterns []string, rescanInterval time.Duration, tailMode string, logger *logrus.Logger) *Tailer {
+	if tailMode == "" {
+		tailMode = config.TailModePoll
+	}
 	return &Tailer{
 		patterns:       patterns,
 		rescanInterval: rescanInterval,
+		tailMode:       tailMode,
 		logger:         logger,
 		tailed:         make(map[string]struct{}),
 	}
@@ -271,9 +281,17 @@ func (t *Tailer) startFile(ctx context.Context, path string, out chan<- string) 
 	t.tailed[path] = struct{}{}
 	t.mu.Unlock()
 
-	t.logger.WithField("path", path).Info("tailer: discovered and tailing new file")
+	t.logger.WithFields(logrus.Fields{
+		"path":      path,
+		"tail_mode": t.tailMode,
+	}).Info("tailer: discovered and tailing new file")
 
-	go t.tailFile(ctx, path, out)
+	switch t.tailMode {
+	case config.TailModeEvent:
+		go t.tailFileEvent(ctx, path, out)
+	default:
+		go t.tailFile(ctx, path, out)
+	}
 }
 
 // tailFile reads a file from the beginning and follows new lines.
@@ -388,6 +406,54 @@ func (t *Tailer) readFollowFile(ctx context.Context, path string, out chan<- str
 
 		scanner = bufio.NewScanner(f)
 		scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Event-driven tail (hpcloud/tail with kqueue/inotify)
+// ---------------------------------------------------------------------------
+
+// tailFileEvent uses hpcloud/tail's kqueue/inotify watcher to follow a file.
+// It offers lower latency than polling but may stall under sustained
+// concurrent writes due to the sendOnlyIfEmpty notification-drop race
+// in the upstream library.
+func (t *Tailer) tailFileEvent(ctx context.Context, path string, out chan<- string) {
+	tt, err := tail.TailFile(path, tail.Config{
+		Location:    &tail.SeekInfo{Whence: 0, Offset: 0},
+		ReOpen:      true,
+		Follow:      true,
+		MustExist:   false,
+		Poll:        false,
+		Logger:      tail.DiscardingLogger,
+		MaxLineSize: maxLineSize,
+	})
+	if err != nil {
+		t.logger.WithError(err).WithField("path", path).Warn("tailer: failed to start event-mode tailing")
+		t.mu.Lock()
+		delete(t.tailed, path)
+		t.mu.Unlock()
+		return
+	}
+
+	defer func() { _ = tt.Stop() }()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case line, ok := <-tt.Lines:
+			if !ok {
+				return
+			}
+			if line == nil || len(line.Text) == 0 {
+				continue
+			}
+			select {
+			case out <- line.Text:
+			case <-ctx.Done():
+				return
+			}
+		}
 	}
 }
 

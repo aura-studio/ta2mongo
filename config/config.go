@@ -32,6 +32,18 @@ const (
 	ModeIngest = "ingest"
 )
 
+// TailMode constants control how the tailer watches for file changes.
+const (
+	// TailModePoll uses a simple polling loop (read → sleep → retry).
+	// Immune to notification-drop races; recommended for most workloads.
+	TailModePoll = "poll"
+
+	// TailModeEvent uses hpcloud/tail's kqueue/inotify event-driven watcher.
+	// Lower latency but may stall under sustained concurrent writes due to
+	// a known sendOnlyIfEmpty race in the upstream library.
+	TailModeEvent = "event"
+)
+
 // Config is the flat top-level configuration.
 // All fields map directly to YAML keys, CLI flags, and TANGO_* env vars.
 type Config struct {
@@ -64,6 +76,12 @@ type Config struct {
 
 	// LogLevel is the log verbosity: debug, info, warn, error.
 	LogLevel string `mapstructure:"logLevel"`
+
+	// TailMode selects the file-tailing strategy: "poll" (default) or "event".
+	//   poll  — polling-based reader, immune to notification-drop races.
+	//   event — hpcloud/tail kqueue/inotify watcher, lower latency but may
+	//           stall under sustained concurrent writes.
+	TailMode string `mapstructure:"tailMode"`
 }
 
 // BatchSizeMin returns the adaptive lower bound (BatchSize / 4, minimum 1).
@@ -156,6 +174,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("flushInterval", "1s")
 	v.SetDefault("maxElapsedTime", "10s")
 	v.SetDefault("logLevel", "info")
+	v.SetDefault("tailMode", TailModePoll)
 }
 
 // applyDefaults fills in zero-value fields with sensible defaults.
@@ -181,6 +200,9 @@ func applyDefaults(c *Config) {
 	if c.LogLevel == "" {
 		c.LogLevel = "info"
 	}
+	if c.TailMode == "" {
+		c.TailMode = TailModePoll
+	}
 }
 
 // Validate checks that required fields are present.
@@ -194,6 +216,13 @@ func (c *Config) Validate() error {
 	}
 	if c.MongoURI == "" {
 		return fmt.Errorf("config: mongoURI is required (set via --mongoURI, TANGO_MONGOURI, or config file)")
+	}
+	switch c.TailMode {
+	case TailModePoll, TailModeEvent:
+		// valid
+	default:
+		return fmt.Errorf("config: tailMode must be %q or %q; got %q",
+			TailModePoll, TailModeEvent, c.TailMode)
 	}
 	return nil
 }
