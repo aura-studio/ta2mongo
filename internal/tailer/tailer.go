@@ -289,8 +289,10 @@ func (t *Tailer) startFile(ctx context.Context, path string, out chan<- string) 
 	switch t.tailMode {
 	case config.TailModeEvent:
 		go t.tailFileEvent(ctx, path, out)
-	default:
+	case config.TailModePoll:
 		go t.tailFile(ctx, path, out)
+	default: // hybrid
+		go t.tailFileHybrid(ctx, path, out)
 	}
 }
 
@@ -455,6 +457,167 @@ func (t *Tailer) tailFileEvent(ctx context.Context, path string, out chan<- stri
 			}
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Hybrid tail (event-driven + poll fallback)
+// ---------------------------------------------------------------------------
+
+// hybridPollInterval is how often the hybrid mode checks for missed
+// notifications. Longer than pure-poll mode because the event watcher
+// handles the common case; this is only a safety net.
+const hybridPollInterval = 500 * time.Millisecond
+
+// tailFileHybrid uses hpcloud/tail's event-driven watcher as the primary
+// mechanism, with a periodic stat-based fallback. When the event watcher
+// delivers a line within hybridPollInterval, it is forwarded immediately
+// (low latency). If no line arrives before the ticker fires, the fallback
+// stats the file: if the size grew since the last known position, it
+// stops the stalled event watcher, reads the missed data with a polling
+// reader, then restarts the event watcher from the new position.
+//
+// This combines the low latency of kqueue/inotify with the reliability
+// of polling, eliminating the sendOnlyIfEmpty notification-drop race.
+func (t *Tailer) tailFileHybrid(ctx context.Context, path string, out chan<- string) {
+	// Track the last file size the event watcher has delivered up to.
+	// We use this to detect whether the watcher has stalled.
+	var lastSize int64
+	if fi, err := os.Stat(path); err == nil {
+		lastSize = fi.Size()
+	}
+
+	for {
+		// --- Phase 1: event-driven reading via hpcloud/tail ---
+		stalled := t.tailFileHybridEvent(ctx, path, out, &lastSize)
+		if ctx.Err() != nil {
+			return
+		}
+
+		if !stalled {
+			// Event watcher exited normally (file deleted / rotated / error).
+			// Wait briefly then re-enter the loop to reopen.
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(pollInterval):
+			}
+			continue
+		}
+
+		// --- Phase 2: poll fallback to drain missed data ---
+		t.logger.WithField("path", path).Debug("tailer: hybrid fallback — draining missed data via poll")
+		if err := t.drainByPoll(ctx, path, out, &lastSize); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			t.logger.WithError(err).WithField("path", path).Warn("tailer: hybrid poll drain error")
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(pollInterval):
+			}
+		}
+		// Loop back to restart the event watcher from the updated position.
+	}
+}
+
+// tailFileHybridEvent runs the event-driven watcher and returns true if
+// the watcher stalled (no data despite file growth), false if it exited
+// normally (file rotated, deleted, or error).
+func (t *Tailer) tailFileHybridEvent(ctx context.Context, path string, out chan<- string, lastSize *int64) (stalled bool) {
+	tt, err := tail.TailFile(path, tail.Config{
+		Location:    &tail.SeekInfo{Whence: io.SeekStart, Offset: *lastSize},
+		ReOpen:      true,
+		Follow:      true,
+		MustExist:   false,
+		Poll:        false,
+		Logger:      tail.DiscardingLogger,
+		MaxLineSize: maxLineSize,
+	})
+	if err != nil {
+		return false
+	}
+	defer func() { _ = tt.Stop() }()
+
+	ticker := time.NewTicker(hybridPollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+
+		case line, ok := <-tt.Lines:
+			if !ok {
+				return false
+			}
+			if line == nil || len(line.Text) == 0 {
+				continue
+			}
+			select {
+			case out <- line.Text:
+			case <-ctx.Done():
+				return false
+			}
+			// Update tracking position from the tail handle.
+			if pos, err := tt.Tell(); err == nil {
+				*lastSize = pos
+			}
+
+		case <-ticker.C:
+			// Fallback check: did the file grow beyond what the event
+			// watcher has delivered?
+			fi, err := os.Stat(path)
+			if err != nil {
+				// File removed — let the event watcher handle it.
+				continue
+			}
+			if fi.Size() > *lastSize {
+				// Data was written but no event arrived — stalled.
+				return true
+			}
+		}
+	}
+}
+
+// drainByPoll reads data from *lastSize to the current EOF using the
+// polling reader, then updates *lastSize.
+func (t *Tailer) drainByPoll(ctx context.Context, path string, out chan<- string, lastSize *int64) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	if _, err := f.Seek(*lastSize, io.SeekStart); err != nil {
+		return err
+	}
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if len(line) == 0 {
+			continue
+		}
+		select {
+		case out <- line:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+
+	// Update position to current offset.
+	pos, err := f.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return err
+	}
+	*lastSize = pos
+	return nil
 }
 
 // ---------------------------------------------------------------------------

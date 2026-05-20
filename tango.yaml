@@ -27,7 +27,8 @@ rescanInterval: "30s"
 # 单次 bulk write 最大重试总时间
 maxElapsedTime: "10s"
 
-# 文件追踪模式：poll（轮询，默认）或 event（kqueue/inotify 事件驱动）
-# poll 模式下每 200ms 轮询一次，不依赖系统通知，不会因通知丢失而卡住
-# event 模式延迟更低，但在持续并发写入时可能因 hpcloud/tail 的通知丢失而卡死
-tailMode: "poll"
+# 文件追踪模式：hybrid（默认）/ poll / event
+# hybrid — 事件驱动为主 + 轮询兜底，兼顾低延迟与可靠性
+# poll   — 纯轮询（每 200ms），不依赖系统通知，不会卡住
+# event  — 纯事件驱动（kqueue/inotify），延迟最低但可能因通知丢失而卡死
+tailMode: "hybrid"

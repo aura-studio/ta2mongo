@@ -34,12 +34,17 @@ const (
 
 // TailMode constants control how the tailer watches for file changes.
 const (
+	// TailModeHybrid uses hpcloud/tail's event-driven watcher as the
+	// primary mechanism, with a periodic poll fallback that detects missed
+	// notifications. Combines low latency with reliability.
+	TailModeHybrid = "hybrid"
+
 	// TailModePoll uses a simple polling loop (read → sleep → retry).
-	// Immune to notification-drop races; recommended for most workloads.
+	// Immune to notification-drop races; suitable for all workloads.
 	TailModePoll = "poll"
 
 	// TailModeEvent uses hpcloud/tail's kqueue/inotify event-driven watcher.
-	// Lower latency but may stall under sustained concurrent writes due to
+	// Lowest latency but may stall under sustained concurrent writes due to
 	// a known sendOnlyIfEmpty race in the upstream library.
 	TailModeEvent = "event"
 )
@@ -77,10 +82,10 @@ type Config struct {
 	// LogLevel is the log verbosity: debug, info, warn, error.
 	LogLevel string `mapstructure:"logLevel"`
 
-	// TailMode selects the file-tailing strategy: "poll" (default) or "event".
-	//   poll  — polling-based reader, immune to notification-drop races.
-	//   event — hpcloud/tail kqueue/inotify watcher, lower latency but may
-	//           stall under sustained concurrent writes.
+	// TailMode selects the file-tailing strategy:
+	//   hybrid (default) — event-driven with poll fallback; low latency + reliable.
+	//   poll             — pure polling, immune to notification-drop races.
+	//   event            — pure kqueue/inotify, lowest latency but may stall.
 	TailMode string `mapstructure:"tailMode"`
 }
 
@@ -174,7 +179,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("flushInterval", "1s")
 	v.SetDefault("maxElapsedTime", "10s")
 	v.SetDefault("logLevel", "info")
-	v.SetDefault("tailMode", TailModePoll)
+	v.SetDefault("tailMode", TailModeHybrid)
 }
 
 // applyDefaults fills in zero-value fields with sensible defaults.
@@ -201,7 +206,7 @@ func applyDefaults(c *Config) {
 		c.LogLevel = "info"
 	}
 	if c.TailMode == "" {
-		c.TailMode = TailModePoll
+		c.TailMode = TailModeHybrid
 	}
 }
 
@@ -218,11 +223,11 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("config: mongoURI is required (set via --mongoURI, TANGO_MONGOURI, or config file)")
 	}
 	switch c.TailMode {
-	case TailModePoll, TailModeEvent:
+	case TailModeHybrid, TailModePoll, TailModeEvent:
 		// valid
 	default:
-		return fmt.Errorf("config: tailMode must be %q or %q; got %q",
-			TailModePoll, TailModeEvent, c.TailMode)
+		return fmt.Errorf("config: tailMode must be %q, %q or %q; got %q",
+			TailModeHybrid, TailModePoll, TailModeEvent, c.TailMode)
 	}
 	return nil
 }

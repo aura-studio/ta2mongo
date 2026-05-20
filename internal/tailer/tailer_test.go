@@ -486,7 +486,7 @@ func TestRescan_PicksUpNewFiles(t *testing.T) {
 	logger.SetOutput(os.Stderr)
 
 	pattern := dir + "/*.log"
-	tailer := New([]string{pattern}, 100*time.Millisecond, config.TailModePoll, logger)
+	tailer := New([]string{pattern}, 100*time.Millisecond, config.TailModeHybrid, logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -535,7 +535,7 @@ func TestRescan_DoesNotDuplicateExistingFiles(t *testing.T) {
 	logger.SetOutput(os.Stderr)
 
 	pattern := dir + "/*.log"
-	tailer := New([]string{pattern}, 100*time.Millisecond, config.TailModePoll, logger)
+	tailer := New([]string{pattern}, 100*time.Millisecond, config.TailModeHybrid, logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -573,7 +573,7 @@ func TestContinuousWrite_TailerKeepsUp(t *testing.T) {
 	logger.SetOutput(os.Stderr)
 
 	pattern := dir + "/*.log"
-	tailer := New([]string{pattern}, 30*time.Second, config.TailModePoll, logger)
+	tailer := New([]string{pattern}, 30*time.Second, config.TailModeHybrid, logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -647,7 +647,7 @@ func TestContinuousWrite_SlowConsumer(t *testing.T) {
 	logger.SetOutput(os.Stderr)
 
 	pattern := dir + "/*.log"
-	tailer := New([]string{pattern}, 30*time.Second, config.TailModePoll, logger)
+	tailer := New([]string{pattern}, 30*time.Second, config.TailModeHybrid, logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -711,7 +711,7 @@ func TestRescan_StreamsNewLinesFromNewFile(t *testing.T) {
 	logger.SetOutput(os.Stderr)
 
 	pattern := dir + "/*.log"
-	tailer := New([]string{pattern}, 100*time.Millisecond, config.TailModePoll, logger)
+	tailer := New([]string{pattern}, 100*time.Millisecond, config.TailModeHybrid, logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
