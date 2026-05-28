@@ -54,11 +54,20 @@ func (NoopStats) OnWriteError()    {}
 func (NoopStats) OnFiltered()      {}
 func (NoopStats) OnFilterError()   {}
 
+// WriteOptions tunes write-side behaviour for callers that need to deviate
+// from the default per-#type semantics (notably backfill).
+type WriteOptions struct {
+	// ForceSkipExisting routes every event write through $setOnInsert keyed
+	// by #uuid, regardless of the record's #type. Existing documents are
+	// never modified — duplicates become no-ops. Recommended for backfill.
+	ForceSkipExisting bool
+}
+
 // RunWorkers launches N workers with affinity-based dispatch and blocks
 // until all workers finish. A nil flt is treated as a no-op filter.
 func RunWorkers(ctx context.Context, cfg config.Config, st *store.Store,
 	parser *talog.Parser, flt *filter.Filter, logger *logrus.Logger,
-	lineCh <-chan string, stats StatsCollector,
+	lineCh <-chan string, stats StatsCollector, opts WriteOptions,
 ) {
 	if stats == nil {
 		stats = NoopStats{}
@@ -79,7 +88,7 @@ func RunWorkers(ctx context.Context, cfg config.Config, st *store.Store,
 	for i := 0; i < workerCount; i++ {
 		go func(ch <-chan string) {
 			defer wg.Done()
-			worker(ctx, cfg, st, parser, flt, logger, ch, stats)
+			worker(ctx, cfg, st, parser, flt, logger, ch, stats, opts)
 		}(workerChs[i])
 	}
 
@@ -92,7 +101,7 @@ func RunWorkers(ctx context.Context, cfg config.Config, st *store.Store,
 // worker processes lines from a channel, batches them, and flushes to MongoDB.
 func worker(ctx context.Context, cfg config.Config, st *store.Store,
 	parser *talog.Parser, flt *filter.Filter, logger *logrus.Logger,
-	lineCh <-chan string, stats StatsCollector,
+	lineCh <-chan string, stats StatsCollector, opts WriteOptions,
 ) {
 	userBatch := NewBatch(cfg.BatchSizeMax())
 	eventBatch := NewBatch(cfg.BatchSizeMax())
@@ -173,7 +182,11 @@ func worker(ctx context.Context, cfg config.Config, st *store.Store,
 				stats.OnUserWrite()
 			case talog.CategoryEvent:
 				rec.Doc["#user_id"] = userID
-				eventBatch.Add(store.EventWriteModel(rec.Type, rec.UUID, rec.Doc))
+				if opts.ForceSkipExisting {
+					eventBatch.Add(store.EventWriteModelSkipExisting(rec.UUID, rec.Doc))
+				} else {
+					eventBatch.Add(store.EventWriteModel(rec.Type, rec.UUID, rec.Doc))
+				}
 				stats.OnEventWrite()
 			}
 

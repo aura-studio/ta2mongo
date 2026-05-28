@@ -320,6 +320,28 @@ func trackTsCondReplacePipeline(ts any, doc bson.M) bson.A {
 	}}
 }
 
+// EventWriteModelSkipExisting builds a write model that always uses
+// $setOnInsert keyed by #uuid, regardless of the record's #type. This is
+// intended for the backfill mode where historical data should never overwrite
+// the currently-stored copy of an event — even if the historical record was
+// labelled track_update or track_overwrite (whose normal semantics mutate
+// existing documents). The #uuid unique index makes duplicates a no-op.
+func EventWriteModelSkipExisting(uuid string, doc bson.M) mongo.WriteModel {
+	if doc == nil {
+		doc = bson.M{}
+	}
+	if v, ok := doc["#uuid"].(string); !ok || v == "" {
+		doc["#uuid"] = uuid
+	}
+	if _, ok := doc["_ts"]; !ok {
+		doc["_ts"] = time.Now().UnixNano()
+	}
+	return mongo.NewUpdateOneModel().
+		SetFilter(bson.M{"#uuid": uuid}).
+		SetUpdate(bson.M{"$setOnInsert": doc}).
+		SetUpsert(true)
+}
+
 // EventWriteModel builds the appropriate MongoDB write model for an event operation.
 func EventWriteModel(typ, uuid string, doc bson.M) mongo.WriteModel {
 	// Ensure required meta fields are present for ordering and upsert.

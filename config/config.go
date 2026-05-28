@@ -29,10 +29,21 @@ import (
 
 // Mode constants for the run mode configuration.
 const (
-	ModeDaemon = "daemon"
-	ModeOnce   = "once"
-	ModeIngest = "ingest"
+	ModeDaemon   = "daemon"
+	ModeOnce     = "once"
+	ModeIngest   = "ingest"
+	ModeBackfill = "backfill"
 )
+
+// BackfillTable constants name the TA virtual table being queried.
+const (
+	BackfillTableEvent = "event"
+	BackfillTableUser  = "user"
+)
+
+// DefaultProgressCollection is the Mongo collection used for backfill
+// checkpoints when the user does not override it.
+const DefaultProgressCollection = "_backfill_progress"
 
 // TailMode constants control how the tailer watches for file changes.
 const (
@@ -101,6 +112,94 @@ type Config struct {
 	// FilterExclude is a list of expr-lang expressions. A parsed record is
 	// dropped if any expression evaluates to true. Applied after FilterInclude.
 	FilterExclude []string `mapstructure:"filterExclude"`
+
+	// Backfill configures the `tango backfill` mode that pulls historical data
+	// from ThinkingData's OpenAPI (async SQL endpoints) and routes the rows
+	// through the same parse → filter → write pipeline as daemon/once. Only
+	// consulted when the backfill subcommand is invoked.
+	Backfill BackfillConfig `mapstructure:"backfill"`
+}
+
+// BackfillConfig holds settings for the historical-data backfill mode.
+type BackfillConfig struct {
+	// APIBaseURL is the ThinkingData OpenAPI gateway, e.g.
+	// "https://ta-receiver.example.com". No trailing slash.
+	APIBaseURL string `mapstructure:"apiBaseURL"`
+
+	// Token authenticates against the OpenAPI; passed via ?token=... on every
+	// request. One token per TA project.
+	Token string `mapstructure:"token"`
+
+	// ProjectID identifies the TA project; used to construct the table name
+	// (v_event_<id> / v_user_<id>).
+	ProjectID int `mapstructure:"projectID"`
+
+	// Table selects which virtual table to query. Allowed values: "event",
+	// "user". Defaults to "event".
+	Table string `mapstructure:"table"`
+
+	// PartDateRange is the inclusive [start, end] partition-date range that
+	// drives the per-day chunking. Format "YYYY-MM-DD". Required.
+	PartDateRange DateRange `mapstructure:"partDateRange"`
+
+	// EventTimeRange, if set, further narrows each day's query with a
+	// "#event_time" predicate. Format "YYYY-MM-DD HH:MM:SS". Optional.
+	EventTimeRange TimeRange `mapstructure:"eventTimeRange"`
+
+	// PageSize controls the result page size sent to /open/sql-result-page.
+	// Must be >= 1000 per TA documentation; defaults to 10000.
+	PageSize int `mapstructure:"pageSize"`
+
+	// PollInterval is the gap between /open/sql-task-info polls. Defaults 3s.
+	PollInterval time.Duration `mapstructure:"pollInterval"`
+
+	// PollTimeout caps how long a single day's task may take from submit to
+	// FINISHED before the runner aborts that day. Defaults 30m.
+	PollTimeout time.Duration `mapstructure:"pollTimeout"`
+
+	// RunID is a stable identifier for this backfill run; doubles as the
+	// _backfill_progress document _id, allowing resume across restarts.
+	// Required.
+	RunID string `mapstructure:"runID"`
+
+	// ProgressCollection names the Mongo collection used for checkpoint
+	// storage. Defaults to "_backfill_progress".
+	ProgressCollection string `mapstructure:"progressCollection"`
+
+	// ForceSkipExisting causes the event write path to use $setOnInsert
+	// regardless of the record's #type, so duplicate #uuid rows are skipped
+	// instead of mutated. Defaults true (recommended for backfill).
+	ForceSkipExisting *bool `mapstructure:"forceSkipExisting"`
+
+	// SkipLocalFilter disables the in-process filter safety net (only the
+	// pushed-down Presto WHERE clause is applied). Defaults false; set to
+	// true only if you trust the SQL pushdown semantically.
+	SkipLocalFilter bool `mapstructure:"skipLocalFilter"`
+}
+
+// DateRange is an inclusive [start, end] date interval in "YYYY-MM-DD" form.
+type DateRange struct {
+	Start string `mapstructure:"start"`
+	End   string `mapstructure:"end"`
+}
+
+// TimeRange is an inclusive [start, end] timestamp interval in
+// "YYYY-MM-DD HH:MM:SS" form. Zero values mean "no bound on that side".
+type TimeRange struct {
+	Start string `mapstructure:"start"`
+	End   string `mapstructure:"end"`
+}
+
+// Empty reports whether neither bound is set.
+func (r TimeRange) Empty() bool { return r.Start == "" && r.End == "" }
+
+// ForceSkip returns the effective value of ForceSkipExisting, defaulting to
+// true when the pointer is nil (i.e. user omitted the field).
+func (b *BackfillConfig) ForceSkip() bool {
+	if b.ForceSkipExisting == nil {
+		return true
+	}
+	return *b.ForceSkipExisting
 }
 
 // BatchSizeMin returns the adaptive lower bound (BatchSize / 4, minimum 1).
@@ -224,16 +323,35 @@ func applyDefaults(c *Config) {
 	if c.TailMode == "" {
 		c.TailMode = TailModeHybrid
 	}
+	applyBackfillDefaults(&c.Backfill)
+}
+
+func applyBackfillDefaults(b *BackfillConfig) {
+	if b.Table == "" {
+		b.Table = BackfillTableEvent
+	}
+	if b.PageSize <= 0 {
+		b.PageSize = 10000
+	}
+	if b.PollInterval <= 0 {
+		b.PollInterval = 3 * time.Second
+	}
+	if b.PollTimeout <= 0 {
+		b.PollTimeout = 30 * time.Minute
+	}
+	if b.ProgressCollection == "" {
+		b.ProgressCollection = DefaultProgressCollection
+	}
 }
 
 // Validate checks that required fields are present.
 func (c *Config) Validate() error {
 	switch c.Mode {
-	case ModeDaemon, ModeOnce, ModeIngest:
+	case ModeDaemon, ModeOnce, ModeIngest, ModeBackfill:
 		// valid
 	default:
-		return fmt.Errorf("config: mode must be one of %q, %q, %q; got %q",
-			ModeDaemon, ModeOnce, ModeIngest, c.Mode)
+		return fmt.Errorf("config: mode must be one of %q, %q, %q, %q; got %q",
+			ModeDaemon, ModeOnce, ModeIngest, ModeBackfill, c.Mode)
 	}
 	if c.MongoURI == "" {
 		return fmt.Errorf("config: mongoURI is required (set via --mongoURI, TANGO_MONGOURI, or config file)")
@@ -247,6 +365,64 @@ func (c *Config) Validate() error {
 	}
 	if _, err := filter.New(c.FilterInclude, c.FilterExclude); err != nil {
 		return fmt.Errorf("config: %w", err)
+	}
+	// Pre-compile filter expressions to SQL only when the backfill mode is in
+	// play; otherwise we don't want a malformed SQL pushdown to block the
+	// daemon/once/ingest paths.
+	if c.Mode == ModeBackfill {
+		if err := c.Backfill.validate(); err != nil {
+			return fmt.Errorf("config: %w", err)
+		}
+		if _, err := filter.CompileToSQL(c.FilterInclude, c.FilterExclude); err != nil {
+			return fmt.Errorf("config: %w", err)
+		}
+	}
+	return nil
+}
+
+func (b *BackfillConfig) validate() error {
+	if b.APIBaseURL == "" {
+		return fmt.Errorf("backfill.apiBaseURL is required")
+	}
+	if !strings.HasPrefix(b.APIBaseURL, "http://") && !strings.HasPrefix(b.APIBaseURL, "https://") {
+		return fmt.Errorf("backfill.apiBaseURL must start with http(s)://; got %q", b.APIBaseURL)
+	}
+	if b.Token == "" {
+		return fmt.Errorf("backfill.token is required")
+	}
+	if b.ProjectID <= 0 {
+		return fmt.Errorf("backfill.projectID must be a positive integer")
+	}
+	switch b.Table {
+	case BackfillTableEvent, BackfillTableUser:
+		// valid
+	default:
+		return fmt.Errorf("backfill.table must be %q or %q; got %q",
+			BackfillTableEvent, BackfillTableUser, b.Table)
+	}
+	if b.RunID == "" {
+		return fmt.Errorf("backfill.runID is required (used as resume key)")
+	}
+	if b.PageSize < 1000 {
+		return fmt.Errorf("backfill.pageSize must be >= 1000 (TA OpenAPI minimum)")
+	}
+	if _, err := time.Parse("2006-01-02", b.PartDateRange.Start); err != nil {
+		return fmt.Errorf("backfill.partDateRange.start invalid (want YYYY-MM-DD): %w", err)
+	}
+	if _, err := time.Parse("2006-01-02", b.PartDateRange.End); err != nil {
+		return fmt.Errorf("backfill.partDateRange.end invalid (want YYYY-MM-DD): %w", err)
+	}
+	if !b.EventTimeRange.Empty() {
+		if b.EventTimeRange.Start != "" {
+			if _, err := time.Parse("2006-01-02 15:04:05", b.EventTimeRange.Start); err != nil {
+				return fmt.Errorf("backfill.eventTimeRange.start invalid (want YYYY-MM-DD HH:MM:SS): %w", err)
+			}
+		}
+		if b.EventTimeRange.End != "" {
+			if _, err := time.Parse("2006-01-02 15:04:05", b.EventTimeRange.End); err != nil {
+				return fmt.Errorf("backfill.eventTimeRange.end invalid (want YYYY-MM-DD HH:MM:SS): %w", err)
+			}
+		}
 	}
 	return nil
 }

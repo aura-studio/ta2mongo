@@ -1,6 +1,6 @@
 # tango 配置文件
 
-# mode: 运行模式 (daemon / once / ingest）
+# mode: 运行模式 (daemon / once / ingest / backfill）
 mode: "daemon"
 
 # MongoDB 连接 URI
@@ -53,3 +53,63 @@ tailMode: "hybrid"
 #   - 'country == "CN" && level < 3'
 filterInclude: []
 filterExclude: []
+
+# backfill: 从数数 OpenAPI 拉取历史数据并导入 MongoDB（仅在 mode=backfill 或
+# `tango backfill` 子命令下生效）。
+#
+# 工作流：
+#   按 $part_date 切分成"一天一个 SQL 任务"，每天 submit → poll → 分页拉取，
+#   每页数据通过 lineCh 进入与 daemon/once 相同的 parse → filter → write
+#   管线。所有 event 类型默认强制 $setOnInsert（forceSkipExisting=true），
+#   保证回填不会覆盖线上已经存在的 #uuid。
+#
+# 续传：
+#   进度（每天 / 每页）持久化到 Mongo 同库的 _backfill_progress 集合，按 runID
+#   作主键。重启后跳过已完成的天，对 in_progress 的天检查 taskId 是否仍然
+#   有效；taskId 失效则重新 submit，已写过的行依赖 #uuid unique 索引天然去重。
+#
+# 顶层的 filterInclude / filterExclude 会被同时编译成 Presto WHERE 下推到
+# 数数侧，本地 expr filter 仍然兜底（除非 skipLocalFilter: true）。
+backfill:
+  # 数数 OpenAPI 网关；不要带尾斜杠
+  apiBaseURL: ""
+
+  # 数数项目的查询 token（每个项目一个）
+  token: ""
+
+  # 项目 ID，用于拼表名 v_event_<id> / v_user_<id>
+  projectID: 0
+
+  # 要查的表：event 或 user，默认 event
+  table: "event"
+
+  # 分区日期范围（按天分块；包含两端）
+  partDateRange:
+    start: "2026-01-01"
+    end:   "2026-05-28"
+
+  # 可选：每天内进一步用 #event_time 收窄（留空表示按整天取）
+  # eventTimeRange:
+  #   start: "2026-01-01 00:00:00"
+  #   end:   "2026-05-28 23:59:59"
+
+  # 每页行数，数数最小限制 1000，默认 10000
+  pageSize: 10000
+
+  # 任务状态轮询间隔
+  pollInterval: "3s"
+  # 单天任务从 submit 到 FINISHED 的最长等待时间
+  pollTimeout: "30m"
+
+  # 断点续传的标识；同一个 runID 重启即续跑
+  runID: ""
+
+  # checkpoint 集合名，默认 _backfill_progress
+  progressCollection: "_backfill_progress"
+
+  # 是否强制所有 event 写入都走 $setOnInsert，跳过已存在的 #uuid
+  # 默认 true（回填语义就该幂等，不应覆盖线上后续修正）
+  forceSkipExisting: true
+
+  # 是否关闭本地 filter 兜底（关掉只信 SQL 下推）
+  skipLocalFilter: false

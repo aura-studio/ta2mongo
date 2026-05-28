@@ -152,7 +152,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	go d.reportStats(ctx, stats, startTime, reportDone)
 
 	// Block until all workers finish.
-	pipeline.RunWorkers(ctx, d.cfg, d.store, d.parser, d.filter, d.logger, lineCh, stats)
+	pipeline.RunWorkers(ctx, d.cfg, d.store, d.parser, d.filter, d.logger, lineCh, stats, pipeline.WriteOptions{})
 
 	// Wait for the reporter goroutine to exit.
 	<-reportDone

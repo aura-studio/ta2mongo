@@ -149,7 +149,7 @@ func (r *Runner) Run(ctx context.Context) (*Stats, error) {
 	lineCh := r.readAllFiles(ctx, files)
 
 	// Process lines using the shared worker pipeline with stats collection.
-	pipeline.RunWorkers(ctx, r.cfg, r.store, r.parser, r.filter, r.logger, lineCh, &statsCollector{s: &r.stats})
+	pipeline.RunWorkers(ctx, r.cfg, r.store, r.parser, r.filter, r.logger, lineCh, &statsCollector{s: &r.stats}, pipeline.WriteOptions{})
 
 	r.stats.Retries = r.store.Stats().TotalRetries()
 	r.stats.EndTime = time.Now()

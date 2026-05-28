@@ -30,6 +30,7 @@ func NewRoot() *cobra.Command {
 	root.AddCommand(NewDaemon())
 	root.AddCommand(NewOnce())
 	root.AddCommand(NewIngest())
+	root.AddCommand(NewBackfill())
 
 	return root
 }
@@ -61,9 +62,21 @@ func addCommonFlags(flags *pflag.FlagSet) {
 // setup loads configuration from file + env + flags, creates a logger, and sets
 // up a signal-aware context. All subcommands share this initialisation sequence.
 func setup(cmd *cobra.Command) (config.Config, *logrus.Logger, context.Context, context.CancelFunc, error) {
+	return setupWithMode(cmd, "")
+}
+
+// setupWithMode is like setup but forces cfg.Mode to the given value (when
+// non-empty) before validation, so subcommands such as backfill can ensure
+// mode-specific validation runs even if the YAML file declares a different
+// mode (e.g. the user keeps the default mode: daemon for normal operation
+// and only flips to backfill via the CLI).
+func setupWithMode(cmd *cobra.Command, mode string) (config.Config, *logrus.Logger, context.Context, context.CancelFunc, error) {
 	cfg, err := config.Load(configFile, cmd.Flags())
 	if err != nil {
 		return config.Config{}, nil, nil, nil, err
+	}
+	if mode != "" {
+		cfg.Mode = mode
 	}
 
 	if err := cfg.Validate(); err != nil {
