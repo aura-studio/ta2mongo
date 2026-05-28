@@ -178,6 +178,66 @@ logPattern: []
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Filter expression tests
+// ---------------------------------------------------------------------------
+
+func TestFilter_LoadsFromYAML(t *testing.T) {
+	yaml := `
+mongoURI: "mongodb://localhost"
+filterInclude:
+  - '#type == "track"'
+  - '#type == "user_set"'
+filterExclude:
+  - 'debug == true'
+`
+	cfg, err := Load(writeYAML(t, yaml), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.FilterInclude) != 2 {
+		t.Errorf("FilterInclude len = %d, want 2", len(cfg.FilterInclude))
+	}
+	if len(cfg.FilterExclude) != 1 {
+		t.Errorf("FilterExclude len = %d, want 1", len(cfg.FilterExclude))
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate: %v", err)
+	}
+	if _, err := cfg.BuildFilter(); err != nil {
+		t.Errorf("BuildFilter: %v", err)
+	}
+}
+
+func TestFilter_ValidationFailsForBadExpression(t *testing.T) {
+	yaml := `
+mongoURI: "mongodb://localhost"
+filterInclude:
+  - '#type =='
+`
+	cfg, err := Load(writeYAML(t, yaml), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected Validate to fail for malformed expression")
+	}
+}
+
+func TestFilter_EmptyByDefault(t *testing.T) {
+	yaml := `
+mongoURI: "mongodb://localhost"
+`
+	cfg, err := Load(writeYAML(t, yaml), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.FilterInclude) != 0 || len(cfg.FilterExclude) != 0 {
+		t.Errorf("expected empty filter lists, got inc=%v exc=%v",
+			cfg.FilterInclude, cfg.FilterExclude)
+	}
+}
+
 func TestFlushInterval(t *testing.T) {
 	yaml := `
 mongoURI: "mongodb://localhost"

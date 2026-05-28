@@ -527,7 +527,10 @@ func TestNewFromClient(t *testing.T) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
 
-	ig := NewFromClient(client, cfg, logger)
+	ig, err := NewFromClient(client, cfg, logger)
+	if err != nil {
+		t.Fatalf("NewFromClient: %v", err)
+	}
 	defer func() {
 		dropCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()

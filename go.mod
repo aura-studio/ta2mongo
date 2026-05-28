@@ -14,6 +14,7 @@ require (
 )
 
 require (
+	github.com/expr-lang/expr v1.17.8 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
 	github.com/golang/snappy v0.0.1 // indirect

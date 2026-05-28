@@ -32,3 +32,24 @@ maxElapsedTime: "10s"
 # poll   — 纯轮询（每 200ms），不依赖系统通知，不会卡住
 # event  — 纯事件驱动（kqueue/inotify），延迟最低但可能因通知丢失而卡死
 tailMode: "hybrid"
+
+# 日志上传过滤（expr-lang 表达式，语法见 https://expr-lang.org/docs/language-definition）
+#
+# - filterInclude（正向）：列表非空时，记录必须至少命中一条才会保留；
+#   列表为空（默认）则不做正向过滤，所有记录都进入下一步。
+# - filterExclude（反向）：任一条命中即丢弃，发生在 include 之后。
+#
+# 表达式作用于已扁平化的记录文档：#type、#event_name 等系统字段以及
+# properties.* 中提升到顶层的业务字段都可直接引用。带 # 前缀的字段会被
+# 透明改写为 $env["#field"]，所以可以直接写 `#type == "track"`。
+# 被过滤掉的记录不会写入 dead_letter，是有意丢弃的。
+#
+# 示例：
+# filterInclude:
+#   - '#type == "track" && #event_name in ["login", "pay"]'
+#   - '#type startsWith "user_"'
+# filterExclude:
+#   - 'debug == true'
+#   - 'country == "CN" && level < 3'
+filterInclude: []
+filterExclude: []

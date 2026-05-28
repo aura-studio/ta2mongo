@@ -156,7 +156,11 @@ func New(ctx context.Context, optFns ...Option) (*Client, error) {
 	}
 
 	st := store.New(db, cfg, opts.Logger)
-	ig := ingest.NewFromClient(mongoClient, cfg, opts.Logger)
+	ig, err := ingest.NewFromClient(mongoClient, cfg, opts.Logger)
+	if err != nil {
+		_ = mongoClient.Disconnect(ctx)
+		return nil, fmt.Errorf("client: %w", err)
+	}
 
 	return &Client{
 		ingester: ig,

@@ -15,6 +15,7 @@ package ingest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/sirupsen/logrus"
@@ -22,6 +23,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"rocket-nano/tools/tango/config"
+	"rocket-nano/tools/tango/internal/filter"
 	"rocket-nano/tools/tango/internal/store"
 	"rocket-nano/tools/tango/internal/talog"
 )
@@ -31,13 +33,23 @@ import (
 type Ingester struct {
 	store  *store.Store
 	parser *talog.Parser
+	filter *filter.Filter
 	client *mongo.Client
 	logger *logrus.Logger
 }
 
+// ErrFiltered is returned by Ingest when the line is dropped by user-defined
+// filter rules. Callers can distinguish intentional drops from real errors.
+var ErrFiltered = errors.New("ingest: dropped by filter")
+
 // New connects to MongoDB and creates a ready-to-use Ingester.
 // The caller must call Close when the Ingester is no longer needed.
 func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Ingester, error) {
+	flt, err := cfg.BuildFilter()
+	if err != nil {
+		return nil, fmt.Errorf("ingest: %w", err)
+	}
+
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(cfg.MongoURI))
 	if err != nil {
 		return nil, fmt.Errorf("ingest: connect to mongo: %w", err)
@@ -53,6 +65,7 @@ func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Ingest
 	return &Ingester{
 		store:  st,
 		parser: talog.NewParser(),
+		filter: flt,
 		client: client,
 		logger: logger,
 	}, nil
@@ -61,13 +74,17 @@ func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Ingest
 // NewFromClient creates an Ingester from an existing MongoDB client, avoiding
 // a second connection. This is useful when the caller already manages the
 // MongoDB lifecycle (e.g., when both daemon and ingest modes run in the same
-// process).
-func NewFromClient(client *mongo.Client, cfg config.Config, logger *logrus.Logger) *Ingester {
+// process). Returns an error if the configured filter expressions fail to
+// compile.
+func NewFromClient(client *mongo.Client, cfg config.Config, logger *logrus.Logger) (*Ingester, error) {
+	flt, err := cfg.BuildFilter()
+	if err != nil {
+		return nil, fmt.Errorf("ingest: %w", err)
+	}
+
 	dbName, err := config.MongoDBFromURI(cfg.MongoURI)
 	if err != nil {
-		// NewFromClient signature doesn't return error; fall back to using URI as-is.
-		// This should never happen if cfg.MongoURI is valid.
-		dbName = ""
+		return nil, fmt.Errorf("ingest: %w", err)
 	}
 	db := client.Database(dbName)
 	st := store.New(db, cfg, logger)
@@ -75,9 +92,10 @@ func NewFromClient(client *mongo.Client, cfg config.Config, logger *logrus.Logge
 	return &Ingester{
 		store:  st,
 		parser: talog.NewParser(),
+		filter: flt,
 		client: client,
 		logger: logger,
-	}
+	}, nil
 }
 
 // Close disconnects the MongoDB client. Only call this if the Ingester was
@@ -110,6 +128,17 @@ func (ig *Ingester) Ingest(ctx context.Context, line string) error {
 			ig.logger.WithError(wErr).Warn("ingest: failed to write dead letter")
 		}
 		return fmt.Errorf("ingest: parse: %w", err)
+	}
+
+	// Apply user-defined filter; dropped records are not written anywhere.
+	if !ig.filter.Empty() {
+		keep, ferr := ig.filter.Keep(rec.Doc)
+		if ferr != nil {
+			ig.logger.WithError(ferr).Debug("ingest: filter evaluation error")
+		}
+		if !keep {
+			return ErrFiltered
+		}
 	}
 
 	// Resolve user identity.
@@ -164,6 +193,16 @@ func (ig *Ingester) IngestBatch(ctx context.Context, lines []string) error {
 			ig.logger.WithError(err).Debug("ingest batch: invalid line")
 			deadModels = append(deadModels, store.DeadLetterModel(line, err))
 			continue
+		}
+
+		if !ig.filter.Empty() {
+			keep, ferr := ig.filter.Keep(rec.Doc)
+			if ferr != nil {
+				ig.logger.WithError(ferr).Debug("ingest batch: filter evaluation error")
+			}
+			if !keep {
+				continue
+			}
 		}
 
 		userID, err := ig.store.Identity().Resolve(ctx, rec.AccountID, rec.DistinctID)

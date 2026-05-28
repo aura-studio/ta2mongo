@@ -54,6 +54,8 @@ func addCommonFlags(flags *pflag.FlagSet) {
 	flags.Duration("maxElapsedTime", 0, "max total retry time for bulk writes (default 10s)")
 	flags.String("logLevel", "", "log level: debug, info, warn, error (default info)")
 	flags.String("tailMode", "", "file-tailing strategy: poll or event (default poll)")
+	flags.StringSlice("filterInclude", nil, "expr-lang expressions; record is kept only if any evaluates true (repeatable)")
+	flags.StringSlice("filterExclude", nil, "expr-lang expressions; record is dropped if any evaluates true (repeatable)")
 }
 
 // setup loads configuration from file + env + flags, creates a logger, and sets

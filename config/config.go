@@ -23,6 +23,8 @@ import (
 
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
+
+	"rocket-nano/tools/tango/internal/filter"
 )
 
 // Mode constants for the run mode configuration.
@@ -87,6 +89,18 @@ type Config struct {
 	//   poll             — pure polling, immune to notification-drop races.
 	//   event            — pure kqueue/inotify, lowest latency but may stall.
 	TailMode string `mapstructure:"tailMode"`
+
+	// FilterInclude is a list of expr-lang expressions. If non-empty, a parsed
+	// record is kept only when at least one expression evaluates to true
+	// (OR semantics). An empty list lets every record through this stage.
+	// Expressions are evaluated against the flattened record document, so
+	// fields like "#type", "#event_name", and any "properties.*" keys are
+	// accessible at the top level (e.g. `#type == "track"`).
+	FilterInclude []string `mapstructure:"filterInclude"`
+
+	// FilterExclude is a list of expr-lang expressions. A parsed record is
+	// dropped if any expression evaluates to true. Applied after FilterInclude.
+	FilterExclude []string `mapstructure:"filterExclude"`
 }
 
 // BatchSizeMin returns the adaptive lower bound (BatchSize / 4, minimum 1).
@@ -180,6 +194,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("maxElapsedTime", "10s")
 	v.SetDefault("logLevel", "info")
 	v.SetDefault("tailMode", TailModeHybrid)
+	v.SetDefault("filterInclude", []string{})
+	v.SetDefault("filterExclude", []string{})
 }
 
 // applyDefaults fills in zero-value fields with sensible defaults.
@@ -229,7 +245,17 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("config: tailMode must be %q, %q or %q; got %q",
 			TailModeHybrid, TailModePoll, TailModeEvent, c.TailMode)
 	}
+	if _, err := filter.New(c.FilterInclude, c.FilterExclude); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
 	return nil
+}
+
+// BuildFilter compiles the configured filter expressions. Validate must have
+// been called first; this method is intended to be invoked by runtime
+// components (daemon, once, ingest) that need a ready-to-use filter.
+func (c *Config) BuildFilter() (*filter.Filter, error) {
+	return filter.New(c.FilterInclude, c.FilterExclude)
 }
 
 // MongoDBFromURI extracts the database name from a MongoDB URI path.

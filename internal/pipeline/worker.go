@@ -10,6 +10,7 @@ import (
 
 	"rocket-nano/tools/tango/config"
 	"rocket-nano/tools/tango/internal/dynamicbatch"
+	"rocket-nano/tools/tango/internal/filter"
 	"rocket-nano/tools/tango/internal/store"
 	"rocket-nano/tools/tango/internal/talog"
 )
@@ -33,6 +34,10 @@ type StatsCollector interface {
 	OnDeadLetter()
 	// OnWriteError is called when a bulk write fails.
 	OnWriteError()
+	// OnFiltered is called when a parsed record is dropped by filter rules.
+	OnFiltered()
+	// OnFilterError is called when a filter expression evaluation fails.
+	OnFilterError()
 }
 
 // NoopStats is a StatsCollector that does nothing.
@@ -46,12 +51,14 @@ func (NoopStats) OnUserWrite()     {}
 func (NoopStats) OnEventWrite()    {}
 func (NoopStats) OnDeadLetter()    {}
 func (NoopStats) OnWriteError()    {}
+func (NoopStats) OnFiltered()      {}
+func (NoopStats) OnFilterError()   {}
 
 // RunWorkers launches N workers with affinity-based dispatch and blocks
-// until all workers finish.
+// until all workers finish. A nil flt is treated as a no-op filter.
 func RunWorkers(ctx context.Context, cfg config.Config, st *store.Store,
-	parser *talog.Parser, logger *logrus.Logger, lineCh <-chan string,
-	stats StatsCollector,
+	parser *talog.Parser, flt *filter.Filter, logger *logrus.Logger,
+	lineCh <-chan string, stats StatsCollector,
 ) {
 	if stats == nil {
 		stats = NoopStats{}
@@ -72,7 +79,7 @@ func RunWorkers(ctx context.Context, cfg config.Config, st *store.Store,
 	for i := 0; i < workerCount; i++ {
 		go func(ch <-chan string) {
 			defer wg.Done()
-			worker(ctx, cfg, st, parser, logger, ch, stats)
+			worker(ctx, cfg, st, parser, flt, logger, ch, stats)
 		}(workerChs[i])
 	}
 
@@ -84,8 +91,8 @@ func RunWorkers(ctx context.Context, cfg config.Config, st *store.Store,
 
 // worker processes lines from a channel, batches them, and flushes to MongoDB.
 func worker(ctx context.Context, cfg config.Config, st *store.Store,
-	parser *talog.Parser, logger *logrus.Logger, lineCh <-chan string,
-	stats StatsCollector,
+	parser *talog.Parser, flt *filter.Filter, logger *logrus.Logger,
+	lineCh <-chan string, stats StatsCollector,
 ) {
 	userBatch := NewBatch(cfg.BatchSizeMax())
 	eventBatch := NewBatch(cfg.BatchSizeMax())
@@ -134,6 +141,20 @@ func worker(ctx context.Context, cfg config.Config, st *store.Store,
 				continue
 			}
 			stats.OnParseOK()
+
+			// Apply user-defined include/exclude filter. Dropped records are
+			// not written to dead letter — they are intentionally discarded.
+			if !flt.Empty() {
+				keep, ferr := flt.Keep(rec.Doc)
+				if ferr != nil {
+					stats.OnFilterError()
+					logger.WithError(ferr).Debug("filter: expression evaluation error")
+				}
+				if !keep {
+					stats.OnFiltered()
+					continue
+				}
+			}
 
 			// Resolve user identity for both user and event records.
 			userID, err := st.Identity().Resolve(ctx, rec.AccountID, rec.DistinctID)

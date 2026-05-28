@@ -21,6 +21,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"rocket-nano/tools/tango/config"
+	"rocket-nano/tools/tango/internal/filter"
 	"rocket-nano/tools/tango/internal/pipeline"
 	"rocket-nano/tools/tango/internal/store"
 	"rocket-nano/tools/tango/internal/tailer"
@@ -38,6 +39,8 @@ type Stats struct {
 	EventWrites     atomic.Int64
 	DeadLetters     atomic.Int64
 	WriteErrors     atomic.Int64
+	Filtered        atomic.Int64
+	FilterErrors    atomic.Int64
 	Retries         int64 // populated from store.WriteStats at the end
 	StartTime       time.Time
 	EndTime         time.Time
@@ -66,6 +69,8 @@ func (c *statsCollector) OnUserWrite()     { c.s.UserWrites.Add(1) }
 func (c *statsCollector) OnEventWrite()    { c.s.EventWrites.Add(1) }
 func (c *statsCollector) OnDeadLetter()    { c.s.DeadLetters.Add(1) }
 func (c *statsCollector) OnWriteError()    { c.s.WriteErrors.Add(1) }
+func (c *statsCollector) OnFiltered()      { c.s.Filtered.Add(1) }
+func (c *statsCollector) OnFilterError()   { c.s.FilterErrors.Add(1) }
 
 // Runner is the one-shot processor.
 type Runner struct {
@@ -73,12 +78,18 @@ type Runner struct {
 	logger *logrus.Logger
 	store  *store.Store
 	parser *talog.Parser
+	filter *filter.Filter
 	client *mongo.Client
 	stats  Stats
 }
 
 // New connects to MongoDB and creates a ready-to-run Runner.
 func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Runner, error) {
+	flt, err := cfg.BuildFilter()
+	if err != nil {
+		return nil, fmt.Errorf("once: %w", err)
+	}
+
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(cfg.MongoURI))
 	if err != nil {
 		return nil, fmt.Errorf("once: connect to mongo: %w", err)
@@ -96,6 +107,7 @@ func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Runner
 		logger: logger,
 		store:  st,
 		parser: talog.NewParser(),
+		filter: flt,
 		client: client,
 	}, nil
 }
@@ -137,7 +149,7 @@ func (r *Runner) Run(ctx context.Context) (*Stats, error) {
 	lineCh := r.readAllFiles(ctx, files)
 
 	// Process lines using the shared worker pipeline with stats collection.
-	pipeline.RunWorkers(ctx, r.cfg, r.store, r.parser, r.logger, lineCh, &statsCollector{s: &r.stats})
+	pipeline.RunWorkers(ctx, r.cfg, r.store, r.parser, r.filter, r.logger, lineCh, &statsCollector{s: &r.stats})
 
 	r.stats.Retries = r.store.Stats().TotalRetries()
 	r.stats.EndTime = time.Now()
@@ -228,6 +240,11 @@ func (r *Runner) printSummary() {
 		"event_writes": s.EventWrites.Load(),
 		"dead_letters": s.DeadLetters.Load(),
 	}).Info("writes")
+
+	r.logger.WithFields(logrus.Fields{
+		"filtered":      s.Filtered.Load(),
+		"filter_errors": s.FilterErrors.Load(),
+	}).Info("filter")
 
 	r.logger.WithFields(logrus.Fields{
 		"total_retries": s.Retries,
