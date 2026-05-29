@@ -36,7 +36,7 @@ func runAgent(cmd *cobra.Command, _ []string) error {
 
 	logger.WithFields(logrus.Fields{
 		"instanceID": cfg.InstanceID,
-		"mongo_uri":  maskURI(cfg.MongoURI),
+		"mongo_uri":  maskURI(cfg.Mongo.URI),
 	}).Info("agent: process starting")
 
 	a, err := agent.New(ctx, cfg, logger)

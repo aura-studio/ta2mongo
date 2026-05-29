@@ -38,7 +38,7 @@ func runBackfill(cmd *cobra.Command, _ []string) error {
 		"runID":     cfg.Backfill.RunID,
 		"projectID": cfg.Backfill.ProjectID,
 		"table":     cfg.Backfill.Table,
-		"mongo_uri": maskURI(cfg.MongoURI),
+		"mongo_uri": maskURI(cfg.Mongo.URI),
 	}).Info("backfill: process starting")
 
 	r, err := backfill.New(ctx, cfg, logger)

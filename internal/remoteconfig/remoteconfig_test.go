@@ -9,59 +9,56 @@ import (
 
 func baseConfig() config.Config {
 	return config.Config{
-		Mode:          config.ModeDaemon,
-		MongoURI:      "mongodb://local/db",
-		BatchSize:     1000,
-		BatchWorkers:  2,
-		FlushInterval: time.Second,
-		LogLevel:      "info",
-		FilterInclude: []string{`#type == "user_set"`},
-		FilterExclude: nil,
+		Mode:     config.ModeDaemon,
+		Mongo:    config.MongoConfig{URI: "mongodb://local/db"},
+		Pipeline: config.PipelineConfig{BatchSize: 1000, BatchWorkers: 2, FlushInterval: time.Second},
+		Logging:  config.LoggingConfig{Level: "info"},
+		Filter:   config.FilterConfig{Include: []string{`#type == "user_set"`}},
 	}
 }
 
 func TestMerge_PerFieldOverride(t *testing.T) {
 	base := baseConfig()
 	doc := map[string]any{
-		"filterInclude": []any{`#type == "track"`, `#event_name == "PaymentOrderState"`},
-		"batchSize":     5000,
+		"filter":   map[string]any{"include": []any{`#type == "track"`, `#event_name == "PaymentOrderState"`}},
+		"pipeline": map[string]any{"batchSize": 5000},
 	}
 	got, err := Merge(base, doc)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Overridden fields:
-	if len(got.FilterInclude) != 2 {
-		t.Errorf("FilterInclude = %v, want 2 entries", got.FilterInclude)
+	if len(got.Filter.Include) != 2 {
+		t.Errorf("Filter.Include = %v, want 2 entries", got.Filter.Include)
 	}
-	if got.BatchSize != 5000 {
-		t.Errorf("BatchSize = %d, want 5000", got.BatchSize)
+	if got.Pipeline.BatchSize != 5000 {
+		t.Errorf("BatchSize = %d, want 5000", got.Pipeline.BatchSize)
 	}
 	// Untouched fields keep local values:
-	if got.MongoURI != "mongodb://local/db" {
-		t.Errorf("MongoURI changed: %q", got.MongoURI)
+	if got.Mongo.URI != "mongodb://local/db" {
+		t.Errorf("Mongo.URI changed: %q", got.Mongo.URI)
 	}
-	if got.BatchWorkers != 2 {
-		t.Errorf("BatchWorkers changed: %d", got.BatchWorkers)
+	if got.Pipeline.BatchWorkers != 2 {
+		t.Errorf("BatchWorkers changed: %d", got.Pipeline.BatchWorkers)
 	}
-	if got.LogLevel != "info" {
-		t.Errorf("LogLevel changed: %q", got.LogLevel)
+	if got.Logging.Level != "info" {
+		t.Errorf("Logging.Level changed: %q", got.Logging.Level)
 	}
 	// base must not be mutated.
-	if len(base.FilterInclude) != 1 {
-		t.Errorf("base mutated: %v", base.FilterInclude)
+	if len(base.Filter.Include) != 1 {
+		t.Errorf("base mutated: %v", base.Filter.Include)
 	}
 }
 
 func TestMerge_DurationFromString(t *testing.T) {
 	base := baseConfig()
-	doc := map[string]any{"flushInterval": "2s"}
+	doc := map[string]any{"pipeline": map[string]any{"flushInterval": "2s"}}
 	got, err := Merge(base, doc)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.FlushInterval != 2*time.Second {
-		t.Errorf("FlushInterval = %v, want 2s", got.FlushInterval)
+	if got.Pipeline.FlushInterval != 2*time.Second {
+		t.Errorf("FlushInterval = %v, want 2s", got.Pipeline.FlushInterval)
 	}
 }
 
@@ -69,7 +66,7 @@ func TestMerge_NestedBackfill(t *testing.T) {
 	base := baseConfig()
 	doc := map[string]any{
 		"backfill": map[string]any{
-			"filterInclude": []any{`country == "CN"`},
+			"table": "user",
 		},
 	}
 	// backfill is a nested struct; ensure nested merge works without nuking
@@ -78,8 +75,11 @@ func TestMerge_NestedBackfill(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.FilterInclude) != 1 || got.FilterInclude[0] != `#type == "user_set"` {
-		t.Errorf("top-level FilterInclude clobbered: %v", got.FilterInclude)
+	if len(got.Filter.Include) != 1 || got.Filter.Include[0] != `#type == "user_set"` {
+		t.Errorf("top-level Filter.Include clobbered: %v", got.Filter.Include)
+	}
+	if got.Backfill.Table != "user" {
+		t.Errorf("backfill.table = %q, want user", got.Backfill.Table)
 	}
 }
 
@@ -89,7 +89,7 @@ func TestMerge_EmptyDocReturnsBase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.BatchSize != base.BatchSize {
+	if got.Pipeline.BatchSize != base.Pipeline.BatchSize {
 		t.Errorf("empty doc changed config")
 	}
 }
@@ -100,8 +100,8 @@ func TestFilterChanged(t *testing.T) {
 	if FilterChanged(a, b) {
 		t.Errorf("identical configs reported as changed")
 	}
-	b.FilterInclude = []string{`#type == "track"`}
+	b.Filter.Include = []string{`#type == "track"`}
 	if !FilterChanged(a, b) {
-		t.Errorf("differing FilterInclude not detected")
+		t.Errorf("differing Filter.Include not detected")
 	}
 }

@@ -23,13 +23,13 @@ func ApplyAtStartup(ctx context.Context, cfg config.Config, logger *logrus.Logge
 		return cfg, nil
 	}
 
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(cfg.MongoURI))
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(cfg.Mongo.URI).SetConnectTimeout(cfg.Mongo.ConnectTimeout).SetServerSelectionTimeout(cfg.Mongo.ServerSelectionTimeout))
 	if err != nil {
 		return cfg, fmt.Errorf("remoteconfig: connect: %w", err)
 	}
 	defer func() { _ = client.Disconnect(context.Background()) }()
 
-	dbName, err := config.MongoDBFromURI(cfg.MongoURI)
+	dbName, err := config.MongoDBFromURI(cfg.Mongo.URI)
 	if err != nil {
 		return cfg, fmt.Errorf("remoteconfig: %w", err)
 	}
@@ -59,8 +59,8 @@ func ApplyAtStartup(ctx context.Context, cfg config.Config, logger *logrus.Logge
 		"collection":     cfg.RemoteConfig.Collection,
 		"documentID":     cfg.RemoteConfig.DocumentID,
 		"override_keys":  keysOf(doc),
-		"filter_include": merged.FilterInclude,
-		"filter_exclude": merged.FilterExclude,
+		"filter_include": merged.Filter.Include,
+		"filter_exclude": merged.Filter.Exclude,
 	}).Info("remoteconfig: applied remote override")
 
 	return merged, nil

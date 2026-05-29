@@ -1,180 +1,140 @@
 # tango 配置文件
+#
+# 配置按用途分组为若干区块；只有进程级的 mode / instanceID 留在顶层。
+# YAML 键即结构字段；环境变量用 TANGO_ 前缀、"." 换成 "_"
+# （如 mongo.uri → TANGO_MONGO_URI）。CLI 仅保留 --mongoURI / --logLevel /
+# --mode 三个常用 flag，其余细调走 yaml 或 env。
 
-# mode: 运行模式 (daemon / once / ingest / backfill）
+# 运行模式：daemon（默认）/ once / ingest / backfill / agent
 mode: "daemon"
 
-# MongoDB 连接 URI
-mongoURI: "mongodb://localhost:27017/tango"
+# 本进程唯一标识，仅来自环境变量 TANGO_INSTANCE_ID。
+# agent 模式必填（定向任务 + 心跳注册），其他模式忽略。
+# instanceID 不在文件里写，部署时：export TANGO_INSTANCE_ID=prod-agent-A
 
-# 日志级别：debug / info / warn / error
-logLevel: "info"
+# ---------------------------------------------------------------------------
+# logging: 日志输出
+# ---------------------------------------------------------------------------
+logging:
+  # 日志级别：debug / info / warn / error
+  level: "info"
+  # 日志编码：text（默认）/ json
+  format: "text"
 
-# 日志文件匹配正则（daemon/once 模式使用）
-logPattern: ["/var/log/ta.*.log"]
+# ---------------------------------------------------------------------------
+# mongo: 连接与写入重试
+# ---------------------------------------------------------------------------
+mongo:
+  # MongoDB 连接 URI（必填）；数据库名取自 URI path
+  uri: "mongodb://localhost:27017/tango"
+  # 单次 bulk write 最大重试总时间
+  maxElapsedTime: "10s"
+  # 初始连接握手超时
+  connectTimeout: "10s"
+  # 等待可用服务器的超时
+  serverSelectionTimeout: "30s"
 
-# 目标批量大小；min=batchSize/4, max=batchSize*2 自动推导
-batchSize: 1000
+# ---------------------------------------------------------------------------
+# source: 文件采集（daemon / once 模式）
+# ---------------------------------------------------------------------------
+source:
+  # 日志文件匹配（glob/正则）；daemon/once 必需，其他模式忽略
+  logPattern: ["/var/log/ta.*.log"]
+  # 文件追踪模式：hybrid（默认，事件+轮询兜底）/ poll / event
+  tailMode: "hybrid"
+  # 重扫新文件的间隔（daemon）
+  rescanInterval: "30s"
+  # poll/hybrid 模式到达 EOF 后的重读间隔
+  pollInterval: "200ms"
+  # 单行最大字节数（默认 10MB）
+  maxLineBytes: 10485760
 
-# 并行写入 worker 数
-batchWorkers: 2
+# ---------------------------------------------------------------------------
+# pipeline: 批量与并行写
+# ---------------------------------------------------------------------------
+pipeline:
+  # 目标批量大小；min=batchSize/4, max=batchSize*2 自动推导
+  batchSize: 1000
+  # 并行写入 worker 数
+  batchWorkers: 2
+  # 批量定时刷新间隔
+  flushInterval: "1s"
+  # 每 worker 行通道缓冲；0=按 batchSize*2 派生
+  channelBuffer: 0
+  # 每 worker dead-letter 批容量
+  deadLetterCap: 128
 
-# 批量定时刷新间隔
-flushInterval: "1s"
+# ---------------------------------------------------------------------------
+# filter: 上传过滤（expr-lang 表达式）
+# 语法见 https://expr-lang.org/docs/language-definition
+# - include（正向）：非空时记录须至少命中一条才保留；空=全放行
+# - exclude（反向）：任一命中即丢弃，发生在 include 之后
+# 表达式作用于扁平化记录：#type、#event_name 及 properties.* 提升到顶层的
+# 字段都可直接引用（# 前缀会透明改写为 $env["#field"]）。
+# 被过滤掉的记录不写 dead_letter，是有意丢弃。
+# ---------------------------------------------------------------------------
+filter:
+  include: []
+  exclude: []
+  # 示例：
+  # include:
+  #   - '#type == "track" && #event_name in ["login", "pay"]'
+  #   - '#type startsWith "user_"'
+  # exclude:
+  #   - 'debug == true'
 
-# 文件重扫间隔，daemon 模式使用（如 "30s"、"1m"）
-rescanInterval: "30s"
-
-# 单次 bulk write 最大重试总时间
-maxElapsedTime: "10s"
-
-# 文件追踪模式：hybrid（默认）/ poll / event
-# hybrid — 事件驱动为主 + 轮询兜底，兼顾低延迟与可靠性
-# poll   — 纯轮询（每 200ms），不依赖系统通知，不会卡住
-# event  — 纯事件驱动（kqueue/inotify），延迟最低但可能因通知丢失而卡死
-tailMode: "hybrid"
-
-# 日志上传过滤（expr-lang 表达式，语法见 https://expr-lang.org/docs/language-definition）
-#
-# - filterInclude（正向）：列表非空时，记录必须至少命中一条才会保留；
-#   列表为空（默认）则不做正向过滤，所有记录都进入下一步。
-# - filterExclude（反向）：任一条命中即丢弃，发生在 include 之后。
-#
-# 表达式作用于已扁平化的记录文档：#type、#event_name 等系统字段以及
-# properties.* 中提升到顶层的业务字段都可直接引用。带 # 前缀的字段会被
-# 透明改写为 $env["#field"]，所以可以直接写 `#type == "track"`。
-# 被过滤掉的记录不会写入 dead_letter，是有意丢弃的。
-#
-# 示例：
-# filterInclude:
-#   - '#type == "track" && #event_name in ["login", "pay"]'
-#   - '#type startsWith "user_"'
-# filterExclude:
-#   - 'debug == true'
-#   - 'country == "CN" && level < 3'
-filterInclude: []
-filterExclude: []
-
-# backfill: 从数数 OpenAPI 拉取历史数据并导入 MongoDB（仅在 mode=backfill 或
-# `tango backfill` 子命令下生效）。
-#
-# 工作流：
-#   按 $part_date 切分成"一天一个 SQL 任务"，每天 submit → poll → 分页拉取，
-#   每页数据通过 lineCh 进入与 daemon/once 相同的 parse → filter → write
-#   管线。所有 event 类型默认强制 $setOnInsert（forceSkipExisting=true），
-#   保证回填不会覆盖线上已经存在的 #uuid。
-#
-# 续传：
-#   进度（每天 / 每页）持久化到 Mongo 同库的 _backfill_progress 集合，按 runID
-#   作主键。重启后跳过已完成的天，对 in_progress 的天检查 taskId 是否仍然
-#   有效；taskId 失效则重新 submit，已写过的行依赖 #uuid unique 索引天然去重。
-#
-# 顶层的 filterInclude / filterExclude 会被同时编译成 Presto WHERE 下推到
-# 数数侧，本地 expr filter 仍然兜底（除非 skipLocalFilter: true）。
+# ---------------------------------------------------------------------------
+# backfill: 从数数 OpenAPI 拉取历史数据导入（mode=backfill 或 `tango backfill`）
+# 按 $part_date 切天 → submit → poll → 分页拉取 → 与 daemon 相同的管线写入。
+# 续传：进度持久化到 _backfill_progress（按 runID）；taskId 失效自动重 submit，
+# #uuid/#user_id upsert 保证幂等。filter 同时编译成 Presto WHERE 下推 + 本地兜底。
+# ---------------------------------------------------------------------------
 backfill:
-  # 数数 OpenAPI 网关；不要带尾斜杠
-  apiBaseURL: ""
-
-  # 数数项目的查询 token（每个项目一个）
-  token: ""
-
-  # 项目 ID，用于拼表名 v_event_<id> / v_user_<id>
-  projectID: 0
-
-  # 要查的表：event 或 user，默认 event
-  table: "event"
-
-  # 分区日期范围（按天分块；包含两端）
-  partDateRange:
+  apiBaseURL: ""            # 数数 OpenAPI 网关，无尾斜杠
+  token: ""                 # 项目查询 token（每项目一个）
+  proxy: ""                 # 可选出站代理：socks5:// / http:// / https://；空=直连
+  projectID: 0              # 拼表名 v_event_<id> / v_user_<id>
+  schemaPrefix: ""          # 表名前缀，如 "ta" → ta.v_user_35
+  table: "event"            # event / user
+  partDateRange:            # 分区日期范围（event 表必填，按天分块）
     start: "2026-01-01"
     end:   "2026-05-28"
-
-  # 可选：每天内进一步用 #event_time 收窄（留空表示按整天取）
-  # eventTimeRange:
+  # eventTimeRange:         # 可选：用 #event_time 进一步收窄
   #   start: "2026-01-01 00:00:00"
   #   end:   "2026-05-28 23:59:59"
-
-  # 每页行数，数数最小限制 1000，默认 10000
-  pageSize: 10000
-
-  # 任务状态轮询间隔
-  pollInterval: "3s"
-  # 单天任务从 submit 到 FINISHED 的最长等待时间
-  pollTimeout: "30m"
-
-  # 断点续传的标识；同一个 runID 重启即续跑
-  runID: ""
-
-  # checkpoint 集合名，默认 _backfill_progress
+  pageSize: 10000           # 服务端分页大小（>=1000）
+  pageRetries: 3            # 单页瞬时错误的重试次数（重拉幂等，靠 #uuid/#user_id 去重）
+  paginate: true            # true=submit 带 pageSize 服务端分页+逐页续传；false=单次全量流式
+  pollInterval: "5s"        # 任务状态轮询间隔
+  pollTimeout: "60m"        # 单 chunk submit→FINISHED 最长等待
+  runID: ""                 # 断点续传标识；同 runID 重启即续跑
   progressCollection: "_backfill_progress"
+  forceSkipExisting: true   # event 一律 $setOnInsert 跳过已存在 #uuid
+  skipLocalFilter: false    # true=只信 SQL 下推，关闭本地兜底
 
-  # 是否强制所有 event 写入都走 $setOnInsert，跳过已存在的 #uuid
-  # 默认 true（回填语义就该幂等，不应覆盖线上后续修正）
-  forceSkipExisting: true
-
-  # 是否关闭本地 filter 兜底（关掉只信 SQL 下推）
-  skipLocalFilter: false
-
-# remoteConfig: 从 MongoDB 拉取一个 JSON 配置文档，逐字段覆盖本地 yaml
-# （远程文档里没写的字段保留本地值）。用于让数据中心动态发布过滤规则，
-# 各 tango 实例无需改本地文件、无需重启即可调整采集范围。
-#
-# 覆盖时机：
-#   - 启动时：所有模式都会拉一次并 merge。
-#   - 运行中：仅 daemon 模式每隔 syncInterval 再拉一次，且**只有 filter
-#     （filterInclude/filterExclude）会热生效**；其余字段改动会记日志，
-#     下次重启才生效。
-#
-# 不可被远程覆盖的字段（必须来自本地）：mongoURI、remoteConfig、mode
-# —— 因为要先用本地 mongoURI 连上库，才能读到这份远程配置。
-#
-# 配置文档形如（_id 固定为 documentID）：
-#   { "_id": "default",
-#     "filterInclude": ["#type == \"track\" && #event_name == \"PaymentOrderState\"",
-#                       "#type startsWith \"user_\""],
-#     "filterExclude": [] }
+# ---------------------------------------------------------------------------
+# remoteConfig: 从 MongoDB 拉一个 JSON 文档逐字段覆盖本地配置
+# 启动时所有模式拉一次；daemon 每 syncInterval 再拉，仅 filter 热生效。
+# 作用域按 db 隔离。mongo/remoteConfig/mode/instanceID 不可被远程覆盖。
+# 文档形如 { "_id": "default", "filter": { "include": [...], "exclude": [] } }
+# ---------------------------------------------------------------------------
 remoteConfig:
-  # 是否启用远程配置覆盖；false 时完全使用本地配置，不连库取配置
   enabled: false
-  # 存放配置文档的集合名，默认 _tango_config
   collection: "_tango_config"
-  # 全局共享的单一配置文档 _id，默认 default
   documentID: "default"
-  # daemon 模式重新拉取并热更 filter 的间隔，默认 1h
   syncInterval: "1h"
 
-# instanceID: 本进程唯一标识，来自环境变量 TANGO_INSTANCE_ID。
-# agent 模式必填（用于定向任务与心跳注册），其他模式忽略。不在 yaml 里写，
-# 部署时设环境变量：export TANGO_INSTANCE_ID=prod-agent-A
-
-# agent: 任务 worker 模式（mode=agent 或 `tango agent` 子命令）。
-# 长驻进程：注册心跳 → 从共享的 MongoDB 任务队列认领任务 → 执行（backfill/sql）
-# → 执行期间续租 → 汇报结果。
-#
-# pull 模型，无中心调度、不靠心跳保证正确性：
-#   - 任务是 _tango_tasks 集合里的文档，带可选 target（实例ID）。
-#     target 空=任意 agent 可执行；非空=只有该实例能执行。
-#   - agent 用原子 findOneAndUpdate 认领（pending→claimed + 盖租约），
-#     保证同一任务不被两个 agent 同时执行。
-#   - 长任务定期续租；agent 崩了租约过期，任务被别的 agent 回收重做
-#     （#uuid/#user_id upsert 保证重做幂等）。这取代了"靠心跳判活"。
-#   - _tango_instances 心跳注册（TTL 索引自动过期）只用于：定向发布时
-#     fail-fast（目标不在线就拒绝发布）和运维查看在线列表，不影响认领正确性。
-#
-# 作用域：任务/配置都按 db 隔离——只影响连同一个 db 的 tango 进程，
-# 不同 db 是各自独立的命名空间。
-#
-# TA 连接信息（apiBaseURL/token/proxy/projectID/schemaPrefix）由上面的 backfill
-# 配置块提供；任务 payload 只说"取什么"（table/range 或显式 sql）。
+# ---------------------------------------------------------------------------
+# agent: 任务 worker 模式（mode=agent 或 `tango agent`）
+# 注册心跳 → 从共享队列认领任务 → 执行(backfill/sql) → 续租 → 汇报。
+# pull 模型：原子 claim + 租约保证不重复执行与故障回收；心跳仅用于定向
+# fail-fast 与在线列表。任务/配置都按 db 隔离。
+# TA 连接信息走上面的 backfill 块；任务 payload 只说"取什么"。
+# ---------------------------------------------------------------------------
 agent:
-  # 任务队列集合名，默认 _tango_tasks
   tasksCollection: "_tango_tasks"
-  # 实例心跳注册集合名，默认 _tango_instances
   instancesCollection: "_tango_instances"
-  # 轮询认领任务的间隔，默认 10s
-  pollInterval: "10s"
-  # 任务租约时长；超时未续租则可被其他 agent 回收，默认 5m
-  leaseDuration: "5m"
-  # 心跳刷新间隔，默认 30s
-  heartbeatInterval: "30s"
-  # 实例 TTL：心跳超过此时长视为离线，默认 90s
-  instanceTTL: "90s"
+  pollInterval: "10s"       # 轮询认领间隔
+  leaseDuration: "5m"       # 任务租约；超时未续可被回收
+  heartbeatInterval: "30s"  # 心跳刷新间隔
+  instanceTTL: "90s"        # 心跳超过此时长视为离线

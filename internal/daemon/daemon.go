@@ -91,12 +91,12 @@ func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Daemon
 		return nil, fmt.Errorf("daemon: %w", err)
 	}
 
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(cfg.MongoURI))
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(cfg.Mongo.URI).SetConnectTimeout(cfg.Mongo.ConnectTimeout).SetServerSelectionTimeout(cfg.Mongo.ServerSelectionTimeout))
 	if err != nil {
 		return nil, err
 	}
 
-	dbName, err := config.MongoDBFromURI(cfg.MongoURI)
+	dbName, err := config.MongoDBFromURI(cfg.Mongo.URI)
 	if err != nil {
 		_ = client.Disconnect(context.Background())
 		return nil, fmt.Errorf("daemon: %w", err)
@@ -136,20 +136,20 @@ func (d *Daemon) EnsureIndexes(ctx context.Context) error {
 // for the same user are processed sequentially by a single worker, preventing
 // out-of-order overwrites across workers.
 func (d *Daemon) Run(ctx context.Context) error {
-	if len(d.cfg.LogPattern) == 0 {
+	if len(d.cfg.Source.LogPattern) == 0 {
 		return errors.New("daemon: ta.logPattern is required (at least one regex)")
 	}
 
 	d.logger.WithFields(logrus.Fields{
-		"log_patterns":    d.cfg.LogPattern,
-		"workers":        d.cfg.BatchWorkers,
-		"batch_size":     d.cfg.BatchSize,
-		"flush_interval": d.cfg.FlushInterval,
-		"tail_mode":      d.cfg.TailMode,
+		"log_patterns":    d.cfg.Source.LogPattern,
+		"workers":        d.cfg.Pipeline.BatchWorkers,
+		"batch_size":     d.cfg.Pipeline.BatchSize,
+		"flush_interval": d.cfg.Pipeline.FlushInterval,
+		"tail_mode":      d.cfg.Source.TailMode,
 	}).Info("daemon: starting pipeline")
 
 	// Start the tailer; it returns a channel of log lines.
-	t := tailer.New(d.cfg.LogPattern, d.cfg.RescanInterval, d.cfg.TailMode, d.logger)
+	t := tailer.New(d.cfg.Source.LogPattern, d.cfg.Source.RescanInterval, d.cfg.Source.TailMode, d.logger).WithTuning(d.cfg.Source.PollInterval, d.cfg.Source.MaxLineBytes)
 	lineCh := t.Run(ctx)
 
 	// Create stats collector for periodic reporting.
@@ -184,7 +184,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 // fields are reported but only take effect on the next restart (matching the
 // agreed "filter hot, rest on restart" policy). It returns when ctx is done.
 func (d *Daemon) syncRemoteConfig(ctx context.Context) {
-	dbName, err := config.MongoDBFromURI(d.cfg.MongoURI)
+	dbName, err := config.MongoDBFromURI(d.cfg.Mongo.URI)
 	if err != nil {
 		d.logger.WithError(err).Warn("daemon: remote-config sync disabled (bad mongoURI)")
 		return
@@ -234,8 +234,8 @@ func (d *Daemon) syncRemoteConfig(ctx context.Context) {
 				}
 				d.filter.Store(newFilter)
 				d.logger.WithFields(logrus.Fields{
-					"filter_include": merged.FilterInclude,
-					"filter_exclude": merged.FilterExclude,
+					"filter_include": merged.Filter.Include,
+					"filter_exclude": merged.Filter.Exclude,
 				}).Info("daemon: hot-reloaded filter from remote config")
 			}
 			current = merged

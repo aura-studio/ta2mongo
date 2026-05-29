@@ -234,14 +234,11 @@ func newTestConfig(mockURL, dbName, runID string) config.Config {
 	pollInterval := 5 * time.Millisecond
 	pollTimeout := 10 * time.Second
 	return config.Config{
-		Mode:           config.ModeBackfill,
-		MongoURI:       testMongoURI + "/" + dbName,
-		BatchSize:      100,
-		BatchWorkers:   2,
-		FlushInterval:  100 * time.Millisecond,
-		MaxElapsedTime: 5 * time.Second,
-		LogLevel:       "warn",
-		TailMode:       config.TailModeHybrid,
+		Mode:     config.ModeBackfill,
+		Mongo:    config.MongoConfig{URI: testMongoURI + "/" + dbName, MaxElapsedTime: 5 * time.Second},
+		Pipeline: config.PipelineConfig{BatchSize: 100, BatchWorkers: 2, FlushInterval: 100 * time.Millisecond, DeadLetterCap: 128},
+		Logging:  config.LoggingConfig{Level: "warn"},
+		Source:   config.SourceConfig{TailMode: config.TailModeHybrid},
 		Backfill: config.BackfillConfig{
 			APIBaseURL:         mockURL,
 			Token:              "test-token",
@@ -303,7 +300,7 @@ func TestRunner_HappyPath_SingleDay_SinglePage(t *testing.T) {
 	dbName := uniqueDBName()
 	cfg := newTestConfig(mockTA.URL(), dbName, "happy-1")
 	cfg.Backfill.PartDateRange = config.DateRange{Start: "2026-05-01", End: "2026-05-01"}
-	defer dropTestDB(t, cfg.MongoURI)
+	defer dropTestDB(t, cfg.Mongo.URI)
 
 	rows := [][]interface{}{
 		buildEventRow("u-1", "acc-a", "login", 5, "CN"),
@@ -331,7 +328,7 @@ func TestRunner_HappyPath_SingleDay_SinglePage(t *testing.T) {
 	}
 
 	// Verify event docs.
-	mc, _ := mongo.Connect(ctx, options.Client().ApplyURI(cfg.MongoURI))
+	mc, _ := mongo.Connect(ctx, options.Client().ApplyURI(cfg.Mongo.URI))
 	defer mc.Disconnect(ctx)
 	db := mc.Database(dbName)
 
@@ -379,7 +376,7 @@ func TestRunner_MultiDay_MultiPage(t *testing.T) {
 	dbName := uniqueDBName()
 	cfg := newTestConfig(mockTA.URL(), dbName, "multi-1")
 	cfg.Backfill.PartDateRange = config.DateRange{Start: "2026-05-01", End: "2026-05-02"}
-	defer dropTestDB(t, cfg.MongoURI)
+	defer dropTestDB(t, cfg.Mongo.URI)
 
 	// Day 1: 2 pages of 2 rows each.
 	mockTA.SetResponse(&fakeTask{
@@ -422,7 +419,7 @@ func TestRunner_MultiDay_MultiPage(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	mc, _ := mongo.Connect(ctx, options.Client().ApplyURI(cfg.MongoURI))
+	mc, _ := mongo.Connect(ctx, options.Client().ApplyURI(cfg.Mongo.URI))
 	defer mc.Disconnect(ctx)
 	count, _ := mc.Database(dbName).Collection("event").CountDocuments(ctx, bson.M{})
 	if count != 5 {
@@ -440,7 +437,7 @@ func TestRunner_TaskExpiry_Resubmits_AndDedupsViaUUID(t *testing.T) {
 	dbName := uniqueDBName()
 	cfg := newTestConfig(mockTA.URL(), dbName, "expire-1")
 	cfg.Backfill.PartDateRange = config.DateRange{Start: "2026-05-01", End: "2026-05-01"}
-	defer dropTestDB(t, cfg.MongoURI)
+	defer dropTestDB(t, cfg.Mongo.URI)
 
 	// First task: returns 1 page successfully, then expires on the second page.
 	mockTA.SetResponse(&fakeTask{
@@ -486,7 +483,7 @@ func TestRunner_TaskExpiry_Resubmits_AndDedupsViaUUID(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	mc, _ := mongo.Connect(ctx, options.Client().ApplyURI(cfg.MongoURI))
+	mc, _ := mongo.Connect(ctx, options.Client().ApplyURI(cfg.Mongo.URI))
 	defer mc.Disconnect(ctx)
 	count, _ := mc.Database(dbName).Collection("event").CountDocuments(ctx, bson.M{})
 	if count != 3 {
@@ -501,7 +498,7 @@ func TestRunner_ResumeAfterRestart(t *testing.T) {
 	dbName := uniqueDBName()
 	cfg := newTestConfig(mockTA.URL(), dbName, "resume-1")
 	cfg.Backfill.PartDateRange = config.DateRange{Start: "2026-05-01", End: "2026-05-03"}
-	defer dropTestDB(t, cfg.MongoURI)
+	defer dropTestDB(t, cfg.Mongo.URI)
 
 	// Run 1: only feed responses for the first 2 days; the third day will be
 	// "pending" and the runner exits after them.
@@ -553,7 +550,7 @@ func TestRunner_ResumeAfterRestart(t *testing.T) {
 		_ = r.Shutdown()
 	}
 
-	mc, _ := mongo.Connect(ctx, options.Client().ApplyURI(cfg.MongoURI))
+	mc, _ := mongo.Connect(ctx, options.Client().ApplyURI(cfg.Mongo.URI))
 	defer mc.Disconnect(ctx)
 	count, _ := mc.Database(dbName).Collection("event").CountDocuments(ctx, bson.M{})
 	if count != 5 {
@@ -597,8 +594,8 @@ func TestRunner_FilterPushdownAndLocalAgree(t *testing.T) {
 	cfg := newTestConfig(mockTA.URL(), dbName, "filter-1")
 	cfg.Backfill.PartDateRange = config.DateRange{Start: "2026-05-01", End: "2026-05-01"}
 	// Only keep events with country == "CN".
-	cfg.FilterInclude = []string{`country == "CN"`}
-	defer dropTestDB(t, cfg.MongoURI)
+	cfg.Filter.Include = []string{`country == "CN"`}
+	defer dropTestDB(t, cfg.Mongo.URI)
 
 	// In real life the SQL pushdown would filter server-side. Our mock does
 	// NOT honour SQL (it returns whatever rows we feed). So we feed mixed
@@ -629,7 +626,7 @@ func TestRunner_FilterPushdownAndLocalAgree(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	mc, _ := mongo.Connect(ctx, options.Client().ApplyURI(cfg.MongoURI))
+	mc, _ := mongo.Connect(ctx, options.Client().ApplyURI(cfg.Mongo.URI))
 	defer mc.Disconnect(ctx)
 	count, _ := mc.Database(dbName).Collection("event").CountDocuments(ctx, bson.M{})
 	if count != 2 {
@@ -661,7 +658,7 @@ func TestRunner_PaginateMode_SendsPageSizeOnSubmit(t *testing.T) {
 	cfg.Backfill.PageSize = 5000
 	pag := true
 	cfg.Backfill.Paginate = &pag
-	defer dropTestDB(t, cfg.MongoURI)
+	defer dropTestDB(t, cfg.Mongo.URI)
 
 	// Two pages of data — the runner should fetch both, driven by the
 	// pageCount the mock reports.
@@ -695,7 +692,7 @@ func TestRunner_PaginateMode_SendsPageSizeOnSubmit(t *testing.T) {
 		t.Errorf("submit pageSize = %q, want \"5000\" (paginate mode must send pageSize)", gotPageSize)
 	}
 
-	mc, _ := mongo.Connect(ctx, options.Client().ApplyURI(cfg.MongoURI))
+	mc, _ := mongo.Connect(ctx, options.Client().ApplyURI(cfg.Mongo.URI))
 	defer mc.Disconnect(ctx)
 	count, _ := mc.Database(dbName).Collection("event").CountDocuments(ctx, bson.M{})
 	if count != 2 {
@@ -713,7 +710,7 @@ func TestRunner_NoPaginateMode_OmitsPageSizeOnSubmit(t *testing.T) {
 	cfg.Backfill.PageSize = 10000
 	pag := false
 	cfg.Backfill.Paginate = &pag
-	defer dropTestDB(t, cfg.MongoURI)
+	defer dropTestDB(t, cfg.Mongo.URI)
 
 	// One page holding the whole result set (server "no pagination" mode).
 	mockTA.SetResponse(&fakeTask{
@@ -749,7 +746,7 @@ func TestRunner_NoPaginateMode_OmitsPageSizeOnSubmit(t *testing.T) {
 		t.Errorf("submit pageSize = %q, want empty (no-paginate mode must omit pageSize)", gotPageSize)
 	}
 
-	mc, _ := mongo.Connect(ctx, options.Client().ApplyURI(cfg.MongoURI))
+	mc, _ := mongo.Connect(ctx, options.Client().ApplyURI(cfg.Mongo.URI))
 	defer mc.Disconnect(ctx)
 	count, _ := mc.Database(dbName).Collection("event").CountDocuments(ctx, bson.M{})
 	if count != 3 {

@@ -148,11 +148,15 @@ func New(ctx context.Context, optFns ...Option) (*Client, error) {
 	// Build a minimal config for the store (only retry settings matter).
 	// We provide batch tuning defaults; ingest itself doesn't use the daemon batch flusher.
 	cfg := config.Config{
-		MongoURI:       opts.URI,
-		MaxElapsedTime: opts.MaxElapsedTime,
-		BatchSize:      opts.BatchSize,
-		BatchWorkers:   1,
-		FlushInterval:  time.Second,
+		Mongo: config.MongoConfig{
+			URI:            opts.URI,
+			MaxElapsedTime: opts.MaxElapsedTime,
+		},
+		Pipeline: config.PipelineConfig{
+			BatchSize:     opts.BatchSize,
+			BatchWorkers:  1,
+			FlushInterval: time.Second,
+		},
 	}
 
 	st := store.New(db, cfg, opts.Logger)

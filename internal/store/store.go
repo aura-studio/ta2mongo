@@ -91,7 +91,7 @@ func (s *Store) bulkWrite(ctx context.Context, coll *mongo.Collection, models []
 	bo := backoff.NewExponentialBackOff()
 	bo.InitialInterval = 200 * time.Millisecond
 	bo.MaxInterval = 2 * time.Second
-	bo.MaxElapsedTime = s.cfg.MaxElapsedTime
+	bo.MaxElapsedTime = s.cfg.Mongo.MaxElapsedTime
 	bo.Reset()
 
 	err := backoff.Retry(op, backoff.WithContext(bo, ctx))

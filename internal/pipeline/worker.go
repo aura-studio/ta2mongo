@@ -74,7 +74,7 @@ func RunWorkers(ctx context.Context, cfg config.Config, st *store.Store,
 		stats = NoopStats{}
 	}
 
-	workerCount := cfg.BatchWorkers
+	workerCount := cfg.Pipeline.BatchWorkers
 	chSize := cfg.BatchChannelSize()
 
 	// Create per-worker channels for affinity-based routing.
@@ -106,10 +106,10 @@ func worker(ctx context.Context, cfg config.Config, st *store.Store,
 ) {
 	userBatch := NewBatch(cfg.BatchSizeMax())
 	eventBatch := NewBatch(cfg.BatchSizeMax())
-	deadBatch := NewBatch(128) // smaller capacity for dead letters
+	deadBatch := NewBatch(cfg.Pipeline.DeadLetterCap)
 
 	lastFlush := time.Now()
-	flushInterval := cfg.FlushInterval
+	flushInterval := cfg.Pipeline.FlushInterval
 	invalidCount := 0
 
 	// flush writes accumulated batches to MongoDB and resets them.
@@ -196,7 +196,7 @@ func worker(ctx context.Context, cfg config.Config, st *store.Store,
 			backlog := len(lineCh)
 			threshold := dynamicbatch.ComputeFlushThreshold(
 				cfg.BatchSizeMin(),
-				cfg.BatchSize,
+				cfg.Pipeline.BatchSize,
 				cfg.BatchSizeMax(),
 				backlog,
 				cfg.BatchChannelSize(),

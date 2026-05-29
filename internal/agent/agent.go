@@ -35,11 +35,11 @@ func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Agent,
 	if cfg.InstanceID == "" {
 		return nil, fmt.Errorf("agent: TANGO_INSTANCE_ID is required")
 	}
-	mc, err := mongo.Connect(ctx, options.Client().ApplyURI(cfg.MongoURI))
+	mc, err := mongo.Connect(ctx, options.Client().ApplyURI(cfg.Mongo.URI).SetConnectTimeout(cfg.Mongo.ConnectTimeout).SetServerSelectionTimeout(cfg.Mongo.ServerSelectionTimeout))
 	if err != nil {
 		return nil, fmt.Errorf("agent: connect mongo: %w", err)
 	}
-	dbName, err := config.MongoDBFromURI(cfg.MongoURI)
+	dbName, err := config.MongoDBFromURI(cfg.Mongo.URI)
 	if err != nil {
 		_ = mc.Disconnect(context.Background())
 		return nil, fmt.Errorf("agent: %w", err)
@@ -303,10 +303,10 @@ func decodePayload(payload map[string]any, target any) error {
 // overlayFilters lets a task payload set top-level filterInclude/filterExclude.
 func overlayFilters(payload map[string]any, cfg *config.Config) {
 	if v, ok := payload["filterInclude"]; ok {
-		cfg.FilterInclude = toStringSlice(v)
+		cfg.Filter.Include = toStringSlice(v)
 	}
 	if v, ok := payload["filterExclude"]; ok {
-		cfg.FilterExclude = toStringSlice(v)
+		cfg.Filter.Exclude = toStringSlice(v)
 	}
 }
 

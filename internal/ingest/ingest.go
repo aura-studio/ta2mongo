@@ -50,12 +50,12 @@ func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Ingest
 		return nil, fmt.Errorf("ingest: %w", err)
 	}
 
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(cfg.MongoURI))
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(cfg.Mongo.URI).SetConnectTimeout(cfg.Mongo.ConnectTimeout).SetServerSelectionTimeout(cfg.Mongo.ServerSelectionTimeout))
 	if err != nil {
 		return nil, fmt.Errorf("ingest: connect to mongo: %w", err)
 	}
 
-	dbName, err := config.MongoDBFromURI(cfg.MongoURI)
+	dbName, err := config.MongoDBFromURI(cfg.Mongo.URI)
 	if err != nil {
 		return nil, fmt.Errorf("ingest: %w", err)
 	}
@@ -82,7 +82,7 @@ func NewFromClient(client *mongo.Client, cfg config.Config, logger *logrus.Logge
 		return nil, fmt.Errorf("ingest: %w", err)
 	}
 
-	dbName, err := config.MongoDBFromURI(cfg.MongoURI)
+	dbName, err := config.MongoDBFromURI(cfg.Mongo.URI)
 	if err != nil {
 		return nil, fmt.Errorf("ingest: %w", err)
 	}

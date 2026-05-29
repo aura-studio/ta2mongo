@@ -33,9 +33,10 @@ import (
 // forbiddenKeys are top-level config keys that the remote document may not
 // override. They are silently dropped from the fetched document before merge.
 var forbiddenKeys = map[string]struct{}{
-	"mongoURI":     {},
+	"mongo":        {}, // connection block is local-only
 	"remoteConfig": {},
 	"mode":         {},
+	"instanceID":   {},
 }
 
 // Fetch loads the override document by _id from the given collection. It
@@ -94,8 +95,8 @@ func Merge(base config.Config, doc map[string]any) (config.Config, error) {
 // configs — used by the daemon hot-reload loop to decide if the active filter
 // must be rebuilt.
 func FilterChanged(a, b config.Config) bool {
-	return !equalStrings(a.FilterInclude, b.FilterInclude) ||
-		!equalStrings(a.FilterExclude, b.FilterExclude)
+	return !equalStrings(a.Filter.Include, b.Filter.Include) ||
+		!equalStrings(a.Filter.Exclude, b.Filter.Exclude)
 }
 
 func equalStrings(a, b []string) bool {

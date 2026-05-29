@@ -35,8 +35,7 @@ func (c *Client) PublishConfig(ctx context.Context, doc map[string]any) error {
 		return fmt.Errorf("client: PublishConfig: empty document")
 	}
 
-	inc := toStringSlice(doc["filterInclude"])
-	exc := toStringSlice(doc["filterExclude"])
+	inc, exc := extractFilterExprs(doc)
 	if _, err := filter.New(inc, exc); err != nil {
 		return fmt.Errorf("client: refusing to publish, filter does not compile: %w", err)
 	}
@@ -71,9 +70,22 @@ func (c *Client) PublishConfig(ctx context.Context, doc map[string]any) error {
 // narrowing what each tango collects.
 func (c *Client) PublishFilter(ctx context.Context, include, exclude []string) error {
 	return c.PublishConfig(ctx, map[string]any{
-		"filterInclude": include,
-		"filterExclude": exclude,
+		"filter": map[string]any{
+			"include": include,
+			"exclude": exclude,
+		},
 	})
+}
+
+// extractFilterExprs digs filter.include / filter.exclude expression lists out
+// of a published doc (which mirrors the nested config shape) for pre-publish
+// compilation. Returns empty slices when absent.
+func extractFilterExprs(doc map[string]any) (include, exclude []string) {
+	f, ok := doc["filter"].(map[string]any)
+	if !ok {
+		return nil, nil
+	}
+	return toStringSlice(f["include"]), toStringSlice(f["exclude"])
 }
 
 // GetPublishedConfig returns the currently published override document, or

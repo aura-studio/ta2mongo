@@ -197,13 +197,15 @@ func doGlobMatch(patParts, nameParts []string) bool {
 // Tailer
 // ---------------------------------------------------------------------------
 
-// pollInterval is how often the tail loop re-reads a file after reaching
-// EOF. A short interval avoids the notification-drop race present in
-// event-driven watchers (inotify/kqueue) while keeping CPU usage negligible.
-const pollInterval = 200 * time.Millisecond
+// defaultPollInterval is how often the tail loop re-reads a file after
+// reaching EOF when no explicit interval is configured. A short interval
+// avoids the notification-drop race present in event-driven watchers while
+// keeping CPU usage negligible.
+const defaultPollInterval = 200 * time.Millisecond
 
-// maxLineSize is the maximum line length (in bytes) the scanner will accept.
-const maxLineSize = 1 << 20 // 1 MiB
+// defaultMaxLineSize is the maximum line length (bytes) the scanner accepts
+// when none is configured.
+const defaultMaxLineSize = 1 << 20 // 1 MiB
 
 // Tailer watches for log files matching glob patterns and tails them,
 // sending new lines to an output channel.
@@ -213,13 +215,17 @@ type Tailer struct {
 	tailMode       string // config.TailModePoll or config.TailModeEvent
 	logger         *logrus.Logger
 
+	pollInterval time.Duration // EOF re-read cadence (poll/hybrid modes)
+	maxLineSize  int           // scanner buffer cap per line
+
 	mu     sync.Mutex
 	tailed map[string]struct{} // tracks which files are already being tailed
 }
 
 // New creates a Tailer that watches the given glob patterns.
 // tailMode selects the file-watching strategy: config.TailModePoll (default)
-// or config.TailModeEvent.
+// or config.TailModeEvent. Tuning (poll interval, max line size) defaults to
+// sane values; override with WithTuning.
 func New(patterns []string, rescanInterval time.Duration, tailMode string, logger *logrus.Logger) *Tailer {
 	if tailMode == "" {
 		tailMode = config.TailModePoll
@@ -229,8 +235,22 @@ func New(patterns []string, rescanInterval time.Duration, tailMode string, logge
 		rescanInterval: rescanInterval,
 		tailMode:       tailMode,
 		logger:         logger,
+		pollInterval:   defaultPollInterval,
+		maxLineSize:    defaultMaxLineSize,
 		tailed:         make(map[string]struct{}),
 	}
+}
+
+// WithTuning overrides the poll interval and max line size. Non-positive
+// values keep the current default. Returns the receiver for chaining.
+func (t *Tailer) WithTuning(pollInterval time.Duration, maxLineBytes int) *Tailer {
+	if pollInterval > 0 {
+		t.pollInterval = pollInterval
+	}
+	if maxLineBytes > 0 {
+		t.maxLineSize = maxLineBytes
+	}
+	return t
 }
 
 // Run discovers and tails files, sending lines to the returned channel.
@@ -319,7 +339,7 @@ func (t *Tailer) tailFile(ctx context.Context, path string, out chan<- string) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(pollInterval):
+		case <-time.After(t.pollInterval):
 		}
 	}
 }
@@ -339,7 +359,7 @@ func (t *Tailer) readFollowFile(ctx context.Context, path string, out chan<- str
 	}
 
 	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
+	scanner.Buffer(make([]byte, 0, 64*1024), t.maxLineSize)
 
 	for {
 		// Read all available complete lines.
@@ -375,7 +395,7 @@ func (t *Tailer) readFollowFile(ctx context.Context, path string, out chan<- str
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(pollInterval):
+		case <-time.After(t.pollInterval):
 		}
 
 		// After the sleep the file position is still at the last read
@@ -407,7 +427,7 @@ func (t *Tailer) readFollowFile(ctx context.Context, path string, out chan<- str
 		}
 
 		scanner = bufio.NewScanner(f)
-		scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
+		scanner.Buffer(make([]byte, 0, 64*1024), t.maxLineSize)
 	}
 }
 
@@ -427,7 +447,7 @@ func (t *Tailer) tailFileEvent(ctx context.Context, path string, out chan<- stri
 		MustExist:   false,
 		Poll:        false,
 		Logger:      tail.DiscardingLogger,
-		MaxLineSize: maxLineSize,
+		MaxLineSize: t.maxLineSize,
 	})
 	if err != nil {
 		t.logger.WithError(err).WithField("path", path).Warn("tailer: failed to start event-mode tailing")
@@ -499,7 +519,7 @@ func (t *Tailer) tailFileHybrid(ctx context.Context, path string, out chan<- str
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(pollInterval):
+			case <-time.After(t.pollInterval):
 			}
 			continue
 		}
@@ -514,7 +534,7 @@ func (t *Tailer) tailFileHybrid(ctx context.Context, path string, out chan<- str
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(pollInterval):
+			case <-time.After(t.pollInterval):
 			}
 		}
 		// Loop back to restart the event watcher from the updated position.
@@ -532,7 +552,7 @@ func (t *Tailer) tailFileHybridEvent(ctx context.Context, path string, out chan<
 		MustExist:   false,
 		Poll:        false,
 		Logger:      tail.DiscardingLogger,
-		MaxLineSize: maxLineSize,
+		MaxLineSize: t.maxLineSize,
 	})
 	if err != nil {
 		return false
@@ -594,7 +614,7 @@ func (t *Tailer) drainByPoll(ctx context.Context, path string, out chan<- string
 	}
 
 	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
+	scanner.Buffer(make([]byte, 0, 64*1024), t.maxLineSize)
 
 	for scanner.Scan() {
 		line := scanner.Text()

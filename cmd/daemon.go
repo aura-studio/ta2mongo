@@ -40,7 +40,7 @@ func runDaemonWithConfig(cfg config.Config, logger *logrus.Logger, ctx context.C
 	logger.WithFields(logrus.Fields{
 		"pid":      pid,
 		"go_procs": runtime.GOMAXPROCS(0),
-		"mongo_uri": maskURI(cfg.MongoURI),
+		"mongo_uri": maskURI(cfg.Mongo.URI),
 	}).Info("daemon: process starting")
 
 	d, err := daemon.New(ctx, cfg, logger)

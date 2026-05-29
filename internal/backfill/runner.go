@@ -76,7 +76,7 @@ func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Runner
 		return nil, err
 	}
 
-	filterWhere, err := filter.CompileToSQL(cfg.FilterInclude, cfg.FilterExclude)
+	filterWhere, err := filter.CompileToSQL(cfg.Filter.Include, cfg.Filter.Exclude)
 	if err != nil {
 		_ = r.mongo.Disconnect(context.Background())
 		return nil, fmt.Errorf("backfill: %w", err)
@@ -118,11 +118,11 @@ func newBase(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Ru
 		return nil, nil, fmt.Errorf("backfill: %w", err)
 	}
 
-	mc, err := mongo.Connect(ctx, options.Client().ApplyURI(cfg.MongoURI))
+	mc, err := mongo.Connect(ctx, options.Client().ApplyURI(cfg.Mongo.URI).SetConnectTimeout(cfg.Mongo.ConnectTimeout).SetServerSelectionTimeout(cfg.Mongo.ServerSelectionTimeout))
 	if err != nil {
 		return nil, nil, fmt.Errorf("backfill: connect mongo: %w", err)
 	}
-	dbName, err := config.MongoDBFromURI(cfg.MongoURI)
+	dbName, err := config.MongoDBFromURI(cfg.Mongo.URI)
 	if err != nil {
 		_ = mc.Disconnect(context.Background())
 		return nil, nil, fmt.Errorf("backfill: %w", err)
@@ -279,7 +279,7 @@ func (r *Runner) runDay(ctx context.Context, day string) error {
 		default:
 		}
 
-		rows, err := r.ingestPage(ctx, progress.TaskID, pageID, info.ResultStat.Headers)
+		rows, err := r.ingestPageWithRetry(ctx, progress.TaskID, pageID, info.ResultStat.Headers)
 		if err != nil {
 			if errors.Is(err, ErrTaskExpired) {
 				r.logger.WithField("day", day).Warn("backfill: task expired mid-paginate; resubmitting from page 0")
@@ -339,7 +339,7 @@ func (r *Runner) ExecuteSQL(ctx context.Context, sql string) (int64, error) {
 			return total, ctx.Err()
 		default:
 		}
-		rows, err := r.ingestPage(ctx, taskID, pageID, info.ResultStat.Headers)
+		rows, err := r.ingestPageWithRetry(ctx, taskID, pageID, info.ResultStat.Headers)
 		if err != nil {
 			r.stats.HTTPErrors.Add(1)
 			return total, fmt.Errorf("page %d: %w", pageID, err)
@@ -406,6 +406,40 @@ func (r *Runner) awaitFinished(ctx context.Context, taskID string) (*TaskInfoRes
 // accumulates before issuing a BulkWrite. Sized to cap per-flush latency
 // while keeping the per-row overhead reasonable.
 const userFlushBatch = 1000
+
+// ingestPageWithRetry wraps ingestPage with bounded retries on transient
+// errors. ErrTaskExpired is never retried here — it bubbles up so the caller
+// can resubmit the whole task. Re-fetching a page is safe: #uuid / #user_id
+// upserts dedup any rows that were already written before the failure.
+func (r *Runner) ingestPageWithRetry(ctx context.Context, taskID string, pageID int, headers []string) (int, error) {
+	attempts := r.cfg.Backfill.PageRetries
+	if attempts < 1 {
+		attempts = 1
+	}
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		rows, err := r.ingestPage(ctx, taskID, pageID, headers)
+		if err == nil {
+			return rows, nil
+		}
+		if errors.Is(err, ErrTaskExpired) || ctx.Err() != nil {
+			return rows, err // not retryable here
+		}
+		lastErr = err
+		if attempt < attempts {
+			backoff := time.Duration(attempt) * time.Second
+			r.logger.WithError(err).WithFields(logrus.Fields{
+				"taskId": taskID, "pageId": pageID, "attempt": attempt, "retry_in": backoff,
+			}).Warn("backfill: page failed; retrying")
+			select {
+			case <-ctx.Done():
+				return 0, ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
+	}
+	return 0, fmt.Errorf("page %d failed after %d attempts: %w", pageID, attempts, lastErr)
+}
 
 // ingestPage routes one chunk's result rows into Mongo. The event-table path
 // goes through the standard parse → filter → identity → BulkWrite pipeline
@@ -581,7 +615,7 @@ func (r *Runner) buildDaySQL(day string) string {
 			predicates = append(predicates, fmt.Sprintf(`"#event_time" <= '%s'`, end))
 		}
 	}
-	if filterWhere, _ := filter.CompileToSQL(r.cfg.FilterInclude, r.cfg.FilterExclude); filterWhere != "" {
+	if filterWhere, _ := filter.CompileToSQL(r.cfg.Filter.Include, r.cfg.Filter.Exclude); filterWhere != "" {
 		predicates = append(predicates, filterWhere)
 	}
 	if len(predicates) > 0 {
