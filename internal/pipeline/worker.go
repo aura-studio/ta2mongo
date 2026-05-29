@@ -64,9 +64,10 @@ type WriteOptions struct {
 }
 
 // RunWorkers launches N workers with affinity-based dispatch and blocks
-// until all workers finish. A nil flt is treated as a no-op filter.
+// until all workers finish. A nil flt is treated as a no-op filter. flt is a
+// Holder so the active filter can be hot-swapped while workers run.
 func RunWorkers(ctx context.Context, cfg config.Config, st *store.Store,
-	parser *talog.Parser, flt *filter.Filter, logger *logrus.Logger,
+	parser *talog.Parser, flt *filter.Holder, logger *logrus.Logger,
 	lineCh <-chan string, stats StatsCollector, opts WriteOptions,
 ) {
 	if stats == nil {
@@ -100,7 +101,7 @@ func RunWorkers(ctx context.Context, cfg config.Config, st *store.Store,
 
 // worker processes lines from a channel, batches them, and flushes to MongoDB.
 func worker(ctx context.Context, cfg config.Config, st *store.Store,
-	parser *talog.Parser, flt *filter.Filter, logger *logrus.Logger,
+	parser *talog.Parser, flt *filter.Holder, logger *logrus.Logger,
 	lineCh <-chan string, stats StatsCollector, opts WriteOptions,
 ) {
 	userBatch := NewBatch(cfg.BatchSizeMax())

@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"rocket-nano/tools/tango/config"
+	"rocket-nano/tools/tango/internal/remoteconfig"
 )
 
 var configFile string
@@ -86,7 +87,18 @@ func setupWithMode(cmd *cobra.Command, mode string) (config.Config, *logrus.Logg
 	logger := newLogger(cfg)
 
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
-	return cfg, logger, ctx, cancel, nil
+
+	// Apply the MongoDB-backed remote override (no-op unless enabled). This
+	// runs for every mode at startup; daemon additionally hot-reloads later.
+	merged, err := remoteconfig.ApplyAtStartup(ctx, cfg, logger)
+	if err != nil {
+		cancel()
+		return config.Config{}, nil, nil, nil, err
+	}
+	// Remote override may change the log level.
+	logger = newLogger(merged)
+
+	return merged, logger, ctx, cancel, nil
 }
 
 // newLogger creates a structured logrus logger from the config.

@@ -113,3 +113,31 @@ backfill:
 
   # 是否关闭本地 filter 兜底（关掉只信 SQL 下推）
   skipLocalFilter: false
+
+# remoteConfig: 从 MongoDB 拉取一个 JSON 配置文档，逐字段覆盖本地 yaml
+# （远程文档里没写的字段保留本地值）。用于让数据中心动态发布过滤规则，
+# 各 tango 实例无需改本地文件、无需重启即可调整采集范围。
+#
+# 覆盖时机：
+#   - 启动时：所有模式都会拉一次并 merge。
+#   - 运行中：仅 daemon 模式每隔 syncInterval 再拉一次，且**只有 filter
+#     （filterInclude/filterExclude）会热生效**；其余字段改动会记日志，
+#     下次重启才生效。
+#
+# 不可被远程覆盖的字段（必须来自本地）：mongoURI、remoteConfig、mode
+# —— 因为要先用本地 mongoURI 连上库，才能读到这份远程配置。
+#
+# 配置文档形如（_id 固定为 documentID）：
+#   { "_id": "default",
+#     "filterInclude": ["#type == \"track\" && #event_name == \"PaymentOrderState\"",
+#                       "#type startsWith \"user_\""],
+#     "filterExclude": [] }
+remoteConfig:
+  # 是否启用远程配置覆盖；false 时完全使用本地配置，不连库取配置
+  enabled: false
+  # 存放配置文档的集合名，默认 _tango_config
+  collection: "_tango_config"
+  # 全局共享的单一配置文档 _id，默认 default
+  documentID: "default"
+  # daemon 模式重新拉取并热更 filter 的间隔，默认 1h
+  syncInterval: "1h"

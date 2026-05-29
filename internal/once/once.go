@@ -78,7 +78,7 @@ type Runner struct {
 	logger *logrus.Logger
 	store  *store.Store
 	parser *talog.Parser
-	filter *filter.Filter
+	filter *filter.Holder
 	client *mongo.Client
 	stats  Stats
 }
@@ -107,7 +107,7 @@ func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Runner
 		logger: logger,
 		store:  st,
 		parser: talog.NewParser(),
-		filter: flt,
+		filter: filter.NewHolder(flt),
 		client: client,
 	}, nil
 }

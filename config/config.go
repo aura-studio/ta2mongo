@@ -45,6 +45,13 @@ const (
 // checkpoints when the user does not override it.
 const DefaultProgressCollection = "_backfill_progress"
 
+// Remote-config defaults.
+const (
+	DefaultRemoteConfigCollection = "_tango_config"
+	DefaultRemoteConfigDocumentID = "default"
+	DefaultRemoteConfigInterval   = time.Hour
+)
+
 // TailMode constants control how the tailer watches for file changes.
 const (
 	// TailModeHybrid uses hpcloud/tail's event-driven watcher as the
@@ -118,6 +125,34 @@ type Config struct {
 	// through the same parse → filter → write pipeline as daemon/once. Only
 	// consulted when the backfill subcommand is invoked.
 	Backfill BackfillConfig `mapstructure:"backfill"`
+
+	// RemoteConfig enables a control-plane override: a single JSON document in
+	// MongoDB whose fields are merged on top of this configuration at startup
+	// (per-field; absent fields keep their local value). In daemon mode the
+	// document is re-fetched every SyncInterval and the filter is hot-reloaded
+	// without a restart, so a data centre can progressively widen which records
+	// are collected. Connection fields (mongoURI, proxy, remoteConfig itself)
+	// are never overridable remotely — they must come from the local file.
+	RemoteConfig RemoteConfig `mapstructure:"remoteConfig"`
+}
+
+// RemoteConfig controls the MongoDB-backed configuration override.
+type RemoteConfig struct {
+	// Enabled turns the remote override on. When false, the local file/env/flag
+	// configuration is used verbatim and MongoDB is never consulted for config.
+	Enabled bool `mapstructure:"enabled"`
+
+	// Collection is the MongoDB collection holding the config document.
+	// Defaults to "_tango_config".
+	Collection string `mapstructure:"collection"`
+
+	// DocumentID is the _id of the single shared config document.
+	// Defaults to "default".
+	DocumentID string `mapstructure:"documentID"`
+
+	// SyncInterval is how often daemon mode re-fetches the document to
+	// hot-reload the filter. Defaults to 1h.
+	SyncInterval time.Duration `mapstructure:"syncInterval"`
 }
 
 // BackfillConfig holds settings for the historical-data backfill mode.
@@ -357,6 +392,19 @@ func applyDefaults(c *Config) {
 		c.TailMode = TailModeHybrid
 	}
 	applyBackfillDefaults(&c.Backfill)
+	applyRemoteConfigDefaults(&c.RemoteConfig)
+}
+
+func applyRemoteConfigDefaults(rc *RemoteConfig) {
+	if rc.Collection == "" {
+		rc.Collection = DefaultRemoteConfigCollection
+	}
+	if rc.DocumentID == "" {
+		rc.DocumentID = DefaultRemoteConfigDocumentID
+	}
+	if rc.SyncInterval <= 0 {
+		rc.SyncInterval = DefaultRemoteConfigInterval
+	}
 }
 
 func applyBackfillDefaults(b *BackfillConfig) {

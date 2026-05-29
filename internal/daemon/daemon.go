@@ -16,6 +16,7 @@ import (
 	"rocket-nano/tools/tango/config"
 	"rocket-nano/tools/tango/internal/filter"
 	"rocket-nano/tools/tango/internal/pipeline"
+	"rocket-nano/tools/tango/internal/remoteconfig"
 	"rocket-nano/tools/tango/internal/store"
 	"rocket-nano/tools/tango/internal/tailer"
 	"rocket-nano/tools/tango/internal/talog"
@@ -78,7 +79,7 @@ type Daemon struct {
 	logger *logrus.Logger
 	store  *store.Store
 	parser *talog.Parser
-	filter *filter.Filter
+	filter *filter.Holder
 	client *mongo.Client
 }
 
@@ -104,8 +105,16 @@ func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Daemon
 	st := store.New(db, cfg, logger)
 	p := talog.NewParser()
 
-	return &Daemon{cfg: cfg, logger: logger, store: st, parser: p, filter: flt, client: client}, nil
+	return &Daemon{cfg: cfg, logger: logger, store: st, parser: p, filter: filter.NewHolder(flt), client: client}, nil
 }
+
+// Filter exposes the daemon's filter holder so the remote-config sync loop can
+// hot-swap the active filter at runtime.
+func (d *Daemon) Filter() *filter.Holder { return d.filter }
+
+// MongoClient exposes the underlying client so callers can reuse the
+// connection (e.g. the remote-config fetcher) without opening a second one.
+func (d *Daemon) MongoClient() *mongo.Client { return d.client }
 
 // Shutdown disconnects the MongoDB client. It must be called after Run returns
 // to ensure all final flushes complete before the connection is closed.
@@ -151,6 +160,13 @@ func (d *Daemon) Run(ctx context.Context) error {
 	reportDone := make(chan struct{})
 	go d.reportStats(ctx, stats, startTime, reportDone)
 
+	// Launch the remote-config hot-reload loop (no-op unless enabled). It
+	// periodically re-fetches the override document and swaps the active
+	// filter in place; other fields only take effect on the next restart.
+	if d.cfg.RemoteConfig.Enabled {
+		go d.syncRemoteConfig(ctx)
+	}
+
 	// Block until all workers finish.
 	pipeline.RunWorkers(ctx, d.cfg, d.store, d.parser, d.filter, d.logger, lineCh, stats, pipeline.WriteOptions{})
 
@@ -161,6 +177,70 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.logFinalStats(stats, startTime)
 
 	return nil
+}
+
+// syncRemoteConfig periodically re-fetches the remote override document and
+// hot-swaps the active filter when the include/exclude lists change. Non-filter
+// fields are reported but only take effect on the next restart (matching the
+// agreed "filter hot, rest on restart" policy). It returns when ctx is done.
+func (d *Daemon) syncRemoteConfig(ctx context.Context) {
+	dbName, err := config.MongoDBFromURI(d.cfg.MongoURI)
+	if err != nil {
+		d.logger.WithError(err).Warn("daemon: remote-config sync disabled (bad mongoURI)")
+		return
+	}
+	coll := d.client.Database(dbName).Collection(d.cfg.RemoteConfig.Collection)
+
+	ticker := time.NewTicker(d.cfg.RemoteConfig.SyncInterval)
+	defer ticker.Stop()
+
+	d.logger.WithFields(logrus.Fields{
+		"collection":    d.cfg.RemoteConfig.Collection,
+		"documentID":    d.cfg.RemoteConfig.DocumentID,
+		"sync_interval": d.cfg.RemoteConfig.SyncInterval,
+	}).Info("daemon: remote-config sync loop started")
+
+	// current is the most recently applied config; start from the boot config.
+	current := d.cfg
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			doc, err := remoteconfig.Fetch(ctx, coll, d.cfg.RemoteConfig.DocumentID)
+			if err != nil {
+				d.logger.WithError(err).Warn("daemon: remote-config fetch failed; keeping current")
+				continue
+			}
+			if doc == nil {
+				continue
+			}
+			merged, err := remoteconfig.Merge(current, doc)
+			if err != nil {
+				d.logger.WithError(err).Warn("daemon: remote-config merge failed; keeping current")
+				continue
+			}
+			if err := merged.Validate(); err != nil {
+				d.logger.WithError(err).Warn("daemon: remote-config invalid; keeping current")
+				continue
+			}
+
+			if remoteconfig.FilterChanged(current, merged) {
+				newFilter, ferr := merged.BuildFilter()
+				if ferr != nil {
+					d.logger.WithError(ferr).Warn("daemon: remote filter failed to compile; keeping current")
+					continue
+				}
+				d.filter.Store(newFilter)
+				d.logger.WithFields(logrus.Fields{
+					"filter_include": merged.FilterInclude,
+					"filter_exclude": merged.FilterExclude,
+				}).Info("daemon: hot-reloaded filter from remote config")
+			}
+			current = merged
+		}
+	}
 }
 
 // reportStats periodically logs processing statistics every statsReportInterval.

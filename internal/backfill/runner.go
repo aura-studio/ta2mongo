@@ -59,7 +59,7 @@ type Runner struct {
 	logger     *logrus.Logger
 	store      *store.Store
 	parser     *talog.Parser
-	filter     *filter.Filter
+	filter     *filter.Holder
 	client     *Client
 	mongo      *mongo.Client
 	checkpoint *Checkpoint
@@ -122,7 +122,7 @@ func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Runner
 		logger:     logger,
 		store:      st,
 		parser:     talog.NewParser(),
-		filter:     flt,
+		filter:     filter.NewHolder(flt),
 		client:     NewClient(cfg.Backfill.APIBaseURL, cfg.Backfill.Token, httpC),
 		mongo:      mc,
 		checkpoint: cp,
