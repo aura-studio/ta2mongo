@@ -212,7 +212,7 @@ func (r *Runner) runDay(ctx context.Context, day string) error {
 
 	// Acquire a valid taskId, either resuming an existing one or submitting fresh.
 	if progress.TaskID == "" || progress.Status == DayPending || progress.Status == DayFailed {
-		taskID, err := r.client.SubmitSQL(ctx, sql)
+		taskID, err := r.client.SubmitSQL(ctx, sql, r.cfg.Backfill.EffectivePageSize())
 		if err != nil {
 			r.stats.HTTPErrors.Add(1)
 			return fmt.Errorf("submit: %w", err)
@@ -261,15 +261,7 @@ func (r *Runner) runDay(ctx context.Context, day string) error {
 		default:
 		}
 
-		page, err := r.client.ResultPage(ctx, progress.TaskID, pageID, r.cfg.Backfill.PageSize)
-		if err == nil {
-			// ResultPage no longer returns metadata (the real TA endpoint
-			// is pure NDJSON rows), so reuse the headers and page metadata
-			// from the earlier TaskInfo call.
-			page.Headers = info.ResultStat.Headers
-			page.PageID = pageID
-			page.PageCount = progress.PageCount
-		}
+		rows, err := r.ingestPage(ctx, progress.TaskID, pageID, info.ResultStat.Headers)
 		if err != nil {
 			if errors.Is(err, ErrTaskExpired) {
 				r.logger.WithField("day", day).Warn("backfill: task expired mid-paginate; resubmitting from page 0")
@@ -279,10 +271,6 @@ func (r *Runner) runDay(ctx context.Context, day string) error {
 			return fmt.Errorf("page %d: %w", pageID, err)
 		}
 
-		rows, ferr := r.ingestPage(ctx, page)
-		if ferr != nil {
-			return fmt.Errorf("page %d ingest: %w", pageID, ferr)
-		}
 		r.stats.Pages.Add(1)
 		progress.PageID = pageID
 		progress.Rows += int64(rows)
@@ -300,7 +288,7 @@ func (r *Runner) runDay(ctx context.Context, day string) error {
 // resubmitDay clears the in-progress task state and starts the day over. The
 // #uuid unique index keeps already-written rows safely deduped.
 func (r *Runner) resubmitDay(ctx context.Context, day, sql string) error {
-	taskID, err := r.client.SubmitSQL(ctx, sql)
+	taskID, err := r.client.SubmitSQL(ctx, sql, r.cfg.Backfill.EffectivePageSize())
 	if err != nil {
 		r.stats.HTTPErrors.Add(1)
 		return fmt.Errorf("resubmit: %w", err)
@@ -346,107 +334,144 @@ func (r *Runner) awaitFinished(ctx context.Context, taskID string) (*TaskInfoRes
 	}
 }
 
-// ingestPage routes one page of result rows into Mongo. The event-table
-// path goes through the standard parse → filter → identity → BulkWrite
-// pipeline. The user-table path skips the parser (TA's v_user_<pid> uses
-// fields like #user_operation / #active_time that the event-shaped parser
-// rejects) and writes each row as a #user_id-keyed snapshot upsert.
-func (r *Runner) ingestPage(ctx context.Context, page *ResultPageResult) (int, error) {
+// userFlushBatch is the number of user-table snapshot upserts the runner
+// accumulates before issuing a BulkWrite. Sized to cap per-flush latency
+// while keeping the per-row overhead reasonable.
+const userFlushBatch = 1000
+
+// ingestPage routes one chunk's result rows into Mongo. The event-table path
+// goes through the standard parse → filter → identity → BulkWrite pipeline
+// (one page at a time). The user-table path skips the parser (TA's
+// v_user_<pid> uses fields like #user_operation / #active_time that the
+// event-shaped parser rejects) AND streams rows directly off the HTTP
+// response, flushing batches of userFlushBatch upserts so a mid-page network
+// failure cannot lose more than one batch.
+func (r *Runner) ingestPage(ctx context.Context, taskID string, pageID int, headers []string) (int, error) {
 	if r.cfg.Backfill.Table == config.BackfillTableUser {
-		return r.ingestUserPage(ctx, page)
+		return r.streamUserPage(ctx, taskID, pageID, headers)
 	}
-	return r.ingestEventPage(ctx, page)
+	return r.fetchAndIngestEventPage(ctx, taskID, pageID, headers)
 }
 
-func (r *Runner) ingestEventPage(ctx context.Context, page *ResultPageResult) (int, error) {
-	lineCh := make(chan string, r.cfg.Backfill.PageSize)
+// eventStreamBuffer is the per-worker channel buffer used when streaming rows
+// from a result page into the pipeline. Sized to absorb a few flush cycles
+// without blocking the HTTP read.
+const eventStreamBuffer = 2048
 
+func (r *Runner) fetchAndIngestEventPage(ctx context.Context, taskID string, pageID int, headers []string) (int, error) {
+	// The TA result-page endpoint returns one big NDJSON stream — pageCount is
+	// always 1 regardless of pageSize, so a network blip mid-page would
+	// otherwise lose the entire result. Stream rows directly into the worker
+	// pipeline so each batch reaches Mongo before the next row is read, and
+	// rely on #uuid dedup on retry.
+	lineCh := make(chan string, eventStreamBuffer)
+	workerDone := make(chan struct{})
 	go func() {
-		defer close(lineCh)
-		for _, row := range page.Rows {
-			line, err := EncodeRowAsJSONLine(page.Headers, row)
+		defer close(workerDone)
+		pipeline.RunWorkers(ctx, r.cfg, r.store, r.parser, r.filter, r.logger,
+			lineCh, &statsCollector{s: &r.stats},
+			pipeline.WriteOptions{ForceSkipExisting: r.cfg.Backfill.ForceSkip()})
+	}()
+
+	rows := 0
+	streamErr := r.client.StreamResultPage(ctx, taskID, pageID, r.cfg.Backfill.PageSize,
+		func(row []interface{}) error {
+			rows++
+			line, err := EncodeRowAsJSONLine(headers, row)
 			if err != nil {
 				r.logger.WithError(err).Debug("backfill: encode row")
-				continue
+				return nil
 			}
 			select {
 			case lineCh <- line:
+				return nil
 			case <-ctx.Done():
-				return
+				return ctx.Err()
 			}
-		}
-	}()
+		})
 
-	pipeline.RunWorkers(ctx, r.cfg, r.store, r.parser, r.filter, r.logger,
-		lineCh, &statsCollector{s: &r.stats},
-		pipeline.WriteOptions{ForceSkipExisting: r.cfg.Backfill.ForceSkip()})
-
-	return len(page.Rows), nil
+	close(lineCh)
+	<-workerDone
+	return rows, streamErr
 }
 
-func (r *Runner) ingestUserPage(ctx context.Context, page *ResultPageResult) (int, error) {
-	models := make([]mongo.WriteModel, 0, len(page.Rows))
-	userIDIdx := indexOf(page.Headers, "#user_id")
+func (r *Runner) streamUserPage(ctx context.Context, taskID string, pageID int, headers []string) (int, error) {
+	userIDIdx := indexOf(headers, "#user_id")
 	if userIDIdx < 0 {
 		return 0, fmt.Errorf("user-table backfill: #user_id column not present in result headers")
 	}
-
 	skip := r.cfg.Backfill.ForceSkip()
-	for _, row := range page.Rows {
-		r.stats.TotalLines.Add(1)
-		if len(row) != len(page.Headers) {
-			r.stats.ParseErrors.Add(1)
-			r.stats.DeadLetters.Add(1)
-			continue
-		}
-		userID := row[userIDIdx]
-		if userID == nil {
-			r.stats.ParseErrors.Add(1)
-			r.stats.DeadLetters.Add(1)
-			continue
-		}
+	coll := r.store.UserCollection()
 
-		doc := bson.M{}
-		for i, h := range page.Headers {
-			if i == userIDIdx {
-				continue
-			}
-			v := row[i]
-			if v == nil {
-				continue
-			}
-			doc[h] = v
+	batch := make([]mongo.WriteModel, 0, userFlushBatch)
+	flush := func() error {
+		if len(batch) == 0 {
+			return nil
 		}
-
-		// Optional local-filter pass (only when at least one rule is set).
-		if !r.cfg.Backfill.SkipLocalFilter && !r.filter.Empty() {
-			env := bson.M{"#user_id": userID}
-			for k, v := range doc {
-				env[k] = v
-			}
-			keep, ferr := r.filter.Keep(env)
-			if ferr != nil {
-				r.stats.FilterErrors.Add(1)
-			}
-			if !keep {
-				r.stats.Filtered.Add(1)
-				continue
-			}
+		if err := r.store.BulkWriteOrdered(ctx, coll, batch); err != nil {
+			r.stats.WriteErrors.Add(1)
+			return fmt.Errorf("user snapshot write: %w", err)
 		}
-
-		models = append(models, store.UserSnapshotWriteModel(userID, doc, skip))
-		r.stats.UserWrites.Add(1)
-		r.stats.ParsedOK.Add(1)
+		batch = batch[:0]
+		return nil
 	}
 
-	if len(models) == 0 {
-		return len(page.Rows), nil
+	rows := 0
+	err := r.client.StreamResultPage(ctx, taskID, pageID, r.cfg.Backfill.PageSize,
+		func(row []interface{}) error {
+			rows++
+			r.stats.TotalLines.Add(1)
+			if len(row) != len(headers) {
+				r.stats.ParseErrors.Add(1)
+				r.stats.DeadLetters.Add(1)
+				return nil
+			}
+			userID := row[userIDIdx]
+			if userID == nil {
+				r.stats.ParseErrors.Add(1)
+				r.stats.DeadLetters.Add(1)
+				return nil
+			}
+
+			doc := bson.M{}
+			for i, h := range headers {
+				if i == userIDIdx {
+					continue
+				}
+				if v := row[i]; v != nil {
+					doc[h] = v
+				}
+			}
+
+			if !r.cfg.Backfill.SkipLocalFilter && !r.filter.Empty() {
+				env := bson.M{"#user_id": userID}
+				for k, v := range doc {
+					env[k] = v
+				}
+				keep, ferr := r.filter.Keep(env)
+				if ferr != nil {
+					r.stats.FilterErrors.Add(1)
+				}
+				if !keep {
+					r.stats.Filtered.Add(1)
+					return nil
+				}
+			}
+
+			batch = append(batch, store.UserSnapshotWriteModel(userID, doc, skip))
+			r.stats.UserWrites.Add(1)
+			r.stats.ParsedOK.Add(1)
+			if len(batch) >= userFlushBatch {
+				return flush()
+			}
+			return nil
+		})
+	// Flush whatever is left even if the stream errored, so the rows we did
+	// receive land in Mongo and can be skipped by upsert on the next attempt.
+	if fErr := flush(); fErr != nil && err == nil {
+		err = fErr
 	}
-	if err := r.store.BulkWriteOrdered(ctx, r.store.UserCollection(), models); err != nil {
-		r.stats.WriteErrors.Add(1)
-		return 0, fmt.Errorf("user snapshot write: %w", err)
-	}
-	return len(page.Rows), nil
+	return rows, err
 }
 
 func indexOf(ss []string, want string) int {

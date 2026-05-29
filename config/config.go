@@ -146,9 +146,27 @@ type BackfillConfig struct {
 	// "#event_time" predicate. Format "YYYY-MM-DD HH:MM:SS". Optional.
 	EventTimeRange TimeRange `mapstructure:"eventTimeRange"`
 
-	// PageSize controls the result page size sent to /open/sql-result-page.
-	// Must be >= 1000 per TA documentation; defaults to 10000.
+	// PageSize controls server-side pagination of the SQL result set. When
+	// Paginate is true it is sent on /open/submit-sql, so the TA OpenAPI
+	// splits results into ceil(rowCount/pageSize) pages that the runner
+	// fetches and checkpoints one at a time. Must be >= 1000 per the TA
+	// documentation; defaults to 10000.
 	PageSize int `mapstructure:"pageSize"`
+
+	// Paginate selects the result-retrieval mode:
+	//
+	//   true  (default) — submit with pageSize so the server paginates;
+	//                      the runner pulls page 0..pageCount-1 and writes a
+	//                      checkpoint after each page (resumable mid-table).
+	//   false           — submit without pageSize; the server streams the
+	//                      entire result set as one response that the runner
+	//                      consumes row-by-row, flushing batches as it goes.
+	//                      A mid-stream failure restarts the whole chunk
+	//                      (dedup via #uuid / #user_id keeps it correct).
+	//
+	// Both modes stream rows incrementally and never buffer a full page in
+	// memory; the difference is resume granularity vs. one fewer round trip.
+	Paginate *bool `mapstructure:"paginate"`
 
 	// PollInterval is the gap between /open/sql-task-info polls. Defaults 3s.
 	PollInterval time.Duration `mapstructure:"pollInterval"`
@@ -357,6 +375,21 @@ func applyBackfillDefaults(b *BackfillConfig) {
 	if b.ProgressCollection == "" {
 		b.ProgressCollection = DefaultProgressCollection
 	}
+}
+
+// ShouldPaginate reports the effective pagination mode, defaulting to true
+// when the user omits the field.
+func (b *BackfillConfig) ShouldPaginate() bool {
+	return b.Paginate == nil || *b.Paginate
+}
+
+// EffectivePageSize returns the pageSize to pass to submit-sql: PageSize in
+// paginated mode, or 0 (no server-side pagination) when Paginate is false.
+func (b *BackfillConfig) EffectivePageSize() int {
+	if b.ShouldPaginate() {
+		return b.PageSize
+	}
+	return 0
 }
 
 // Validate checks that required fields are present.

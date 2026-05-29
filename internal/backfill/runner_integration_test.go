@@ -68,11 +68,12 @@ type fakeTask struct {
 // per-SQL responses. Tests register canned tasks via SetResponse and the
 // mock returns them in submit order.
 type mockTA struct {
-	mu        sync.Mutex
-	responses []*fakeTask
-	tasks     map[string]*fakeTask
-	taskIDSeq int
-	server    *httptest.Server
+	mu             sync.Mutex
+	responses      []*fakeTask
+	tasks          map[string]*fakeTask
+	taskIDSeq      int
+	server         *httptest.Server
+	lastSubmitPage string // pageSize form value observed on the most recent submit
 }
 
 func newMockTA(t *testing.T) *mockTA {
@@ -119,8 +120,10 @@ func writeJSON(w http.ResponseWriter, data any, code int, msg string) {
 }
 
 func (m *mockTA) submit(w http.ResponseWriter, r *http.Request) {
+	_ = r.ParseForm()
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.lastSubmitPage = r.PostForm.Get("pageSize")
 	if len(m.responses) == 0 {
 		writeJSON(w, nil, -1, "no canned response left")
 		return
@@ -645,5 +648,111 @@ func TestRunner_FilterPushdownAndLocalAgree(t *testing.T) {
 	}
 	if !strings.Contains(got, `"$part_date" = '2026-05-01'`) {
 		t.Errorf("built SQL missing partDate; got: %s", got)
+	}
+}
+
+func TestRunner_PaginateMode_SendsPageSizeOnSubmit(t *testing.T) {
+	pingMongo(t)
+
+	mockTA := newMockTA(t)
+	dbName := uniqueDBName()
+	cfg := newTestConfig(mockTA.URL(), dbName, "paginate-on")
+	cfg.Backfill.PartDateRange = config.DateRange{Start: "2026-05-01", End: "2026-05-01"}
+	cfg.Backfill.PageSize = 5000
+	pag := true
+	cfg.Backfill.Paginate = &pag
+	defer dropTestDB(t, cfg.MongoURI)
+
+	// Two pages of data — the runner should fetch both, driven by the
+	// pageCount the mock reports.
+	mockTA.SetResponse(&fakeTask{
+		pages: []fakePage{
+			{Headers: eventHeaders(), Rows: [][]interface{}{buildEventRow("p-1", "a", "login", 1, "CN")}},
+			{Headers: eventHeaders(), Rows: [][]interface{}{buildEventRow("p-2", "b", "login", 2, "CN")}},
+		},
+		rowCount:    2,
+		pollsBefore: 0,
+		expireAfter: -1,
+	})
+
+	ctx := context.Background()
+	r, err := New(ctx, cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer r.Shutdown()
+	if err := r.EnsureIndexes(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	mockTA.mu.Lock()
+	gotPageSize := mockTA.lastSubmitPage
+	mockTA.mu.Unlock()
+	if gotPageSize != "5000" {
+		t.Errorf("submit pageSize = %q, want \"5000\" (paginate mode must send pageSize)", gotPageSize)
+	}
+
+	mc, _ := mongo.Connect(ctx, options.Client().ApplyURI(cfg.MongoURI))
+	defer mc.Disconnect(ctx)
+	count, _ := mc.Database(dbName).Collection("event").CountDocuments(ctx, bson.M{})
+	if count != 2 {
+		t.Errorf("event count = %d, want 2", count)
+	}
+}
+
+func TestRunner_NoPaginateMode_OmitsPageSizeOnSubmit(t *testing.T) {
+	pingMongo(t)
+
+	mockTA := newMockTA(t)
+	dbName := uniqueDBName()
+	cfg := newTestConfig(mockTA.URL(), dbName, "paginate-off")
+	cfg.Backfill.PartDateRange = config.DateRange{Start: "2026-05-01", End: "2026-05-01"}
+	cfg.Backfill.PageSize = 10000
+	pag := false
+	cfg.Backfill.Paginate = &pag
+	defer dropTestDB(t, cfg.MongoURI)
+
+	// One page holding the whole result set (server "no pagination" mode).
+	mockTA.SetResponse(&fakeTask{
+		pages: []fakePage{
+			{Headers: eventHeaders(), Rows: [][]interface{}{
+				buildEventRow("n-1", "a", "login", 1, "CN"),
+				buildEventRow("n-2", "b", "login", 2, "US"),
+				buildEventRow("n-3", "c", "login", 3, "JP"),
+			}},
+		},
+		rowCount:    3,
+		pollsBefore: 0,
+		expireAfter: -1,
+	})
+
+	ctx := context.Background()
+	r, err := New(ctx, cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer r.Shutdown()
+	if err := r.EnsureIndexes(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	mockTA.mu.Lock()
+	gotPageSize := mockTA.lastSubmitPage
+	mockTA.mu.Unlock()
+	if gotPageSize != "" {
+		t.Errorf("submit pageSize = %q, want empty (no-paginate mode must omit pageSize)", gotPageSize)
+	}
+
+	mc, _ := mongo.Connect(ctx, options.Client().ApplyURI(cfg.MongoURI))
+	defer mc.Disconnect(ctx)
+	count, _ := mc.Database(dbName).Collection("event").CountDocuments(ctx, bson.M{})
+	if count != 3 {
+		t.Errorf("event count = %d, want 3", count)
 	}
 }

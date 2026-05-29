@@ -89,10 +89,11 @@ func NewClient(baseURL, token string, httpClient *http.Client) *Client {
 // proxyURL means direct connection. http://, https://, and socks5:// schemes
 // are accepted; embedded user:pass is parsed for both HTTP CONNECT and
 // SOCKS5 auth.
+//
+// A timeout of 0 disables Client.Timeout so that arbitrarily long streaming
+// responses (e.g. multi-million-row result-page bodies) are not killed
+// mid-stream; cancellation must come from the request context instead.
 func NewHTTPClient(proxyURL string, timeout time.Duration) (*http.Client, error) {
-	if timeout <= 0 {
-		timeout = 60 * time.Second
-	}
 	if proxyURL == "" {
 		return &http.Client{Timeout: timeout}, nil
 	}
@@ -139,9 +140,22 @@ type SubmitResult struct {
 }
 
 // SubmitSQL submits an async SQL query and returns the assigned task ID.
-func (c *Client) SubmitSQL(ctx context.Context, sql string) (string, error) {
+//
+// pageSize MUST be set here, not on the later sql-result-page call: the TA
+// OpenAPI computes server-side pagination at submit time and defaults to "no
+// pagination" when pageSize is omitted, which would force the entire result
+// set into a single result-page response (pageCount=1). A non-zero pageSize
+// yields pageCount = ceil(rowCount/pageSize) so each page can be fetched and
+// checkpointed independently. pageSize < 1000 is clamped to the API minimum.
+func (c *Client) SubmitSQL(ctx context.Context, sql string, pageSize int) (string, error) {
 	form := url.Values{}
 	form.Set("sql", sql)
+	if pageSize > 0 {
+		if pageSize < 1000 {
+			pageSize = 1000
+		}
+		form.Set("pageSize", strconv.Itoa(pageSize))
+	}
 
 	var out SubmitResult
 	if err := c.postForm(ctx, "/open/submit-sql", form, &out); err != nil {
@@ -192,18 +206,33 @@ type ResultPageResult struct {
 	Rows      [][]interface{} `json:"rows"`
 }
 
-// ResultPage fetches a single page of results for an async SQL task.
-//
-// The TA result-page endpoint returns a streaming NDJSON body where each line
-// is a single result row encoded as a JSON array of column values. There is
-// no envelope and no embedded metadata: headers + page count are obtained
-// once from TaskInfo and reused on every page fetch.
-//
-// On HTTP-level errors (4xx/5xx) the response body may instead be a single
-// envelope JSON with a non-zero return_code; we detect and surface that as
-// an APIError, mapping the "task not found / expired" variants to
-// ErrTaskExpired.
+// ResultPage fetches a single page of results for an async SQL task and
+// returns the rows in a single allocation. Suitable for small pages; for
+// larger result sets prefer StreamResultPage to avoid buffering the whole
+// response in memory.
 func (c *Client) ResultPage(ctx context.Context, taskID string, pageID, pageSize int) (*ResultPageResult, error) {
+	var rows [][]interface{}
+	err := c.StreamResultPage(ctx, taskID, pageID, pageSize, func(row []interface{}) error {
+		rows = append(rows, row)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &ResultPageResult{Rows: rows, PageID: pageID}, nil
+}
+
+// StreamResultPage drives the TA result-page endpoint as an NDJSON stream and
+// calls onRow for each row as it is decoded. Returning a non-nil error from
+// onRow aborts the iteration and surfaces the error to the caller.
+//
+// The TA result-page endpoint returns pure NDJSON rows (no envelope), so
+// headers + page metadata must be sourced separately from TaskInfo. On
+// envelope-shaped error responses (HTTP 200 with non-zero return_code) we
+// surface an APIError, mapping "task not found / expired" variants to
+// ErrTaskExpired.
+func (c *Client) StreamResultPage(ctx context.Context, taskID string, pageID, pageSize int,
+	onRow func(row []interface{}) error) error {
 	q := url.Values{}
 	q.Set("taskId", taskID)
 	q.Set("pageId", strconv.Itoa(pageID))
@@ -215,48 +244,42 @@ func (c *Client) ResultPage(ctx context.Context, taskID string, pageID, pageSize
 	u := c.baseURL + "/open/sql-result-page?" + c.authQuery(q).Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, fmt.Errorf("http %d: %s", resp.StatusCode, body)
+		return fmt.Errorf("http %d: %s", resp.StatusCode, body)
 	}
 
-	return parseResultPageStream(resp.Body)
+	return streamResultPageBody(resp.Body, onRow)
 }
 
-// parseResultPageStream consumes an NDJSON result-page body, returning the
-// accumulated rows. An envelope-shaped JSON object on the first token is
+// streamResultPageBody consumes an NDJSON result-page body and yields each
+// row through onRow. An envelope-shaped JSON object on the first token is
 // treated as an API error (typical for "task expired" responses returned
 // with HTTP 200).
-func parseResultPageStream(body io.Reader) (*ResultPageResult, error) {
+func streamResultPageBody(body io.Reader, onRow func(row []interface{}) error) error {
 	dec := json.NewDecoder(body)
 	dec.UseNumber()
 
-	var rows [][]interface{}
+	var rowsSeen int
 	for dec.More() {
-		// Peek at the next token; if it is an opening brace we have an
-		// envelope-style error rather than a row.
 		tok, err := dec.Token()
 		if err != nil {
-			return nil, fmt.Errorf("decode result-page: %w", err)
+			return fmt.Errorf("decode result-page: %w", err)
 		}
 		if d, ok := tok.(json.Delim); ok && d == '{' {
-			// Re-read the rest of the object as an envelope.
-			var env envelope
-			env.Data = json.RawMessage("null")
-			// We've consumed the '{' already; gather key/value pairs
-			// manually via the decoder until we hit the matching '}'.
 			obj, err := readObjectRemainder(dec)
 			if err != nil {
-				return nil, fmt.Errorf("decode envelope error: %w", err)
+				return fmt.Errorf("decode envelope error: %w", err)
 			}
+			env := envelope{}
 			if rc, ok := obj["return_code"]; ok {
 				switch v := rc.(type) {
 				case json.Number:
@@ -272,24 +295,25 @@ func parseResultPageStream(body io.Reader) (*ResultPageResult, error) {
 			if env.ReturnCode != 0 {
 				apiErr := &APIError{Code: env.ReturnCode, Message: env.ReturnMessage}
 				if isExpired(apiErr) {
-					return nil, ErrTaskExpired
+					return ErrTaskExpired
 				}
-				return nil, apiErr
+				return apiErr
 			}
-			// Envelope with return_code=0 and no rows yet — continue, the
-			// real row arrays should follow.
 			continue
 		}
 		if d, ok := tok.(json.Delim); !ok || d != '[' {
-			return nil, fmt.Errorf("decode result-page: unexpected token %v", tok)
+			return fmt.Errorf("decode result-page: unexpected token %v", tok)
 		}
 		row, err := readArrayRemainder(dec)
 		if err != nil {
-			return nil, fmt.Errorf("decode row %d: %w", len(rows), err)
+			return fmt.Errorf("decode row %d: %w", rowsSeen, err)
 		}
-		rows = append(rows, row)
+		if err := onRow(row); err != nil {
+			return err
+		}
+		rowsSeen++
 	}
-	return &ResultPageResult{Rows: rows}, nil
+	return nil
 }
 
 // readObjectRemainder reads JSON object members until the closing '}',

@@ -50,7 +50,7 @@ func TestSubmitSQL_Success(t *testing.T) {
 		writeEnvelope(t, w, SubmitResult{TaskID: "abc-123"}, 0, "success")
 	})
 
-	id, err := c.SubmitSQL(context.Background(), "SELECT 1")
+	id, err := c.SubmitSQL(context.Background(), "SELECT 1", 10000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestSubmitSQL_APIError(t *testing.T) {
 	_, c := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		writeEnvelope(t, w, nil, -1008, "参数(token)为空")
 	})
-	_, err := c.SubmitSQL(context.Background(), "SELECT 1")
+	_, err := c.SubmitSQL(context.Background(), "SELECT 1", 10000)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -115,26 +115,20 @@ func TestResultPage_Success(t *testing.T) {
 		if r.URL.Query().Get("pageId") != "2" {
 			t.Errorf("pageId = %q", r.URL.Query().Get("pageId"))
 		}
-		page := ResultPageResult{
-			TaskID:    "abc",
-			Headers:   []string{"#type", "level"},
-			PageCount: 3,
-			PageSize:  10000,
-			PageID:    2,
-			RowCount:  25000,
-			Rows: [][]interface{}{
-				{"track", float64(5)},
-				{"user_set", float64(0)},
-			},
-		}
-		writeEnvelope(t, w, page, 0, "ok")
+		// The real result-page endpoint returns NDJSON: a leading envelope
+		// line carrying page metadata, then one JSON array per row.
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		writeEnvelope(t, w, ResultPageResult{TaskID: "abc", PageID: 2}, 0, "ok")
+		_, _ = w.Write([]byte("\n"))
+		_, _ = io.WriteString(w, `["track",5]`+"\n")
+		_, _ = io.WriteString(w, `["user_set",0]`+"\n")
 	})
 	got, err := c.ResultPage(context.Background(), "abc", 2, 10000)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Rows) != 2 || got.PageID != 2 {
-		t.Errorf("unexpected: %+v", got)
+	if len(got.Rows) != 2 {
+		t.Errorf("unexpected rows: %+v", got.Rows)
 	}
 }
 
@@ -148,7 +142,7 @@ func TestDo_RetriesOn500ThenSucceeds(t *testing.T) {
 		}
 		writeEnvelope(t, w, SubmitResult{TaskID: "ok"}, 0, "")
 	})
-	id, err := c.SubmitSQL(context.Background(), "SELECT 1")
+	id, err := c.SubmitSQL(context.Background(), "SELECT 1", 10000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +161,7 @@ func TestDo_NoRetryOn400(t *testing.T) {
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = io.WriteString(w, "bad")
 	})
-	_, err := c.SubmitSQL(context.Background(), "SELECT 1")
+	_, err := c.SubmitSQL(context.Background(), "SELECT 1", 10000)
 	if err == nil {
 		t.Fatal("expected error")
 	}
