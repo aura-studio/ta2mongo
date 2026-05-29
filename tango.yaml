@@ -141,3 +141,40 @@ remoteConfig:
   documentID: "default"
   # daemon 模式重新拉取并热更 filter 的间隔，默认 1h
   syncInterval: "1h"
+
+# instanceID: 本进程唯一标识，来自环境变量 TANGO_INSTANCE_ID。
+# agent 模式必填（用于定向任务与心跳注册），其他模式忽略。不在 yaml 里写，
+# 部署时设环境变量：export TANGO_INSTANCE_ID=prod-agent-A
+
+# agent: 任务 worker 模式（mode=agent 或 `tango agent` 子命令）。
+# 长驻进程：注册心跳 → 从共享的 MongoDB 任务队列认领任务 → 执行（backfill/sql）
+# → 执行期间续租 → 汇报结果。
+#
+# pull 模型，无中心调度、不靠心跳保证正确性：
+#   - 任务是 _tango_tasks 集合里的文档，带可选 target（实例ID）。
+#     target 空=任意 agent 可执行；非空=只有该实例能执行。
+#   - agent 用原子 findOneAndUpdate 认领（pending→claimed + 盖租约），
+#     保证同一任务不被两个 agent 同时执行。
+#   - 长任务定期续租；agent 崩了租约过期，任务被别的 agent 回收重做
+#     （#uuid/#user_id upsert 保证重做幂等）。这取代了"靠心跳判活"。
+#   - _tango_instances 心跳注册（TTL 索引自动过期）只用于：定向发布时
+#     fail-fast（目标不在线就拒绝发布）和运维查看在线列表，不影响认领正确性。
+#
+# 作用域：任务/配置都按 db 隔离——只影响连同一个 db 的 tango 进程，
+# 不同 db 是各自独立的命名空间。
+#
+# TA 连接信息（apiBaseURL/token/proxy/projectID/schemaPrefix）由上面的 backfill
+# 配置块提供；任务 payload 只说"取什么"（table/range 或显式 sql）。
+agent:
+  # 任务队列集合名，默认 _tango_tasks
+  tasksCollection: "_tango_tasks"
+  # 实例心跳注册集合名，默认 _tango_instances
+  instancesCollection: "_tango_instances"
+  # 轮询认领任务的间隔，默认 10s
+  pollInterval: "10s"
+  # 任务租约时长；超时未续租则可被其他 agent 回收，默认 5m
+  leaseDuration: "5m"
+  # 心跳刷新间隔，默认 30s
+  heartbeatInterval: "30s"
+  # 实例 TTL：心跳超过此时长视为离线，默认 90s
+  instanceTTL: "90s"

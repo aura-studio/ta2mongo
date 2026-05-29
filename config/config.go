@@ -52,6 +52,19 @@ const (
 	DefaultRemoteConfigInterval   = time.Hour
 )
 
+// Agent / task-queue defaults.
+const (
+	DefaultTasksCollection     = "_tango_tasks"
+	DefaultInstancesCollection = "_tango_instances"
+	DefaultAgentPollInterval   = 10 * time.Second
+	DefaultAgentLeaseDuration  = 5 * time.Minute
+	DefaultHeartbeatInterval   = 30 * time.Second
+	DefaultInstanceTTL         = 90 * time.Second
+)
+
+// ModeAgent is the run mode for the task-worker subcommand.
+const ModeAgent = "agent"
+
 // TailMode constants control how the tailer watches for file changes.
 const (
 	// TailModeHybrid uses hpcloud/tail's event-driven watcher as the
@@ -134,6 +147,44 @@ type Config struct {
 	// are collected. Connection fields (mongoURI, proxy, remoteConfig itself)
 	// are never overridable remotely — they must come from the local file.
 	RemoteConfig RemoteConfig `mapstructure:"remoteConfig"`
+
+	// InstanceID uniquely identifies this tango process within a database
+	// namespace. Sourced from the TANGO_INSTANCE_ID environment variable.
+	// Required for the `tango agent` task-worker mode (used to target tasks at
+	// a specific instance and to register heartbeats); other modes ignore it.
+	InstanceID string `mapstructure:"instanceID"`
+
+	// Agent configures the `tango agent` task-worker mode: a long-running
+	// process that registers a heartbeat, claims tasks published to a shared
+	// MongoDB queue, executes them (backfill / sql), and reports results.
+	Agent AgentConfig `mapstructure:"agent"`
+}
+
+// AgentConfig controls the task-worker (`tango agent`) mode.
+type AgentConfig struct {
+	// TasksCollection holds the task queue documents. Defaults "_tango_tasks".
+	TasksCollection string `mapstructure:"tasksCollection"`
+
+	// InstancesCollection holds instance heartbeat documents (TTL-expired).
+	// Defaults "_tango_instances".
+	InstancesCollection string `mapstructure:"instancesCollection"`
+
+	// PollInterval is how often the agent polls for claimable tasks.
+	// Defaults 10s.
+	PollInterval time.Duration `mapstructure:"pollInterval"`
+
+	// LeaseDuration is how long a claimed task is owned before its lease must
+	// be renewed; an expired lease lets another agent reclaim the task.
+	// Defaults 5m.
+	LeaseDuration time.Duration `mapstructure:"leaseDuration"`
+
+	// HeartbeatInterval is how often the agent refreshes its instance
+	// registration. Defaults 30s.
+	HeartbeatInterval time.Duration `mapstructure:"heartbeatInterval"`
+
+	// InstanceTTL is the heartbeat document's TTL: an instance is considered
+	// offline once its last heartbeat is older than this. Defaults 90s.
+	InstanceTTL time.Duration `mapstructure:"instanceTTL"`
 }
 
 // RemoteConfig controls the MongoDB-backed configuration override.
@@ -301,6 +352,10 @@ func Load(path string, flags *pflag.FlagSet) (Config, error) {
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 
+	// instanceID maps to TANGO_INSTANCE_ID. AutomaticEnv would look for
+	// TANGO_INSTANCEID (no separator), so bind the documented name explicitly.
+	_ = v.BindEnv("instanceID", "TANGO_INSTANCE_ID")
+
 	// Register defaults.
 	setDefaults(v)
 
@@ -393,6 +448,28 @@ func applyDefaults(c *Config) {
 	}
 	applyBackfillDefaults(&c.Backfill)
 	applyRemoteConfigDefaults(&c.RemoteConfig)
+	applyAgentDefaults(&c.Agent)
+}
+
+func applyAgentDefaults(a *AgentConfig) {
+	if a.TasksCollection == "" {
+		a.TasksCollection = DefaultTasksCollection
+	}
+	if a.InstancesCollection == "" {
+		a.InstancesCollection = DefaultInstancesCollection
+	}
+	if a.PollInterval <= 0 {
+		a.PollInterval = DefaultAgentPollInterval
+	}
+	if a.LeaseDuration <= 0 {
+		a.LeaseDuration = DefaultAgentLeaseDuration
+	}
+	if a.HeartbeatInterval <= 0 {
+		a.HeartbeatInterval = DefaultHeartbeatInterval
+	}
+	if a.InstanceTTL <= 0 {
+		a.InstanceTTL = DefaultInstanceTTL
+	}
 }
 
 func applyRemoteConfigDefaults(rc *RemoteConfig) {
@@ -443,11 +520,14 @@ func (b *BackfillConfig) EffectivePageSize() int {
 // Validate checks that required fields are present.
 func (c *Config) Validate() error {
 	switch c.Mode {
-	case ModeDaemon, ModeOnce, ModeIngest, ModeBackfill:
+	case ModeDaemon, ModeOnce, ModeIngest, ModeBackfill, ModeAgent:
 		// valid
 	default:
-		return fmt.Errorf("config: mode must be one of %q, %q, %q, %q; got %q",
-			ModeDaemon, ModeOnce, ModeIngest, ModeBackfill, c.Mode)
+		return fmt.Errorf("config: mode must be one of %q, %q, %q, %q, %q; got %q",
+			ModeDaemon, ModeOnce, ModeIngest, ModeBackfill, ModeAgent, c.Mode)
+	}
+	if c.Mode == ModeAgent && c.InstanceID == "" {
+		return fmt.Errorf("config: agent mode requires TANGO_INSTANCE_ID to be set")
 	}
 	if c.MongoURI == "" {
 		return fmt.Errorf("config: mongoURI is required (set via --mongoURI, TANGO_MONGOURI, or config file)")

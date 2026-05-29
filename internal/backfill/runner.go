@@ -67,32 +67,20 @@ type Runner struct {
 	stats      Stats
 }
 
-// New connects to MongoDB and constructs a ready-to-run Runner. The caller
-// must call Shutdown after Run returns.
+// New connects to MongoDB and constructs a ready-to-run Runner with a
+// day-chunk checkpoint (used by Run). The caller must call Shutdown after Run
+// returns.
 func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Runner, error) {
-	flt, err := cfg.BuildFilter()
+	r, db, err := newBase(ctx, cfg, logger)
 	if err != nil {
-		return nil, fmt.Errorf("backfill: %w", err)
+		return nil, err
 	}
-
-	mc, err := mongo.Connect(ctx, options.Client().ApplyURI(cfg.MongoURI))
-	if err != nil {
-		return nil, fmt.Errorf("backfill: connect mongo: %w", err)
-	}
-	dbName, err := config.MongoDBFromURI(cfg.MongoURI)
-	if err != nil {
-		_ = mc.Disconnect(context.Background())
-		return nil, fmt.Errorf("backfill: %w", err)
-	}
-	db := mc.Database(dbName)
-	st := store.New(db, cfg, logger)
 
 	filterWhere, err := filter.CompileToSQL(cfg.FilterInclude, cfg.FilterExclude)
 	if err != nil {
-		_ = mc.Disconnect(context.Background())
+		_ = r.mongo.Disconnect(context.Background())
 		return nil, fmt.Errorf("backfill: %w", err)
 	}
-
 	sig := SQLSignature(cfg.Backfill.Table, cfg.Backfill.ProjectID, filterWhere,
 		cfg.Backfill.EventTimeRange.Start, cfg.Backfill.EventTimeRange.End)
 
@@ -107,26 +95,56 @@ func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Runner
 		cfg.Backfill.RunID, cfg.Backfill.APIBaseURL, cfg.Backfill.ProjectID,
 		cfg.Backfill.Table, startDate, endDate, sig)
 	if err != nil {
-		_ = mc.Disconnect(context.Background())
+		_ = r.mongo.Disconnect(context.Background())
 		return nil, fmt.Errorf("backfill: %w", err)
 	}
+	r.checkpoint = cp
+	return r, nil
+}
+
+// NewExecutor builds a Runner without a checkpoint, for one-shot ExecuteSQL
+// runs (e.g. agent `sql` tasks). Run must not be called on it.
+func NewExecutor(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Runner, error) {
+	r, _, err := newBase(ctx, cfg, logger)
+	return r, err
+}
+
+// newBase performs the shared connection + component wiring used by both New
+// and NewExecutor. It returns the runner (with checkpoint left nil) and the
+// database handle for the caller to finish setup.
+func newBase(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Runner, *mongo.Database, error) {
+	flt, err := cfg.BuildFilter()
+	if err != nil {
+		return nil, nil, fmt.Errorf("backfill: %w", err)
+	}
+
+	mc, err := mongo.Connect(ctx, options.Client().ApplyURI(cfg.MongoURI))
+	if err != nil {
+		return nil, nil, fmt.Errorf("backfill: connect mongo: %w", err)
+	}
+	dbName, err := config.MongoDBFromURI(cfg.MongoURI)
+	if err != nil {
+		_ = mc.Disconnect(context.Background())
+		return nil, nil, fmt.Errorf("backfill: %w", err)
+	}
+	db := mc.Database(dbName)
+	st := store.New(db, cfg, logger)
 
 	httpC, err := NewHTTPClient(cfg.Backfill.Proxy, 0)
 	if err != nil {
 		_ = mc.Disconnect(context.Background())
-		return nil, fmt.Errorf("backfill: build http client: %w", err)
+		return nil, nil, fmt.Errorf("backfill: build http client: %w", err)
 	}
 
 	return &Runner{
-		cfg:        cfg,
-		logger:     logger,
-		store:      st,
-		parser:     talog.NewParser(),
-		filter:     filter.NewHolder(flt),
-		client:     NewClient(cfg.Backfill.APIBaseURL, cfg.Backfill.Token, httpC),
-		mongo:      mc,
-		checkpoint: cp,
-	}, nil
+		cfg:    cfg,
+		logger: logger,
+		store:  st,
+		parser: talog.NewParser(),
+		filter: filter.NewHolder(flt),
+		client: NewClient(cfg.Backfill.APIBaseURL, cfg.Backfill.Token, httpC),
+		mongo:  mc,
+	}, db, nil
 }
 
 // Shutdown disconnects from MongoDB.
@@ -283,6 +301,56 @@ func (r *Runner) runDay(ctx context.Context, day string) error {
 	}
 
 	return r.checkpoint.MarkCompleted(ctx, day, progress.Rows)
+}
+
+// ExecuteSQL runs one explicit SQL statement through the streaming import,
+// routing rows to user/event per the runner's configured table. Unlike the
+// day-chunked Run, it does not persist a checkpoint — the caller (e.g. the
+// task queue) owns retry, and #uuid / #user_id upserts keep re-runs idempotent.
+// Returns the number of rows imported.
+//
+// This is the execution path for `sql` tasks: the SQL is taken verbatim from
+// the task payload rather than built from a date range.
+func (r *Runner) ExecuteSQL(ctx context.Context, sql string) (int64, error) {
+	taskID, err := r.client.SubmitSQL(ctx, sql, r.cfg.Backfill.EffectivePageSize())
+	if err != nil {
+		r.stats.HTTPErrors.Add(1)
+		return 0, fmt.Errorf("submit: %w", err)
+	}
+
+	info, err := r.awaitFinished(ctx, taskID)
+	if err != nil {
+		return 0, err
+	}
+	r.logger.WithFields(logrus.Fields{
+		"taskId":    taskID,
+		"pageCount": info.ResultStat.PageCount,
+		"rowCount":  info.ResultStat.RowCount,
+	}).Info("backfill: sql task ready; starting pagination")
+
+	if r.progress != nil {
+		r.progress.SetCurrentChunk("sql")
+	}
+
+	var total int64
+	for pageID := 0; pageID < info.ResultStat.PageCount; pageID++ {
+		select {
+		case <-ctx.Done():
+			return total, ctx.Err()
+		default:
+		}
+		rows, err := r.ingestPage(ctx, taskID, pageID, info.ResultStat.Headers)
+		if err != nil {
+			r.stats.HTTPErrors.Add(1)
+			return total, fmt.Errorf("page %d: %w", pageID, err)
+		}
+		r.stats.Pages.Add(1)
+		total += int64(rows)
+		if r.progress != nil {
+			r.progress.SetPageInfo(pageID, info.ResultStat.PageCount)
+		}
+	}
+	return total, nil
 }
 
 // resubmitDay clears the in-progress task state and starts the day over. The
