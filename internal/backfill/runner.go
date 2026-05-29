@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
@@ -62,6 +63,7 @@ type Runner struct {
 	client     *Client
 	mongo      *mongo.Client
 	checkpoint *Checkpoint
+	progress   *ProgressBar
 	stats      Stats
 }
 
@@ -94,12 +96,25 @@ func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Runner
 	sig := SQLSignature(cfg.Backfill.Table, cfg.Backfill.ProjectID, filterWhere,
 		cfg.Backfill.EventTimeRange.Start, cfg.Backfill.EventTimeRange.End)
 
+	startDate, endDate := cfg.Backfill.PartDateRange.Start, cfg.Backfill.PartDateRange.End
+	if cfg.Backfill.Table == config.BackfillTableUser {
+		// User tables are not partitioned; collapse to a single virtual "day"
+		// so the existing day-keyed checkpoint logic carries over unchanged.
+		startDate, endDate = UserChunkKey, UserChunkKey
+	}
+
 	cp, err := NewCheckpoint(ctx, db.Collection(cfg.Backfill.ProgressCollection),
 		cfg.Backfill.RunID, cfg.Backfill.APIBaseURL, cfg.Backfill.ProjectID,
-		cfg.Backfill.Table, cfg.Backfill.PartDateRange.Start, cfg.Backfill.PartDateRange.End, sig)
+		cfg.Backfill.Table, startDate, endDate, sig)
 	if err != nil {
 		_ = mc.Disconnect(context.Background())
 		return nil, fmt.Errorf("backfill: %w", err)
+	}
+
+	httpC, err := NewHTTPClient(cfg.Backfill.Proxy, 0)
+	if err != nil {
+		_ = mc.Disconnect(context.Background())
+		return nil, fmt.Errorf("backfill: build http client: %w", err)
 	}
 
 	return &Runner{
@@ -108,7 +123,7 @@ func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Runner
 		store:      st,
 		parser:     talog.NewParser(),
 		filter:     flt,
-		client:     NewClient(cfg.Backfill.APIBaseURL, cfg.Backfill.Token, nil),
+		client:     NewClient(cfg.Backfill.APIBaseURL, cfg.Backfill.Token, httpC),
 		mongo:      mc,
 		checkpoint: cp,
 	}, nil
@@ -133,7 +148,7 @@ func (r *Runner) Stats() *Stats { return &r.stats }
 func (r *Runner) Run(ctx context.Context) error {
 	days := r.checkpoint.PendingDays()
 	if len(days) == 0 {
-		r.logger.Info("backfill: no pending days; nothing to do")
+		r.logger.Info("backfill: no pending chunks; nothing to do")
 		return nil
 	}
 
@@ -141,10 +156,24 @@ func (r *Runner) Run(ctx context.Context) error {
 		"runID":     r.cfg.Backfill.RunID,
 		"projectID": r.cfg.Backfill.ProjectID,
 		"table":     r.cfg.Backfill.Table,
-		"days":      len(days),
+		"chunks":    len(days),
 		"startDate": r.cfg.Backfill.PartDateRange.Start,
 		"endDate":   r.cfg.Backfill.PartDateRange.End,
 	}).Info("backfill: starting")
+
+	// Spin up the progress bar; refresh in TTY mode every 500ms, in non-TTY
+	// mode every 10s (one line at a time).
+	r.progress = NewProgressBar(&r.stats, len(days))
+	stop := make(chan struct{})
+	tickInterval := 500 * time.Millisecond
+	if !r.progress.isTTY {
+		tickInterval = 10 * time.Second
+	}
+	progressDone := r.progress.StartTicker(tickInterval, stop)
+	defer func() {
+		close(stop)
+		<-progressDone
+	}()
 
 	for _, day := range days {
 		select {
@@ -154,17 +183,21 @@ func (r *Runner) Run(ctx context.Context) error {
 		default:
 		}
 
+		r.progress.SetCurrentChunk(day)
+
 		if err := r.runDay(ctx, day); err != nil {
 			r.stats.DaysFailed.Add(1)
+			r.progress.MarkChunkFailed()
 			if markErr := r.checkpoint.MarkFailed(ctx, day, err); markErr != nil {
-				r.logger.WithError(markErr).Warn("backfill: mark day failed")
+				r.logger.WithError(markErr).Warn("backfill: mark chunk failed")
 			}
-			r.logger.WithError(err).WithField("day", day).Error("backfill: day failed; continuing with next day")
+			r.logger.WithError(err).WithField("chunk", day).Error("backfill: chunk failed; continuing")
 			continue
 		}
 
 		r.stats.DaysCompleted.Add(1)
-		r.logger.WithField("day", day).Info("backfill: day completed")
+		r.progress.MarkChunkDone()
+		r.logger.WithField("chunk", day).Info("backfill: chunk completed")
 	}
 
 	r.printSummary()
@@ -208,6 +241,16 @@ func (r *Runner) runDay(ctx context.Context, day string) error {
 	if err := r.checkpoint.SetDay(ctx, day, progress); err != nil {
 		return err
 	}
+	if r.progress != nil {
+		r.progress.SetPageInfo(progress.PageID, progress.PageCount)
+	}
+	r.logger.WithFields(logrus.Fields{
+		"chunk":      day,
+		"taskId":     progress.TaskID,
+		"pageCount":  info.ResultStat.PageCount,
+		"rowCount":   info.ResultStat.RowCount,
+		"headers":    info.ResultStat.Headers,
+	}).Info("backfill: task ready; starting pagination")
 
 	// Paginate from the next unprocessed page.
 	startPage := progress.PageID + 1
@@ -219,6 +262,14 @@ func (r *Runner) runDay(ctx context.Context, day string) error {
 		}
 
 		page, err := r.client.ResultPage(ctx, progress.TaskID, pageID, r.cfg.Backfill.PageSize)
+		if err == nil {
+			// ResultPage no longer returns metadata (the real TA endpoint
+			// is pure NDJSON rows), so reuse the headers and page metadata
+			// from the earlier TaskInfo call.
+			page.Headers = info.ResultStat.Headers
+			page.PageID = pageID
+			page.PageCount = progress.PageCount
+		}
 		if err != nil {
 			if errors.Is(err, ErrTaskExpired) {
 				r.logger.WithField("day", day).Warn("backfill: task expired mid-paginate; resubmitting from page 0")
@@ -237,6 +288,9 @@ func (r *Runner) runDay(ctx context.Context, day string) error {
 		progress.Rows += int64(rows)
 		if err := r.checkpoint.SetDay(ctx, day, progress); err != nil {
 			return fmt.Errorf("checkpoint flush: %w", err)
+		}
+		if r.progress != nil {
+			r.progress.SetPageInfo(pageID, progress.PageCount)
 		}
 	}
 
@@ -292,11 +346,19 @@ func (r *Runner) awaitFinished(ctx context.Context, taskID string) (*TaskInfoRes
 	}
 }
 
-// ingestPage runs one page through the pipeline. It spins up a fresh workers
-// goroutine bundle per page so that checkpointing can advance only after the
-// page has been fully written. This trades a small amount of per-page
-// startup overhead for clean resume semantics.
+// ingestPage routes one page of result rows into Mongo. The event-table
+// path goes through the standard parse → filter → identity → BulkWrite
+// pipeline. The user-table path skips the parser (TA's v_user_<pid> uses
+// fields like #user_operation / #active_time that the event-shaped parser
+// rejects) and writes each row as a #user_id-keyed snapshot upsert.
 func (r *Runner) ingestPage(ctx context.Context, page *ResultPageResult) (int, error) {
+	if r.cfg.Backfill.Table == config.BackfillTableUser {
+		return r.ingestUserPage(ctx, page)
+	}
+	return r.ingestEventPage(ctx, page)
+}
+
+func (r *Runner) ingestEventPage(ctx context.Context, page *ResultPageResult) (int, error) {
 	lineCh := make(chan string, r.cfg.Backfill.PageSize)
 
 	go func() {
@@ -322,28 +384,118 @@ func (r *Runner) ingestPage(ctx context.Context, page *ResultPageResult) (int, e
 	return len(page.Rows), nil
 }
 
-// buildDaySQL constructs the per-day Presto SQL: SELECT * with $part_date
-// pinned, optional event-time bounds, and the pushed-down filter WHERE.
+func (r *Runner) ingestUserPage(ctx context.Context, page *ResultPageResult) (int, error) {
+	models := make([]mongo.WriteModel, 0, len(page.Rows))
+	userIDIdx := indexOf(page.Headers, "#user_id")
+	if userIDIdx < 0 {
+		return 0, fmt.Errorf("user-table backfill: #user_id column not present in result headers")
+	}
+
+	skip := r.cfg.Backfill.ForceSkip()
+	for _, row := range page.Rows {
+		r.stats.TotalLines.Add(1)
+		if len(row) != len(page.Headers) {
+			r.stats.ParseErrors.Add(1)
+			r.stats.DeadLetters.Add(1)
+			continue
+		}
+		userID := row[userIDIdx]
+		if userID == nil {
+			r.stats.ParseErrors.Add(1)
+			r.stats.DeadLetters.Add(1)
+			continue
+		}
+
+		doc := bson.M{}
+		for i, h := range page.Headers {
+			if i == userIDIdx {
+				continue
+			}
+			v := row[i]
+			if v == nil {
+				continue
+			}
+			doc[h] = v
+		}
+
+		// Optional local-filter pass (only when at least one rule is set).
+		if !r.cfg.Backfill.SkipLocalFilter && !r.filter.Empty() {
+			env := bson.M{"#user_id": userID}
+			for k, v := range doc {
+				env[k] = v
+			}
+			keep, ferr := r.filter.Keep(env)
+			if ferr != nil {
+				r.stats.FilterErrors.Add(1)
+			}
+			if !keep {
+				r.stats.Filtered.Add(1)
+				continue
+			}
+		}
+
+		models = append(models, store.UserSnapshotWriteModel(userID, doc, skip))
+		r.stats.UserWrites.Add(1)
+		r.stats.ParsedOK.Add(1)
+	}
+
+	if len(models) == 0 {
+		return len(page.Rows), nil
+	}
+	if err := r.store.BulkWriteOrdered(ctx, r.store.UserCollection(), models); err != nil {
+		r.stats.WriteErrors.Add(1)
+		return 0, fmt.Errorf("user snapshot write: %w", err)
+	}
+	return len(page.Rows), nil
+}
+
+func indexOf(ss []string, want string) int {
+	for i, s := range ss {
+		if s == want {
+			return i
+		}
+	}
+	return -1
+}
+
+// buildDaySQL constructs the Presto SQL for one chunk of work.
+//
+// For the event table (`v_event_<pid>`), chunks are partition-dates and the
+// SQL pins `"$part_date" = '<day>'`. For the user table (`v_user_<pid>`)
+// there is no partition column, so the day argument is ignored and the
+// SELECT pulls the whole table in one task. Optional eventTimeRange bounds
+// (event table only) and the pushed-down filter WHERE are appended.
 func (r *Runner) buildDaySQL(day string) string {
 	var b strings.Builder
 	b.WriteString(`SELECT * FROM `)
+	if schema := r.cfg.Backfill.SchemaPrefix; schema != "" {
+		fmt.Fprintf(&b, "%s.", schema)
+	}
 	switch r.cfg.Backfill.Table {
 	case config.BackfillTableUser:
 		fmt.Fprintf(&b, "v_user_%d", r.cfg.Backfill.ProjectID)
 	default:
 		fmt.Fprintf(&b, "v_event_%d", r.cfg.Backfill.ProjectID)
 	}
-	fmt.Fprintf(&b, ` WHERE "$part_date" = '%s'`, day)
 
-	if start := r.cfg.Backfill.EventTimeRange.Start; start != "" {
-		fmt.Fprintf(&b, ` AND "#event_time" >= '%s'`, start)
+	predicates := []string{}
+	if r.cfg.Backfill.Table == config.BackfillTableEvent {
+		predicates = append(predicates, fmt.Sprintf(`"$part_date" = '%s'`, day))
+		if start := r.cfg.Backfill.EventTimeRange.Start; start != "" {
+			predicates = append(predicates, fmt.Sprintf(`"#event_time" >= '%s'`, start))
+		}
+		if end := r.cfg.Backfill.EventTimeRange.End; end != "" {
+			predicates = append(predicates, fmt.Sprintf(`"#event_time" <= '%s'`, end))
+		}
 	}
-	if end := r.cfg.Backfill.EventTimeRange.End; end != "" {
-		fmt.Fprintf(&b, ` AND "#event_time" <= '%s'`, end)
-	}
-
 	if filterWhere, _ := filter.CompileToSQL(r.cfg.FilterInclude, r.cfg.FilterExclude); filterWhere != "" {
-		fmt.Fprintf(&b, ` AND %s`, filterWhere)
+		predicates = append(predicates, filterWhere)
+	}
+	if len(predicates) > 0 {
+		fmt.Fprintf(&b, " WHERE %s", strings.Join(predicates, " AND "))
+	}
+	if lim := r.cfg.Backfill.Limit; lim > 0 {
+		fmt.Fprintf(&b, " LIMIT %d", lim)
 	}
 	return b.String()
 }

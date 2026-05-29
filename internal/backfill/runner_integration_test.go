@@ -196,15 +196,31 @@ func (m *mockTA) page(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := task.pages[pageID]
-	writeJSON(w, ResultPageResult{
+	// The real TA result-page endpoint returns NDJSON: first line is the
+	// standard envelope wrapping page metadata, then one JSON array per row.
+	meta := ResultPageResult{
 		TaskID:    id,
 		Headers:   p.Headers,
 		PageCount: len(task.pages),
 		PageSize:  1000,
 		PageID:    pageID,
 		RowCount:  task.rowCount,
-		Rows:      p.Rows,
-	}, 0, "ok")
+	}
+	metaRaw, _ := json.Marshal(meta)
+	env := struct {
+		ReturnCode    int             `json:"return_code"`
+		ReturnMessage string          `json:"return_message"`
+		Data          json.RawMessage `json:"data"`
+	}{0, "ok", metaRaw}
+	body, _ := json.Marshal(env)
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	_, _ = w.Write(body)
+	_, _ = w.Write([]byte("\n"))
+	for _, row := range p.Rows {
+		rowRaw, _ := json.Marshal(row)
+		_, _ = w.Write(rowRaw)
+		_, _ = w.Write([]byte("\n"))
+	}
 }
 
 // ---------------------------------------------------------------------------

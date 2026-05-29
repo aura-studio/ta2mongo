@@ -1,9 +1,10 @@
 module rocket-nano/tools/tango
 
-go 1.24.1
+go 1.25.0
 
 require (
 	github.com/cenkalti/backoff/v4 v4.3.0
+	github.com/expr-lang/expr v1.17.8
 	github.com/hpcloud/tail v1.0.0
 	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/cobra v1.8.1
@@ -11,10 +12,10 @@ require (
 	github.com/spf13/viper v1.21.0
 	github.com/tidwall/gjson v1.19.0
 	go.mongodb.org/mongo-driver v1.14.0
+	golang.org/x/net v0.55.0
 )
 
 require (
-	github.com/expr-lang/expr v1.17.8 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
 	github.com/golang/snappy v0.0.1 // indirect
@@ -34,10 +35,11 @@ require (
 	github.com/xdg-go/stringprep v1.0.4 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20181117223130-1be2e3e5546d // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
-	golang.org/x/crypto v0.17.0 // indirect
-	golang.org/x/sync v0.16.0 // indirect
-	golang.org/x/sys v0.29.0 // indirect
-	golang.org/x/text v0.28.0 // indirect
+	golang.org/x/crypto v0.51.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
+	golang.org/x/sys v0.45.0 // indirect
+	golang.org/x/term v0.43.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
 	gopkg.in/fsnotify.v1 v1.4.7 // indirect
 	gopkg.in/tomb.v1 v1.0.0-20141024135613-dd632973f1e7 // indirect
 )

@@ -62,12 +62,17 @@ type Checkpoint struct {
 // either fix the config drift or pick a new RunID.
 var ErrSignatureMismatch = errors.New("backfill: SQL signature mismatch (config changed since last run)")
 
+// UserChunkKey is the single chunk identifier used when backfilling user
+// tables, which have no partition column and are processed as one task.
+const UserChunkKey = "user-full"
+
 // NewCheckpoint opens (or creates) the checkpoint document for the given run.
 // It loads existing state from Mongo into memory, verifies the SQL signature
 // matches, and refreshes top-level metadata.
 //
-// If no document exists yet, a new one is initialised with every day in the
-// range marked Pending.
+// startDate/endDate are interpreted as a [start, end] date range when start
+// looks like YYYY-MM-DD. When start equals UserChunkKey, the run is treated
+// as having a single chunk (no time expansion) — used for user-table sync.
 func NewCheckpoint(ctx context.Context, coll *mongo.Collection, runID, apiBaseURL string,
 	projectID int, table, startDate, endDate, sqlSignature string,
 ) (*Checkpoint, error) {
@@ -96,7 +101,7 @@ func NewCheckpoint(ctx context.Context, coll *mongo.Collection, runID, apiBaseUR
 		}
 		return cp, nil
 	case errors.Is(err, mongo.ErrNoDocuments):
-		days, derr := initDays(startDate, endDate)
+		chunks, derr := initChunks(startDate, endDate)
 		if derr != nil {
 			return nil, derr
 		}
@@ -109,7 +114,7 @@ func NewCheckpoint(ctx context.Context, coll *mongo.Collection, runID, apiBaseUR
 			StartDate:    startDate,
 			EndDate:      endDate,
 			SQLSignature: sqlSignature,
-			Days:         days,
+			Days:         chunks,
 			StartedAt:    now,
 			UpdatedAt:    now,
 		}
@@ -182,7 +187,7 @@ func (cp *Checkpoint) flush(ctx context.Context) error {
 }
 
 func (cp *Checkpoint) fillMissingDays(start, end string) bool {
-	wanted, err := initDays(start, end)
+	wanted, err := initChunks(start, end)
 	if err != nil {
 		return false
 	}
@@ -211,6 +216,17 @@ func SQLSignature(table string, projectID int, filterWhere, eventTimeStart, even
 	h.Write([]byte("\x00"))
 	h.Write([]byte(eventTimeEnd))
 	return hex.EncodeToString(h.Sum(nil))[:16]
+}
+
+// initChunks expands the (start, end) pair into a map of Pending entries.
+// For a YYYY-MM-DD date range, the result has one entry per day. The special
+// value UserChunkKey collapses to a single entry (user-table sync has no
+// time partition and runs as one SQL task).
+func initChunks(start, end string) (map[string]DayProgress, error) {
+	if start == UserChunkKey {
+		return map[string]DayProgress{UserChunkKey: {Status: DayPending, PageID: -1}}, nil
+	}
+	return initDays(start, end)
 }
 
 // initDays expands an inclusive [start, end] YYYY-MM-DD range into a map of

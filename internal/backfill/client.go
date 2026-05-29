@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -28,6 +29,7 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
+	"golang.org/x/net/proxy"
 )
 
 // Task lifecycle states returned by /open/sql-task-info.
@@ -81,6 +83,54 @@ func NewClient(baseURL, token string, httpClient *http.Client) *Client {
 		token:   token,
 		http:    httpClient,
 	}
+}
+
+// NewHTTPClient builds an HTTP client honouring an optional proxy URL. Empty
+// proxyURL means direct connection. http://, https://, and socks5:// schemes
+// are accepted; embedded user:pass is parsed for both HTTP CONNECT and
+// SOCKS5 auth.
+func NewHTTPClient(proxyURL string, timeout time.Duration) (*http.Client, error) {
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
+	if proxyURL == "" {
+		return &http.Client{Timeout: timeout}, nil
+	}
+
+	u, err := url.Parse(proxyURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse proxy url: %w", err)
+	}
+
+	transport := &http.Transport{
+		MaxIdleConns:        16,
+		IdleConnTimeout:     90 * time.Second,
+		TLSHandshakeTimeout: 15 * time.Second,
+	}
+
+	switch u.Scheme {
+	case "http", "https":
+		transport.Proxy = http.ProxyURL(u)
+	case "socks5":
+		var auth *proxy.Auth
+		if u.User != nil {
+			pw, _ := u.User.Password()
+			auth = &proxy.Auth{User: u.User.Username(), Password: pw}
+		}
+		dialer, err := proxy.SOCKS5("tcp", u.Host, auth, &net.Dialer{Timeout: 15 * time.Second})
+		if err != nil {
+			return nil, fmt.Errorf("socks5 dialer: %w", err)
+		}
+		cd, ok := dialer.(proxy.ContextDialer)
+		if !ok {
+			return nil, fmt.Errorf("socks5 dialer does not implement ContextDialer")
+		}
+		transport.DialContext = cd.DialContext
+	default:
+		return nil, fmt.Errorf("unsupported proxy scheme %q", u.Scheme)
+	}
+
+	return &http.Client{Transport: transport, Timeout: timeout}, nil
 }
 
 // SubmitResult is the unmarshalled "data" body of /open/submit-sql.
@@ -143,6 +193,16 @@ type ResultPageResult struct {
 }
 
 // ResultPage fetches a single page of results for an async SQL task.
+//
+// The TA result-page endpoint returns a streaming NDJSON body where each line
+// is a single result row encoded as a JSON array of column values. There is
+// no envelope and no embedded metadata: headers + page count are obtained
+// once from TaskInfo and reused on every page fetch.
+//
+// On HTTP-level errors (4xx/5xx) the response body may instead be a single
+// envelope JSON with a non-zero return_code; we detect and surface that as
+// an APIError, mapping the "task not found / expired" variants to
+// ErrTaskExpired.
 func (c *Client) ResultPage(ctx context.Context, taskID string, pageID, pageSize int) (*ResultPageResult, error) {
 	q := url.Values{}
 	q.Set("taskId", taskID)
@@ -150,15 +210,130 @@ func (c *Client) ResultPage(ctx context.Context, taskID string, pageID, pageSize
 	if pageSize > 0 {
 		q.Set("pageSize", strconv.Itoa(pageSize))
 	}
+	q.Set("format", "json")
 
-	var out ResultPageResult
-	if err := c.get(ctx, "/open/sql-result-page", q, &out); err != nil {
-		if isExpired(err) {
-			return nil, ErrTaskExpired
-		}
+	u := c.baseURL + "/open/sql-result-page?" + c.authQuery(q).Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
 		return nil, err
 	}
-	return &out, nil
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return nil, fmt.Errorf("http %d: %s", resp.StatusCode, body)
+	}
+
+	return parseResultPageStream(resp.Body)
+}
+
+// parseResultPageStream consumes an NDJSON result-page body, returning the
+// accumulated rows. An envelope-shaped JSON object on the first token is
+// treated as an API error (typical for "task expired" responses returned
+// with HTTP 200).
+func parseResultPageStream(body io.Reader) (*ResultPageResult, error) {
+	dec := json.NewDecoder(body)
+	dec.UseNumber()
+
+	var rows [][]interface{}
+	for dec.More() {
+		// Peek at the next token; if it is an opening brace we have an
+		// envelope-style error rather than a row.
+		tok, err := dec.Token()
+		if err != nil {
+			return nil, fmt.Errorf("decode result-page: %w", err)
+		}
+		if d, ok := tok.(json.Delim); ok && d == '{' {
+			// Re-read the rest of the object as an envelope.
+			var env envelope
+			env.Data = json.RawMessage("null")
+			// We've consumed the '{' already; gather key/value pairs
+			// manually via the decoder until we hit the matching '}'.
+			obj, err := readObjectRemainder(dec)
+			if err != nil {
+				return nil, fmt.Errorf("decode envelope error: %w", err)
+			}
+			if rc, ok := obj["return_code"]; ok {
+				switch v := rc.(type) {
+				case json.Number:
+					n, _ := v.Int64()
+					env.ReturnCode = int(n)
+				case float64:
+					env.ReturnCode = int(v)
+				}
+			}
+			if rm, ok := obj["return_message"].(string); ok {
+				env.ReturnMessage = rm
+			}
+			if env.ReturnCode != 0 {
+				apiErr := &APIError{Code: env.ReturnCode, Message: env.ReturnMessage}
+				if isExpired(apiErr) {
+					return nil, ErrTaskExpired
+				}
+				return nil, apiErr
+			}
+			// Envelope with return_code=0 and no rows yet — continue, the
+			// real row arrays should follow.
+			continue
+		}
+		if d, ok := tok.(json.Delim); !ok || d != '[' {
+			return nil, fmt.Errorf("decode result-page: unexpected token %v", tok)
+		}
+		row, err := readArrayRemainder(dec)
+		if err != nil {
+			return nil, fmt.Errorf("decode row %d: %w", len(rows), err)
+		}
+		rows = append(rows, row)
+	}
+	return &ResultPageResult{Rows: rows}, nil
+}
+
+// readObjectRemainder reads JSON object members until the closing '}',
+// returning a generic map. The decoder must have already consumed the
+// opening '{'.
+func readObjectRemainder(dec *json.Decoder) (map[string]any, error) {
+	out := make(map[string]any)
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		key, ok := keyTok.(string)
+		if !ok {
+			return nil, fmt.Errorf("expected string key, got %T", keyTok)
+		}
+		var val any
+		if err := dec.Decode(&val); err != nil {
+			return nil, err
+		}
+		out[key] = val
+	}
+	// Consume the closing '}'.
+	if _, err := dec.Token(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// readArrayRemainder reads JSON array elements until the closing ']'. The
+// decoder must have already consumed the opening '['.
+func readArrayRemainder(dec *json.Decoder) ([]interface{}, error) {
+	var out []interface{}
+	for dec.More() {
+		var v any
+		if err := dec.Decode(&v); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	if _, err := dec.Token(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // CancelTask asks TA to cancel an in-flight SQL task. Errors are surfaced but

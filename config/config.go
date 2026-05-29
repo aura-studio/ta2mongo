@@ -175,6 +175,21 @@ type BackfillConfig struct {
 	// pushed-down Presto WHERE clause is applied). Defaults false; set to
 	// true only if you trust the SQL pushdown semantically.
 	SkipLocalFilter bool `mapstructure:"skipLocalFilter"`
+
+	// Proxy is an optional outbound proxy URL for HTTP calls to the TA
+	// OpenAPI. Accepts http://, https://, and socks5://. Authentication can
+	// be embedded as user:pass@host:port. Empty means direct connection.
+	Proxy string `mapstructure:"proxy"`
+
+	// SchemaPrefix is prepended to the virtual table name in the FROM clause,
+	// e.g. setting it to "ta" yields FROM ta.v_event_<pid>. Empty (default)
+	// means the table is referenced without a schema.
+	SchemaPrefix string `mapstructure:"schemaPrefix"`
+
+	// Limit, when positive, appends LIMIT <n> to every issued SQL statement.
+	// Intended for smoke tests — produces a bounded result regardless of the
+	// table's true size. Leave 0 (default) for production runs.
+	Limit int `mapstructure:"limit"`
 }
 
 // DateRange is an inclusive [start, end] date interval in "YYYY-MM-DD" form.
@@ -406,11 +421,26 @@ func (b *BackfillConfig) validate() error {
 	if b.PageSize < 1000 {
 		return fmt.Errorf("backfill.pageSize must be >= 1000 (TA OpenAPI minimum)")
 	}
-	if _, err := time.Parse("2006-01-02", b.PartDateRange.Start); err != nil {
-		return fmt.Errorf("backfill.partDateRange.start invalid (want YYYY-MM-DD): %w", err)
+	// User tables in TA do not have a $part_date partition column, so the
+	// date range is required only for the event table.
+	if b.Table == BackfillTableEvent {
+		if _, err := time.Parse("2006-01-02", b.PartDateRange.Start); err != nil {
+			return fmt.Errorf("backfill.partDateRange.start invalid (want YYYY-MM-DD): %w", err)
+		}
+		if _, err := time.Parse("2006-01-02", b.PartDateRange.End); err != nil {
+			return fmt.Errorf("backfill.partDateRange.end invalid (want YYYY-MM-DD): %w", err)
+		}
 	}
-	if _, err := time.Parse("2006-01-02", b.PartDateRange.End); err != nil {
-		return fmt.Errorf("backfill.partDateRange.end invalid (want YYYY-MM-DD): %w", err)
+	if b.Proxy != "" {
+		u, err := url.Parse(b.Proxy)
+		if err != nil {
+			return fmt.Errorf("backfill.proxy invalid: %w", err)
+		}
+		switch u.Scheme {
+		case "http", "https", "socks5":
+		default:
+			return fmt.Errorf("backfill.proxy scheme %q not supported (http/https/socks5 only)", u.Scheme)
+		}
 	}
 	if !b.EventTimeRange.Empty() {
 		if b.EventTimeRange.Start != "" {
