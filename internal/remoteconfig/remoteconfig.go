@@ -10,6 +10,12 @@
 // design: the client must already be connected (using local mongoURI) to read
 // the document in the first place, and letting the control plane rewrite its
 // own location or the DB endpoint would be a foot-gun.
+//
+// Scope: the override applies per database. The document lives in the
+// _tango_config collection of whichever database the tango instance connects
+// to; it only affects instances pointed at that same database. A different
+// database is an independent namespace managing its own set of tango
+// processes with its own override document.
 package remoteconfig
 
 import (
