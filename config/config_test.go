@@ -460,43 +460,12 @@ pipeline:
 }
 
 // ---------------------------------------------------------------------------
-// ENV > CLI priority tests
+// ENV > YAML priority tests (CLI has highest priority over both)
 // ---------------------------------------------------------------------------
 
-func TestEnvOverridesCLI(t *testing.T) {
-	// Test that ENV vars have higher priority than CLI flags.
-	// When both --logLevel=error and TANGO_LOGGINGLEVEL=debug are set,
-	// the ENV value (debug) should win.
-	yaml := `
-mongo:
-  uri: "mongodb://localhost"
-`
-	cfg, err := Load(writeYAML(t, yaml), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Simulate ENV override by directly setting the value (as applyEnvOverrides does)
-	// In real test, we would set os.Setenv, but here we test the priority logic
-	// by checking that applyEnvOverrides would override CLI values.
-
-	// Test that mode from ENV overrides CLI (simulated via direct override)
-	cfg.Mode = "error"        // simulating CLI --mode=error
-	os.Setenv("TANGO_MODE", "once")
-	defer os.Unsetenv("TANGO_MODE")
-
-	// Re-load to pick up the env var
-	cfg2, err := Load(writeYAML(t, yaml), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg2.Mode != "once" {
-		t.Errorf("Mode = %q, want %q (ENV should override default)", cfg2.Mode, "once")
-	}
-}
-
 func TestEnvOverridesYAML(t *testing.T) {
-	// Test that ENV vars have higher priority than YAML values.
+	// Test that ENV vars have higher priority than YAML values
+	// (CLI flags override both ENV and YAML, but we don't test that here).
 	yaml := `
 mongo:
   uri: "mongodb://localhost"
@@ -505,7 +474,7 @@ logging:
 pipeline:
   batchSize: 500
 `
-	// envKeyName converts "logging.level" -> "LOGGING_LEVEL", "pipeline.batchSize" -> "PIPELINE_BATCH_SIZE"
+	// envKeyName converts "logging.level" -> "LOGGING_LEVEL"
 	os.Setenv("TANGO_LOGGING_LEVEL", "debug")
 	os.Setenv("TANGO_PIPELINE_BATCH_SIZE", "2000")
 	defer func() {
@@ -518,6 +487,7 @@ pipeline:
 		t.Fatal(err)
 	}
 
+	// ENV should override YAML values
 	if cfg.Logging.Level != "debug" {
 		t.Errorf("Logging.Level = %q, want %q (ENV should override YAML)", cfg.Logging.Level, "debug")
 	}

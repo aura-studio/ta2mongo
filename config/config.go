@@ -3,15 +3,15 @@
 // Configuration is loaded from five sources in increasing priority order:
 //  1. Built-in defaults
 //  2. YAML config file (optional; skipped silently if the file does not exist)
-//  3. CLI flags
-//  4. Environment variables (prefix: TANGO_, e.g. TANGO_MONGOURI)
-//  5. Remote config (MongoDB document, only filter fields)
+//  3. Remote config (MongoDB document, only filter fields)
+//  4. Environment variables (prefix: TANGO_, e.g. TANGO_MONGO_URI)
+//  5. CLI flags (highest priority)
 //
 // All YAML keys and CLI flag names are flat camelCase, e.g.
 //
 //	mongoURI        => TANGO_MONGOURI         / --mongoURI
-//	logLevel        => TANGO_LOGLEVEL         / --logLevel
-//	batchSize       => TANGO_PIPELINEBATCHSIZE
+//	logLevel        => TANGO_LOGGING_LEVEL   / --logLevel
+//	batchSize       => TANGO_PIPELINE_BATCH_SIZE
 package config
 
 import (
@@ -418,23 +418,23 @@ func (c Config) BatchChannelSize() int {
 }
 
 
-// Load builds a Config from defaults → YAML file → CLI flags → env vars.
+// Load builds a Config from defaults → YAML file → env vars → CLI flags.
 //
 // Priority (lowest to highest):
 //   1. Built-in defaults
 //   2. YAML config file (optional)
-//   3. CLI flags
+//   3. Remote config (applied by caller, only filter fields)
 //   4. Environment variables (TANGO_*)
-//   5. Remote config (applied by caller, only filter fields)
+//   5. CLI flags
 //
 // If path is empty or the file does not exist, file loading is skipped silently.
 func Load(path string, flags *pflag.FlagSet) (Config, error) {
 	v := viper.New()
 
-	// Register defaults first (lowest priority).
+	// 1. Register defaults (lowest priority).
 	setDefaults(v)
 
-	// Load YAML file (optional).
+	// 2. Load YAML file (optional).
 	if path != "" {
 		if _, err := os.Stat(path); err == nil {
 			v.SetConfigFile(path)
@@ -444,31 +444,20 @@ func Load(path string, flags *pflag.FlagSet) (Config, error) {
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return Config{}, fmt.Errorf("stat config %q: %w", path, err)
 		}
-		// ErrNotExist: silently skip; use defaults + flags + env.
+		// ErrNotExist: silently skip; use defaults + env + flags.
 	}
 
-	// Bind CLI flags (higher priority than YAML/defaults, lower than env vars).
+	// 3. Apply environment variables (override YAML but CLI overrides these below).
+	applyEnvOverrides(v)
+
+	// 4. Bind CLI flags (highest priority - overrides ENV and YAML).
 	if flags != nil {
 		if err := bindFlags(v, flags); err != nil {
 			return Config{}, err
 		}
 	}
 
-	// Environment variables: TANGO_MONGOURI, TANGO_LOGLEVEL, etc.
-	// Applied after CLI flags so that ENV has higher priority than CLI.
-	v.SetEnvPrefix("TANGO")
-	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
-	v.AutomaticEnv()
-
-	// instanceID maps to TANGO_INSTANCE_ID. AutomaticEnv would look for
-	// TANGO_INSTANCEID (no separator), so bind the documented name explicitly.
-	_ = v.BindEnv("instanceID", "TANGO_INSTANCE_ID")
-
-	// Apply env vars after flag binding so they take precedence.
-	if err := applyEnvOverrides(v); err != nil {
-		return Config{}, err
-	}
-
+	// 5. Unmarshal to Config struct.
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return Config{}, fmt.Errorf("unmarshal config: %w", err)
@@ -510,102 +499,158 @@ func bindFlags(v *viper.Viper, flags *pflag.FlagSet) error {
 // package calls this once at init.
 func SetFlagKeyMap(m FlagKeyMap) { flagKeys = m }
 
-// applyEnvOverrides explicitly reads TANGO_* environment variables and calls
-// v.Set() for each one that is set with the correct type, giving env vars higher
-// priority than CLI flags. Viper's AutomaticEnv only reads env vars during
-// Unmarshal; this function elevates them above explicitly bound flags.
-func applyEnvOverrides(v *viper.Viper) error {
-	// All config keys registered via setDefaults. We iterate over all of them
-	// to find any env vars that are set.
-	allKeys := []struct {
-		key      string
-		kind     string // "string", "int", "duration", "bool", "stringSlice"
-		envNames []string
+// applyEnvOverrides reads TANGO_* environment variables and calls v.Set() to
+// override values already loaded from YAML or defaults. This is called before
+// CLI flags are bound, so the priority order is:
+// defaults < YAML < ENV < CLI flags.
+func applyEnvOverrides(v *viper.Viper) {
+	// Map of env var name -> (config key, type, parse func)
+	// Only non-string types need special handling.
+	overrides := map[string]struct {
+		key  string
+		kind string
 	}{
-		{key: "mode", kind: "string", envNames: []string{"TANGO_MODE"}},
-		{key: "instanceID", kind: "string", envNames: []string{"TANGO_INSTANCE_ID"}},
-		{key: "logging.level", kind: "string", envNames: []string{"TANGO_LOGGING_LEVEL"}},
-		{key: "logging.format", kind: "string", envNames: []string{"TANGO_LOGGING_FORMAT"}},
-		{key: "mongo.uri", kind: "string", envNames: []string{"TANGO_MONGO_URI"}},
-		{key: "mongo.maxElapsedTime", kind: "duration", envNames: []string{"TANGO_MONGO_MAXELAPSEDTIME"}},
-		{key: "mongo.connectTimeout", kind: "duration", envNames: []string{"TANGO_MONGO_CONNECTTIMEOUT"}},
-		{key: "mongo.serverSelectionTimeout", kind: "duration", envNames: []string{"TANGO_MONGO_SERVERSELECTIONTIMEOUT"}},
-		{key: "source.logPattern", kind: "stringSlice", envNames: []string{"TANGO_SOURCE_LOGPATTERN"}},
-		{key: "source.tailMode", kind: "string", envNames: []string{"TANGO_SOURCE_TAILMODE"}},
-		{key: "source.rescanInterval", kind: "duration", envNames: []string{"TANGO_SOURCE_RESCANINTERVAL"}},
-		{key: "source.pollInterval", kind: "duration", envNames: []string{"TANGO_SOURCE_POLLINTERVAL"}},
-		{key: "source.maxLineBytes", kind: "int", envNames: []string{"TANGO_SOURCE_MAXLINEBYTES"}},
-		{key: "pipeline.batchSize", kind: "int", envNames: []string{"TANGO_PIPELINE_BATCH_SIZE"}},
-		{key: "pipeline.batchSizeMin", kind: "int", envNames: []string{"TANGO_PIPELINE_BATCH_SIZE_MIN"}},
-		{key: "pipeline.batchSizeMax", kind: "int", envNames: []string{"TANGO_PIPELINE_BATCH_SIZE_MAX"}},
-		{key: "pipeline.batchWorkers", kind: "int", envNames: []string{"TANGO_PIPELINE_BATCH_WORKERS"}},
-		{key: "pipeline.flushInterval", kind: "duration", envNames: []string{"TANGO_PIPELINE_FLUSH_INTERVAL"}},
-		{key: "pipeline.channelBuffer", kind: "int", envNames: []string{"TANGO_PIPELINE_CHANNEL_BUFFER"}},
-		{key: "pipeline.deadLetterCap", kind: "int", envNames: []string{"TANGO_PIPELINE_DEAD_LETTER_CAP"}},
-		{key: "filter.include", kind: "stringSlice", envNames: []string{"TANGO_FILTER_INCLUDE"}},
-		{key: "filter.exclude", kind: "stringSlice", envNames: []string{"TANGO_FILTER_EXCLUDE"}},
-		{key: "backfill.apiBaseURL", kind: "string", envNames: []string{"TANGO_BACKFILL_API_BASE_URL"}},
-		{key: "backfill.token", kind: "string", envNames: []string{"TANGO_BACKFILL_TOKEN"}},
-		{key: "backfill.projectID", kind: "int", envNames: []string{"TANGO_BACKFILL_PROJECT_ID"}},
-		{key: "backfill.table", kind: "string", envNames: []string{"TANGO_BACKFILL_TABLE"}},
-		{key: "backfill.partDateRange.start", kind: "string", envNames: []string{"TANGO_BACKFILL_PART_DATE_RANGE_START"}},
-		{key: "backfill.partDateRange.end", kind: "string", envNames: []string{"TANGO_BACKFILL_PART_DATE_RANGE_END"}},
-		{key: "backfill.eventTimeRange.start", kind: "string", envNames: []string{"TANGO_BACKFILL_EVENT_TIME_RANGE_START"}},
-		{key: "backfill.eventTimeRange.end", kind: "string", envNames: []string{"TANGO_BACKFILL_EVENT_TIME_RANGE_END"}},
-		{key: "backfill.pageSize", kind: "int", envNames: []string{"TANGO_BACKFILL_PAGE_SIZE"}},
-		{key: "backfill.paginate", kind: "bool", envNames: []string{"TANGO_BACKFILL_PAGINATE"}},
-		{key: "backfill.pollInterval", kind: "duration", envNames: []string{"TANGO_BACKFILL_POLL_INTERVAL"}},
-		{key: "backfill.pollTimeout", kind: "duration", envNames: []string{"TANGO_BACKFILL_POLL_TIMEOUT"}},
-		{key: "backfill.runID", kind: "string", envNames: []string{"TANGO_BACKFILL_RUN_ID"}},
-		{key: "backfill.progressCollection", kind: "string", envNames: []string{"TANGO_BACKFILL_PROGRESS_COLLECTION"}},
-		{key: "backfill.forceSkipExisting", kind: "bool", envNames: []string{"TANGO_BACKFILL_FORCE_SKIP_EXISTING"}},
-		{key: "backfill.skipLocalFilter", kind: "bool", envNames: []string{"TANGO_BACKFILL_SKIP_LOCAL_FILTER"}},
-		{key: "backfill.proxy", kind: "string", envNames: []string{"TANGO_BACKFILL_PROXY"}},
-		{key: "backfill.schemaPrefix", kind: "string", envNames: []string{"TANGO_BACKFILL_SCHEMA_PREFIX"}},
-		{key: "backfill.limit", kind: "int", envNames: []string{"TANGO_BACKFILL_LIMIT"}},
-		{key: "backfill.pageRetries", kind: "int", envNames: []string{"TANGO_BACKFILL_PAGE_RETRIES"}},
-		{key: "remoteConfig.enabled", kind: "bool", envNames: []string{"TANGO_REMOTE_CONFIG_ENABLED"}},
-		{key: "remoteConfig.collection", kind: "string", envNames: []string{"TANGO_REMOTE_CONFIG_COLLECTION"}},
-		{key: "remoteConfig.documentID", kind: "string", envNames: []string{"TANGO_REMOTE_CONFIG_DOCUMENT_ID"}},
-		{key: "remoteConfig.syncInterval", kind: "duration", envNames: []string{"TANGO_REMOTE_CONFIG_SYNC_INTERVAL"}},
-		{key: "agent.tasksCollection", kind: "string", envNames: []string{"TANGO_AGENT_TASKS_COLLECTION"}},
-		{key: "agent.instancesCollection", kind: "string", envNames: []string{"TANGO_AGENT_INSTANCES_COLLECTION"}},
-		{key: "agent.pollInterval", kind: "duration", envNames: []string{"TANGO_AGENT_POLL_INTERVAL"}},
-		{key: "agent.leaseDuration", kind: "duration", envNames: []string{"TANGO_AGENT_LEASE_DURATION"}},
-		{key: "agent.heartbeatInterval", kind: "duration", envNames: []string{"TANGO_AGENT_HEARTBEAT_INTERVAL"}},
-		{key: "agent.instanceTTL", kind: "duration", envNames: []string{"TANGO_AGENT_INSTANCE_TTL"}},
+		// String types (AutomaticEnv handles these)
+		"TANGO_MODE":                              {key: "mode"},
+		"TANGO_INSTANCE_ID":                       {key: "instanceID"},
+		"TANGO_LOGGING_LEVEL":                    {key: "logging.level"},
+		"TANGO_LOGGING_FORMAT":                   {key: "logging.format"},
+		"TANGO_MONGO_URI":                        {key: "mongo.uri"},
+		"TANGO_MONGO_MAXELAPSEDTIME":            {key: "mongo.maxElapsedTime"},
+		"TANGO_MONGO_CONNECTTIMEOUT":            {key: "mongo.connectTimeout"},
+		"TANGO_MONGO_SERVERSELECTIONTIMEOUT":     {key: "mongo.serverSelectionTimeout"},
+		"TANGO_SOURCE_LOGPATTERN":               {key: "source.logPattern"},
+		"TANGO_SOURCE_TAILMODE":                 {key: "source.tailMode"},
+		"TANGO_SOURCE_RESCANINTERVAL":          {key: "source.rescanInterval"},
+		"TANGO_SOURCE_POLLINTERVAL":             {key: "source.pollInterval"},
+		"TANGO_SOURCE_MAXLINEBYTES":             {key: "source.maxLineBytes"},
+		"TANGO_PIPELINE_BATCH_SIZE":             {key: "pipeline.batchSize"},
+		"TANGO_PIPELINE_BATCH_SIZE_MIN":        {key: "pipeline.batchSizeMin"},
+		"TANGO_PIPELINE_BATCH_SIZE_MAX":        {key: "pipeline.batchSizeMax"},
+		"TANGO_PIPELINE_BATCH_WORKERS":          {key: "pipeline.batchWorkers"},
+		"TANGO_PIPELINE_FLUSH_INTERVAL":         {key: "pipeline.flushInterval"},
+		"TANGO_PIPELINE_CHANNEL_BUFFER":         {key: "pipeline.channelBuffer"},
+		"TANGO_PIPELINE_DEAD_LETTER_CAP":       {key: "pipeline.deadLetterCap"},
+		"TANGO_FILTER_INCLUDE":                  {key: "filter.include"},
+		"TANGO_FILTER_EXCLUDE":                  {key: "filter.exclude"},
+		"TANGO_BACKFILL_API_BASE_URL":          {key: "backfill.apiBaseURL"},
+		"TANGO_BACKFILL_TOKEN":                 {key: "backfill.token"},
+		"TANGO_BACKFILL_PROJECT_ID":            {key: "backfill.projectID"},
+		"TANGO_BACKFILL_TABLE":                 {key: "backfill.table"},
+		"TANGO_BACKFILL_PART_DATE_RANGE_START": {key: "backfill.partDateRange.start"},
+		"TANGO_BACKFILL_PART_DATE_RANGE_END":   {key: "backfill.partDateRange.end"},
+		"TANGO_BACKFILL_EVENT_TIME_RANGE_START": {key: "backfill.eventTimeRange.start"},
+		"TANGO_BACKFILL_EVENT_TIME_RANGE_END":  {key: "backfill.eventTimeRange.end"},
+		"TANGO_BACKFILL_RUN_ID":                {key: "backfill.runID"},
+		"TANGO_BACKFILL_PROGRESS_COLLECTION":   {key: "backfill.progressCollection"},
+		"TANGO_BACKFILL_PROXY":                {key: "backfill.proxy"},
+		"TANGO_BACKFILL_SCHEMA_PREFIX":         {key: "backfill.schemaPrefix"},
+		"TANGO_REMOTE_CONFIG_ENABLED":          {key: "remoteConfig.enabled"},
+		"TANGO_REMOTE_CONFIG_COLLECTION":        {key: "remoteConfig.collection"},
+		"TANGO_REMOTE_CONFIG_DOCUMENT_ID":      {key: "remoteConfig.documentID"},
+		"TANGO_REMOTE_CONFIG_SYNC_INTERVAL":    {key: "remoteConfig.syncInterval"},
+		"TANGO_AGENT_TASKS_COLLECTION":         {key: "agent.tasksCollection"},
+		"TANGO_AGENT_INSTANCES_COLLECTION":     {key: "agent.instancesCollection"},
+		"TANGO_AGENT_POLL_INTERVAL":            {key: "agent.pollInterval"},
+		"TANGO_AGENT_LEASE_DURATION":           {key: "agent.leaseDuration"},
+		"TANGO_AGENT_HEARTBEAT_INTERVAL":       {key: "agent.heartbeatInterval"},
+		"TANGO_AGENT_INSTANCE_TTL":             {key: "agent.instanceTTL"},
 	}
 
-	for _, entry := range allKeys {
-		for _, envName := range entry.envNames {
-			if val := os.Getenv(envName); val != "" {
-				switch entry.kind {
-				case "string":
-					v.Set(entry.key, val)
-				case "int":
-					var intVal int
-					if _, err := fmt.Sscanf(val, "%d", &intVal); err == nil {
-						v.Set(entry.key, intVal)
-					}
-				case "duration":
-					if d, err := time.ParseDuration(val); err == nil {
-						v.Set(entry.key, d)
-					}
-				case "bool":
-					if val == "true" || val == "1" {
-						v.Set(entry.key, true)
-					} else if val == "false" || val == "0" {
-						v.Set(entry.key, false)
-					}
-				case "stringSlice":
-					v.Set(entry.key, []string{val})
-				}
-				break // only set first matching env var
+	// Process int types first, then duration, then string (as strings are default)
+	intKeys := map[string]string{
+		"TANGO_SOURCE_MAXLINEBYTES":          "source.maxLineBytes",
+		"TANGO_PIPELINE_BATCH_SIZE":          "pipeline.batchSize",
+		"TANGO_PIPELINE_BATCH_SIZE_MIN":      "pipeline.batchSizeMin",
+		"TANGO_PIPELINE_BATCH_SIZE_MAX":      "pipeline.batchSizeMax",
+		"TANGO_PIPELINE_BATCH_WORKERS":       "pipeline.batchWorkers",
+		"TANGO_PIPELINE_CHANNEL_BUFFER":      "pipeline.channelBuffer",
+		"TANGO_PIPELINE_DEAD_LETTER_CAP":    "pipeline.deadLetterCap",
+		"TANGO_BACKFILL_PROJECT_ID":          "backfill.projectID",
+		"TANGO_BACKFILL_PAGE_SIZE":           "backfill.pageSize",
+		"TANGO_BACKFILL_PAGE_RETRIES":        "backfill.pageRetries",
+		"TANGO_BACKFILL_LIMIT":              "backfill.limit",
+	}
+	for envKey, cfgKey := range intKeys {
+		if val := os.Getenv(envKey); val != "" {
+			var intVal int
+			if _, err := fmt.Sscanf(val, "%d", &intVal); err == nil {
+				v.Set(cfgKey, intVal)
 			}
 		}
 	}
 
-	return nil
+	// Process duration types
+	durationKeys := map[string]string{
+		"TANGO_MONGO_MAXELAPSEDTIME":          "mongo.maxElapsedTime",
+		"TANGO_MONGO_CONNECTTIMEOUT":          "mongo.connectTimeout",
+		"TANGO_MONGO_SERVERSELECTIONTIMEOUT":   "mongo.serverSelectionTimeout",
+		"TANGO_SOURCE_RESCANINTERVAL":          "source.rescanInterval",
+		"TANGO_SOURCE_POLLINTERVAL":            "source.pollInterval",
+		"TANGO_PIPELINE_FLUSH_INTERVAL":        "pipeline.flushInterval",
+		"TANGO_BACKFILL_POLL_INTERVAL":        "backfill.pollInterval",
+		"TANGO_BACKFILL_POLL_TIMEOUT":         "backfill.pollTimeout",
+		"TANGO_REMOTE_CONFIG_SYNC_INTERVAL":   "remoteConfig.syncInterval",
+		"TANGO_AGENT_POLL_INTERVAL":            "agent.pollInterval",
+		"TANGO_AGENT_LEASE_DURATION":           "agent.leaseDuration",
+		"TANGO_AGENT_HEARTBEAT_INTERVAL":       "agent.heartbeatInterval",
+		"TANGO_AGENT_INSTANCE_TTL":             "agent.instanceTTL",
+	}
+	for envKey, cfgKey := range durationKeys {
+		if val := os.Getenv(envKey); val != "" {
+			if d, err := time.ParseDuration(val); err == nil {
+				v.Set(cfgKey, d)
+			}
+		}
+	}
+
+	// Process bool types
+	boolKeys := map[string]string{
+		"TANGO_BACKFILL_PAGINATE":            "backfill.paginate",
+		"TANGO_BACKFILL_FORCE_SKIP_EXISTING": "backfill.forceSkipExisting",
+		"TANGO_BACKFILL_SKIP_LOCAL_FILTER":   "backfill.skipLocalFilter",
+		"TANGO_REMOTE_CONFIG_ENABLED":         "remoteConfig.enabled",
+	}
+	for envKey, cfgKey := range boolKeys {
+		if val := os.Getenv(envKey); val != "" {
+			if val == "true" || val == "1" {
+				v.Set(cfgKey, true)
+			} else if val == "false" || val == "0" {
+				v.Set(cfgKey, false)
+			}
+		}
+	}
+
+	// Process string types (including instanceID special case)
+	stringKeys := map[string]string{
+		"TANGO_MODE":                              "mode",
+		"TANGO_INSTANCE_ID":                       "instanceID",
+		"TANGO_LOGGING_LEVEL":                    "logging.level",
+		"TANGO_LOGGING_FORMAT":                   "logging.format",
+		"TANGO_MONGO_URI":                        "mongo.uri",
+		"TANGO_SOURCE_TAILMODE":                  "source.tailMode",
+		"TANGO_BACKFILL_API_BASE_URL":           "backfill.apiBaseURL",
+		"TANGO_BACKFILL_TOKEN":                  "backfill.token",
+		"TANGO_BACKFILL_TABLE":                   "backfill.table",
+		"TANGO_BACKFILL_PART_DATE_RANGE_START":  "backfill.partDateRange.start",
+		"TANGO_BACKFILL_PART_DATE_RANGE_END":    "backfill.partDateRange.end",
+		"TANGO_BACKFILL_EVENT_TIME_RANGE_START":  "backfill.eventTimeRange.start",
+		"TANGO_BACKFILL_EVENT_TIME_RANGE_END":    "backfill.eventTimeRange.end",
+		"TANGO_BACKFILL_RUN_ID":                  "backfill.runID",
+		"TANGO_BACKFILL_PROGRESS_COLLECTION":     "backfill.progressCollection",
+		"TANGO_BACKFILL_PROXY":                  "backfill.proxy",
+		"TANGO_BACKFILL_SCHEMA_PREFIX":           "backfill.schemaPrefix",
+		"TANGO_REMOTE_CONFIG_COLLECTION":         "remoteConfig.collection",
+		"TANGO_REMOTE_CONFIG_DOCUMENT_ID":       "remoteConfig.documentID",
+		"TANGO_AGENT_TASKS_COLLECTION":           "agent.tasksCollection",
+		"TANGO_AGENT_INSTANCES_COLLECTION":      "agent.instancesCollection",
+	}
+	_ = overrides // suppress unused warning
+	for envKey, cfgKey := range stringKeys {
+		if val := os.Getenv(envKey); val != "" {
+			v.Set(cfgKey, val)
+		}
+	}
 }
 
 // setDefaults registers viper defaults for all fields.
