@@ -1,16 +1,17 @@
 // Package config defines the tango configuration structure and loading logic.
 //
-// Configuration is loaded from four sources in increasing priority order:
+// Configuration is loaded from five sources in increasing priority order:
 //  1. Built-in defaults
 //  2. YAML config file (optional; skipped silently if the file does not exist)
-//  3. Environment variables (prefix: TANGO_, e.g. TANGO_MONGOURI)
-//  4. CLI flags (highest priority)
+//  3. CLI flags
+//  4. Environment variables (prefix: TANGO_, e.g. TANGO_MONGOURI)
+//  5. Remote config (MongoDB document, only filter fields)
 //
 // All YAML keys and CLI flag names are flat camelCase, e.g.
 //
 //	mongoURI        => TANGO_MONGOURI         / --mongoURI
 //	logLevel        => TANGO_LOGLEVEL         / --logLevel
-//	batchSize       => TANGO_BATCHSIZE        / --batchSize
+//	batchSize       => TANGO_PIPELINEBATCHSIZE
 package config
 
 import (
@@ -417,22 +418,20 @@ func (c Config) BatchChannelSize() int {
 }
 
 
-// Load builds a Config from defaults → YAML file → env vars → CLI flags.
+// Load builds a Config from defaults → YAML file → CLI flags → env vars.
+//
+// Priority (lowest to highest):
+//   1. Built-in defaults
+//   2. YAML config file (optional)
+//   3. CLI flags
+//   4. Environment variables (TANGO_*)
+//   5. Remote config (applied by caller, only filter fields)
 //
 // If path is empty or the file does not exist, file loading is skipped silently.
 func Load(path string, flags *pflag.FlagSet) (Config, error) {
 	v := viper.New()
 
-	// Environment variables: TANGO_MONGOURI, TANGO_LOGLEVEL, etc.
-	v.SetEnvPrefix("TANGO")
-	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
-	v.AutomaticEnv()
-
-	// instanceID maps to TANGO_INSTANCE_ID. AutomaticEnv would look for
-	// TANGO_INSTANCEID (no separator), so bind the documented name explicitly.
-	_ = v.BindEnv("instanceID", "TANGO_INSTANCE_ID")
-
-	// Register defaults.
+	// Register defaults first (lowest priority).
 	setDefaults(v)
 
 	// Load YAML file (optional).
@@ -445,14 +444,29 @@ func Load(path string, flags *pflag.FlagSet) (Config, error) {
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return Config{}, fmt.Errorf("stat config %q: %w", path, err)
 		}
-		// ErrNotExist: silently skip; use defaults + env + flags.
+		// ErrNotExist: silently skip; use defaults + flags + env.
 	}
 
-	// Bind CLI flags (flags override env vars and file).
+	// Bind CLI flags (higher priority than YAML/defaults, lower than env vars).
 	if flags != nil {
 		if err := bindFlags(v, flags); err != nil {
 			return Config{}, err
 		}
+	}
+
+	// Environment variables: TANGO_MONGOURI, TANGO_LOGLEVEL, etc.
+	// Applied after CLI flags so that ENV has higher priority than CLI.
+	v.SetEnvPrefix("TANGO")
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	v.AutomaticEnv()
+
+	// instanceID maps to TANGO_INSTANCE_ID. AutomaticEnv would look for
+	// TANGO_INSTANCEID (no separator), so bind the documented name explicitly.
+	_ = v.BindEnv("instanceID", "TANGO_INSTANCE_ID")
+
+	// Apply env vars after flag binding so they take precedence.
+	if err := applyEnvOverrides(v); err != nil {
+		return Config{}, err
 	}
 
 	var cfg Config
@@ -495,6 +509,104 @@ func bindFlags(v *viper.Viper, flags *pflag.FlagSet) error {
 // SetFlagKeyMap installs the flag→config-key translation used by Load. The cmd
 // package calls this once at init.
 func SetFlagKeyMap(m FlagKeyMap) { flagKeys = m }
+
+// applyEnvOverrides explicitly reads TANGO_* environment variables and calls
+// v.Set() for each one that is set with the correct type, giving env vars higher
+// priority than CLI flags. Viper's AutomaticEnv only reads env vars during
+// Unmarshal; this function elevates them above explicitly bound flags.
+func applyEnvOverrides(v *viper.Viper) error {
+	// All config keys registered via setDefaults. We iterate over all of them
+	// to find any env vars that are set.
+	allKeys := []struct {
+		key      string
+		kind     string // "string", "int", "duration", "bool", "stringSlice"
+		envNames []string
+	}{
+		{key: "mode", kind: "string", envNames: []string{"TANGO_MODE"}},
+		{key: "instanceID", kind: "string", envNames: []string{"TANGO_INSTANCE_ID"}},
+		{key: "logging.level", kind: "string", envNames: []string{"TANGO_LOGGING_LEVEL"}},
+		{key: "logging.format", kind: "string", envNames: []string{"TANGO_LOGGING_FORMAT"}},
+		{key: "mongo.uri", kind: "string", envNames: []string{"TANGO_MONGO_URI"}},
+		{key: "mongo.maxElapsedTime", kind: "duration", envNames: []string{"TANGO_MONGO_MAXELAPSEDTIME"}},
+		{key: "mongo.connectTimeout", kind: "duration", envNames: []string{"TANGO_MONGO_CONNECTTIMEOUT"}},
+		{key: "mongo.serverSelectionTimeout", kind: "duration", envNames: []string{"TANGO_MONGO_SERVERSELECTIONTIMEOUT"}},
+		{key: "source.logPattern", kind: "stringSlice", envNames: []string{"TANGO_SOURCE_LOGPATTERN"}},
+		{key: "source.tailMode", kind: "string", envNames: []string{"TANGO_SOURCE_TAILMODE"}},
+		{key: "source.rescanInterval", kind: "duration", envNames: []string{"TANGO_SOURCE_RESCANINTERVAL"}},
+		{key: "source.pollInterval", kind: "duration", envNames: []string{"TANGO_SOURCE_POLLINTERVAL"}},
+		{key: "source.maxLineBytes", kind: "int", envNames: []string{"TANGO_SOURCE_MAXLINEBYTES"}},
+		{key: "pipeline.batchSize", kind: "int", envNames: []string{"TANGO_PIPELINE_BATCH_SIZE"}},
+		{key: "pipeline.batchSizeMin", kind: "int", envNames: []string{"TANGO_PIPELINE_BATCH_SIZE_MIN"}},
+		{key: "pipeline.batchSizeMax", kind: "int", envNames: []string{"TANGO_PIPELINE_BATCH_SIZE_MAX"}},
+		{key: "pipeline.batchWorkers", kind: "int", envNames: []string{"TANGO_PIPELINE_BATCH_WORKERS"}},
+		{key: "pipeline.flushInterval", kind: "duration", envNames: []string{"TANGO_PIPELINE_FLUSH_INTERVAL"}},
+		{key: "pipeline.channelBuffer", kind: "int", envNames: []string{"TANGO_PIPELINE_CHANNEL_BUFFER"}},
+		{key: "pipeline.deadLetterCap", kind: "int", envNames: []string{"TANGO_PIPELINE_DEAD_LETTER_CAP"}},
+		{key: "filter.include", kind: "stringSlice", envNames: []string{"TANGO_FILTER_INCLUDE"}},
+		{key: "filter.exclude", kind: "stringSlice", envNames: []string{"TANGO_FILTER_EXCLUDE"}},
+		{key: "backfill.apiBaseURL", kind: "string", envNames: []string{"TANGO_BACKFILL_API_BASE_URL"}},
+		{key: "backfill.token", kind: "string", envNames: []string{"TANGO_BACKFILL_TOKEN"}},
+		{key: "backfill.projectID", kind: "int", envNames: []string{"TANGO_BACKFILL_PROJECT_ID"}},
+		{key: "backfill.table", kind: "string", envNames: []string{"TANGO_BACKFILL_TABLE"}},
+		{key: "backfill.partDateRange.start", kind: "string", envNames: []string{"TANGO_BACKFILL_PART_DATE_RANGE_START"}},
+		{key: "backfill.partDateRange.end", kind: "string", envNames: []string{"TANGO_BACKFILL_PART_DATE_RANGE_END"}},
+		{key: "backfill.eventTimeRange.start", kind: "string", envNames: []string{"TANGO_BACKFILL_EVENT_TIME_RANGE_START"}},
+		{key: "backfill.eventTimeRange.end", kind: "string", envNames: []string{"TANGO_BACKFILL_EVENT_TIME_RANGE_END"}},
+		{key: "backfill.pageSize", kind: "int", envNames: []string{"TANGO_BACKFILL_PAGE_SIZE"}},
+		{key: "backfill.paginate", kind: "bool", envNames: []string{"TANGO_BACKFILL_PAGINATE"}},
+		{key: "backfill.pollInterval", kind: "duration", envNames: []string{"TANGO_BACKFILL_POLL_INTERVAL"}},
+		{key: "backfill.pollTimeout", kind: "duration", envNames: []string{"TANGO_BACKFILL_POLL_TIMEOUT"}},
+		{key: "backfill.runID", kind: "string", envNames: []string{"TANGO_BACKFILL_RUN_ID"}},
+		{key: "backfill.progressCollection", kind: "string", envNames: []string{"TANGO_BACKFILL_PROGRESS_COLLECTION"}},
+		{key: "backfill.forceSkipExisting", kind: "bool", envNames: []string{"TANGO_BACKFILL_FORCE_SKIP_EXISTING"}},
+		{key: "backfill.skipLocalFilter", kind: "bool", envNames: []string{"TANGO_BACKFILL_SKIP_LOCAL_FILTER"}},
+		{key: "backfill.proxy", kind: "string", envNames: []string{"TANGO_BACKFILL_PROXY"}},
+		{key: "backfill.schemaPrefix", kind: "string", envNames: []string{"TANGO_BACKFILL_SCHEMA_PREFIX"}},
+		{key: "backfill.limit", kind: "int", envNames: []string{"TANGO_BACKFILL_LIMIT"}},
+		{key: "backfill.pageRetries", kind: "int", envNames: []string{"TANGO_BACKFILL_PAGE_RETRIES"}},
+		{key: "remoteConfig.enabled", kind: "bool", envNames: []string{"TANGO_REMOTE_CONFIG_ENABLED"}},
+		{key: "remoteConfig.collection", kind: "string", envNames: []string{"TANGO_REMOTE_CONFIG_COLLECTION"}},
+		{key: "remoteConfig.documentID", kind: "string", envNames: []string{"TANGO_REMOTE_CONFIG_DOCUMENT_ID"}},
+		{key: "remoteConfig.syncInterval", kind: "duration", envNames: []string{"TANGO_REMOTE_CONFIG_SYNC_INTERVAL"}},
+		{key: "agent.tasksCollection", kind: "string", envNames: []string{"TANGO_AGENT_TASKS_COLLECTION"}},
+		{key: "agent.instancesCollection", kind: "string", envNames: []string{"TANGO_AGENT_INSTANCES_COLLECTION"}},
+		{key: "agent.pollInterval", kind: "duration", envNames: []string{"TANGO_AGENT_POLL_INTERVAL"}},
+		{key: "agent.leaseDuration", kind: "duration", envNames: []string{"TANGO_AGENT_LEASE_DURATION"}},
+		{key: "agent.heartbeatInterval", kind: "duration", envNames: []string{"TANGO_AGENT_HEARTBEAT_INTERVAL"}},
+		{key: "agent.instanceTTL", kind: "duration", envNames: []string{"TANGO_AGENT_INSTANCE_TTL"}},
+	}
+
+	for _, entry := range allKeys {
+		for _, envName := range entry.envNames {
+			if val := os.Getenv(envName); val != "" {
+				switch entry.kind {
+				case "string":
+					v.Set(entry.key, val)
+				case "int":
+					var intVal int
+					if _, err := fmt.Sscanf(val, "%d", &intVal); err == nil {
+						v.Set(entry.key, intVal)
+					}
+				case "duration":
+					if d, err := time.ParseDuration(val); err == nil {
+						v.Set(entry.key, d)
+					}
+				case "bool":
+					if val == "true" || val == "1" {
+						v.Set(entry.key, true)
+					} else if val == "false" || val == "0" {
+						v.Set(entry.key, false)
+					}
+				case "stringSlice":
+					v.Set(entry.key, []string{val})
+				}
+				break // only set first matching env var
+			}
+		}
+	}
+
+	return nil
+}
 
 // setDefaults registers viper defaults for all fields.
 func setDefaults(v *viper.Viper) {
