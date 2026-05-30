@@ -53,8 +53,12 @@ source:
 # pipeline: 批量与并行写
 # ---------------------------------------------------------------------------
 pipeline:
-  # 目标批量大小；min=batchSize/4, max=batchSize*2 自动推导
+  # 目标批量大小
   batchSize: 1000
+  # 最小批量大小；0=自动派生为 batchSize/4（最小1）
+  batchSizeMin: 0
+  # 最大批量大小；0=自动派生为 batchSize*2
+  batchSizeMax: 0
   # 并行写入 worker 数
   batchWorkers: 2
   # 批量定时刷新间隔

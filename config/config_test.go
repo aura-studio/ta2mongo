@@ -306,3 +306,155 @@ func TestChannelBuffer_DerivedVsExplicit(t *testing.T) {
 		t.Errorf("explicit channel size = %d, want 4096", got)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// batchSizeMin / batchSizeMax tests
+// ---------------------------------------------------------------------------
+
+func TestBatchSizeMinMax_ConfiguredValues(t *testing.T) {
+	// Scenario 1: configured batchSizeMin=200, batchSizeMax=3000 are honored
+	yaml := `
+mongo:
+  uri: "mongodb://localhost"
+pipeline:
+  batchSize: 1000
+  batchSizeMin: 200
+  batchSizeMax: 3000
+`
+	cfg, err := Load(writeYAML(t, yaml), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.BatchSizeMin(); got != 200 {
+		t.Errorf("BatchSizeMin() = %d, want 200", got)
+	}
+	if got := cfg.BatchSizeMax(); got != 3000 {
+		t.Errorf("BatchSizeMax() = %d, want 3000", got)
+	}
+}
+
+func TestBatchSizeMinMax_AutoDerivation(t *testing.T) {
+	// Scenario 2: batchSizeMin=0, batchSizeMax=0 → auto-derived
+	yaml := `
+mongo:
+  uri: "mongodb://localhost"
+pipeline:
+  batchSize: 1000
+  batchSizeMin: 0
+  batchSizeMax: 0
+`
+	cfg, err := Load(writeYAML(t, yaml), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.BatchSizeMin(); got != 250 {
+		t.Errorf("BatchSizeMin() = %d, want 250 (auto-derived BatchSize/4)", got)
+	}
+	if got := cfg.BatchSizeMax(); got != 2000 {
+		t.Errorf("BatchSizeMax() = %d, want 2000 (auto-derived BatchSize*2)", got)
+	}
+}
+
+func TestBatchSizeMinMax_ClampBehavior(t *testing.T) {
+	// Scenario 3: batchSizeMin > batchSize → clamped to batchSize
+	yaml := `
+mongo:
+  uri: "mongodb://localhost"
+pipeline:
+  batchSize: 1000
+  batchSizeMin: 1500
+  batchSizeMax: 0
+`
+	cfg, err := Load(writeYAML(t, yaml), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.BatchSizeMin(); got != 1000 {
+		t.Errorf("BatchSizeMin() = %d, want 1000 (clamped to batchSize)", got)
+	}
+	// batchSizeMax < batchSize → clamped to batchSize
+	yaml2 := `
+mongo:
+  uri: "mongodb://localhost"
+pipeline:
+  batchSize: 1000
+  batchSizeMin: 0
+  batchSizeMax: 500
+`
+	cfg2, err := Load(writeYAML(t, yaml2), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg2.BatchSizeMax(); got != 1000 {
+		t.Errorf("BatchSizeMax() = %d, want 1000 (clamped to batchSize)", got)
+	}
+}
+
+func TestBatchSizeMinMax_ValidationErrors(t *testing.T) {
+	// Note: applyDefaults() silently clamps invalid values, so Validate() does
+	// not report errors for batchSizeMin > batchSize or batchSize > batchSizeMax.
+	// The clamping behavior is tested in TestBatchSizeMinMax_ClampBehavior.
+	// Here we verify that Validate() passes after applyDefaults correction.
+
+	// batchSizeMin > batchSize → silently clamped to batchSize, Validate OK
+	yaml := `
+mongo:
+  uri: "mongodb://localhost"
+pipeline:
+  batchSize: 1000
+  batchSizeMin: 1500
+`
+	cfg, err := Load(writeYAML(t, yaml), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// applyDefaults clamps batchSizeMin to batchSize
+	if cfg.BatchSizeMin() != 1000 {
+		t.Errorf("BatchSizeMin() = %d, want 1000 (clamped)", cfg.BatchSizeMin())
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate() unexpected error: %v", err)
+	}
+
+	// batchSize > batchSizeMax → silently clamped to batchSize, Validate OK
+	yaml2 := `
+mongo:
+  uri: "mongodb://localhost"
+pipeline:
+  batchSize: 1000
+  batchSizeMax: 500
+`
+	cfg2, err := Load(writeYAML(t, yaml2), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// applyDefaults clamps batchSizeMax to batchSize
+	if cfg2.BatchSizeMax() != 1000 {
+		t.Errorf("BatchSizeMax() = %d, want 1000 (clamped)", cfg2.BatchSizeMax())
+	}
+	if err := cfg2.Validate(); err != nil {
+		t.Errorf("Validate() unexpected error: %v", err)
+	}
+}
+
+func TestBatchSizeMinMax_BatchSize1_Ceiling(t *testing.T) {
+	// BatchSize=1: BatchSizeMin auto-derived as 1 (not 0), BatchSizeMax as 2
+	yaml := `
+mongo:
+  uri: "mongodb://localhost"
+pipeline:
+  batchSize: 1
+  batchSizeMin: 0
+  batchSizeMax: 0
+`
+	cfg, err := Load(writeYAML(t, yaml), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.BatchSizeMin(); got != 1 {
+		t.Errorf("BatchSizeMin() = %d, want 1 (minimum 1)", got)
+	}
+	if got := cfg.BatchSizeMax(); got != 2 {
+		t.Errorf("BatchSizeMax() = %d, want 2 (BatchSize*2)", got)
+	}
+}

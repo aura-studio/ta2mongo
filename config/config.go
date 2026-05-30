@@ -176,8 +176,15 @@ type SourceConfig struct {
 // PipelineConfig configures batching and parallel write workers.
 type PipelineConfig struct {
 	// BatchSize is the target number of records per bulk-write flush.
-	// The adaptive min is BatchSize/4 and max is BatchSize*2. Default 1000.
+	// The adaptive min/max can be overridden via batchSizeMin/batchSizeMax.
+	// Default 1000.
 	BatchSize int `mapstructure:"batchSize"`
+	// BatchSizeMin is the adaptive lower bound for batch sizing.
+	// When 0, it is auto-derived as BatchSize/4 (minimum 1).
+	BatchSizeMin int `mapstructure:"batchSizeMin"`
+	// BatchSizeMax is the adaptive upper bound for batch sizing.
+	// When 0, it is auto-derived as BatchSize*2.
+	BatchSizeMax int `mapstructure:"batchSizeMax"`
 	// BatchWorkers is the number of parallel write workers. Default 2.
 	BatchWorkers int `mapstructure:"batchWorkers"`
 	// FlushInterval is how often workers flush partial batches. Default 1s.
@@ -370,8 +377,16 @@ func (b *BackfillConfig) ForceSkip() bool {
 	return *b.ForceSkipExisting
 }
 
-// BatchSizeMin returns the adaptive lower bound (BatchSize / 4, minimum 1).
+// BatchSizeMin returns the adaptive lower bound for batch sizing.
+// When BatchSizeMin is explicitly set (>0), it is used directly (clamped to BatchSize).
+// When BatchSizeMin is 0, it is auto-derived as BatchSize/4 (minimum 1).
 func (c Config) BatchSizeMin() int {
+	if c.Pipeline.BatchSizeMin > 0 {
+		if c.Pipeline.BatchSizeMin > c.Pipeline.BatchSize {
+			return c.Pipeline.BatchSize
+		}
+		return c.Pipeline.BatchSizeMin
+	}
 	v := c.Pipeline.BatchSize / 4
 	if v < 1 {
 		return 1
@@ -379,8 +394,16 @@ func (c Config) BatchSizeMin() int {
 	return v
 }
 
-// BatchSizeMax returns the adaptive upper bound (BatchSize * 2).
+// BatchSizeMax returns the adaptive upper bound for batch sizing.
+// When BatchSizeMax is explicitly set (>0), it is used directly (clamped to BatchSize).
+// When BatchSizeMax is 0, it is auto-derived as BatchSize*2.
 func (c Config) BatchSizeMax() int {
+	if c.Pipeline.BatchSizeMax > 0 {
+		if c.Pipeline.BatchSizeMax < c.Pipeline.BatchSize {
+			return c.Pipeline.BatchSize
+		}
+		return c.Pipeline.BatchSizeMax
+	}
 	return c.Pipeline.BatchSize * 2
 }
 
@@ -488,6 +511,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("source.pollInterval", "200ms")
 	v.SetDefault("source.maxLineBytes", 10*1024*1024)
 	v.SetDefault("pipeline.batchSize", 1000)
+	v.SetDefault("pipeline.batchSizeMin", 0)
+	v.SetDefault("pipeline.batchSizeMax", 0)
 	v.SetDefault("pipeline.batchWorkers", 2)
 	v.SetDefault("pipeline.flushInterval", "1s")
 	v.SetDefault("pipeline.channelBuffer", 0)
@@ -530,6 +555,14 @@ func applyDefaults(c *Config) {
 	}
 	if c.Pipeline.BatchSize <= 0 {
 		c.Pipeline.BatchSize = 1000
+	}
+	// BatchSizeMin/BatchSizeMax: 0 means auto-derive (handled by BatchSizeMin/Max methods).
+	// Clamp explicit values to valid range here for consistency.
+	if c.Pipeline.BatchSizeMin > 0 && c.Pipeline.BatchSizeMin > c.Pipeline.BatchSize {
+		c.Pipeline.BatchSizeMin = c.Pipeline.BatchSize
+	}
+	if c.Pipeline.BatchSizeMax > 0 && c.Pipeline.BatchSizeMax < c.Pipeline.BatchSize {
+		c.Pipeline.BatchSizeMax = c.Pipeline.BatchSize
 	}
 	if c.Pipeline.BatchWorkers <= 0 {
 		c.Pipeline.BatchWorkers = 2
@@ -635,6 +668,15 @@ func (c *Config) Validate() error {
 	default:
 		return fmt.Errorf("config: source.tailMode must be %q, %q or %q; got %q",
 			TailModeHybrid, TailModePoll, TailModeEvent, c.Source.TailMode)
+	}
+	// Validate batch size constraints.
+	if c.Pipeline.BatchSizeMin > 0 && c.Pipeline.BatchSizeMin > c.Pipeline.BatchSize {
+		return fmt.Errorf("config: pipeline.batchSizeMin (%d) cannot exceed pipeline.batchSize (%d)",
+			c.Pipeline.BatchSizeMin, c.Pipeline.BatchSize)
+	}
+	if c.Pipeline.BatchSizeMax > 0 && c.Pipeline.BatchSize > c.Pipeline.BatchSizeMax {
+		return fmt.Errorf("config: pipeline.batchSize (%d) cannot exceed pipeline.batchSizeMax (%d)",
+			c.Pipeline.BatchSize, c.Pipeline.BatchSizeMax)
 	}
 	if _, err := filter.New(c.Filter.Include, c.Filter.Exclude); err != nil {
 		return fmt.Errorf("config: %w", err)
