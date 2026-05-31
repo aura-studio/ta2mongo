@@ -29,7 +29,9 @@ func testQueue(t *testing.T) (*Queue, *Registry, func()) {
 	}
 	dbName := fmt.Sprintf("tango_tq_test_%d_%d", time.Now().UnixNano(), rand.Intn(10000))
 	db := client.Database(dbName)
-	q := NewQueue(db.Collection("_tango_tasks"))
+	// Disable retry backoff by default so claim-semantics tests can re-claim a
+	// retried task immediately; the backoff window is exercised separately.
+	q := NewQueue(db.Collection("_tango_tasks")).WithRetryBackoff(0, 0)
 	r := NewRegistry(db.Collection("_tango_instances"), 90*time.Second)
 	if err := q.EnsureIndexes(context.Background()); err != nil {
 		t.Fatalf("queue indexes: %v", err)
@@ -166,6 +168,93 @@ func TestQueue_MaxAttemptsBlocksClaim(t *testing.T) {
 
 	if _, err := q.Claim(ctx, "b", time.Minute); !errors.Is(err, ErrNoTask) {
 		t.Errorf("exhausted task should not be claimable, got %v", err)
+	}
+}
+
+// TestQueue_ReapExhaustedClaimed reproduces B1: an agent claims a task up to
+// maxAttempts times and "crashes" each time (never reporting), so the task is
+// stuck in claimed with an expired lease. Reap must transition it to failed.
+func TestQueue_ReapExhaustedClaimed(t *testing.T) {
+	q, _, cleanup := testQueue(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	id, _ := q.Publish(ctx, TaskSQL, nil, PublishOptions{MaxAttempts: 2})
+
+	// Two crash-claims with a tiny lease, never finished.
+	for i := 0; i < 2; i++ {
+		if _, err := q.Claim(ctx, "crasher", 20*time.Millisecond); err != nil {
+			t.Fatalf("claim %d: %v", i, err)
+		}
+	}
+	time.Sleep(40 * time.Millisecond) // let the lease expire
+
+	// Before reap: not claimable (attempts exhausted) and still 'claimed'.
+	if _, err := q.Claim(ctx, "other", time.Minute); !errors.Is(err, ErrNoTask) {
+		t.Fatalf("expected exhausted task not claimable, got %v", err)
+	}
+	got, _ := q.Get(ctx, id)
+	if got.Status != StatusClaimed {
+		t.Fatalf("pre-reap status = %q, want claimed (stuck)", got.Status)
+	}
+
+	n, err := q.Reap(ctx, nil, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("reaped %d, want 1", n)
+	}
+	got, _ = q.Get(ctx, id)
+	if got.Status != StatusFailed {
+		t.Errorf("post-reap status = %q, want failed", got.Status)
+	}
+}
+
+// TestQueue_ReapOrphanTargeted reproduces B2: a targeted task whose target is
+// offline and older than the grace window is failed by Reap.
+func TestQueue_ReapOrphanTargeted(t *testing.T) {
+	q, reg, cleanup := testQueue(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	id, _ := q.Publish(ctx, TaskSQL, nil, PublishOptions{Target: "ghost"})
+
+	// grace = 0 so the just-created task is immediately eligible; target never
+	// registered a heartbeat, so it is not alive.
+	n, err := q.Reap(ctx, reg, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("reaped %d, want 1", n)
+	}
+	got, _ := q.Get(ctx, id)
+	if got.Status != StatusFailed {
+		t.Errorf("orphan status = %q, want failed", got.Status)
+	}
+}
+
+// TestQueue_FailRetryBackoffGate verifies a retried task is not re-claimable
+// until its backoff window elapses (B4).
+func TestQueue_FailRetryBackoffGate(t *testing.T) {
+	q, _, cleanup := testQueue(t)
+	defer cleanup()
+	q.WithRetryBackoff(200*time.Millisecond, time.Second)
+	ctx := context.Background()
+
+	_, _ = q.Publish(ctx, TaskSQL, nil, PublishOptions{MaxAttempts: 5})
+	task, _ := q.Claim(ctx, "a", time.Minute)
+	if err := q.Fail(ctx, task, "a", errors.New("boom")); err != nil {
+		t.Fatal(err)
+	}
+	// Immediately: gated, not claimable.
+	if _, err := q.Claim(ctx, "a", time.Minute); !errors.Is(err, ErrNoTask) {
+		t.Errorf("expected backoff gate to block immediate re-claim, got %v", err)
+	}
+	time.Sleep(260 * time.Millisecond)
+	if _, err := q.Claim(ctx, "a", time.Minute); err != nil {
+		t.Errorf("after backoff window, claim should succeed: %v", err)
 	}
 }
 

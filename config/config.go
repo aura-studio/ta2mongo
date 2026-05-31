@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -110,8 +111,17 @@ type Config struct {
 	// Pipeline configures batching and parallel write workers.
 	Pipeline PipelineConfig `mapstructure:"pipeline"`
 
-	// Filter configures expr-lang include/exclude rules applied to every record.
+	// Filter configures the reporting (upload) filter: expr-lang include/exclude
+	// rules applied to every record by the daemon / file-upload / string-upload
+	// paths. This is distinct from BackfillFilter.
 	Filter FilterConfig `mapstructure:"filter"`
+
+	// BackfillFilter configures the backfill selection filter. Unlike the
+	// reporting Filter it never matches on "#type"; it selects the virtual
+	// table (event/user) and, for the event table, an optional set of event
+	// names. The table lives here (in the filter) rather than as a standalone
+	// field on Backfill, because backfill selection is configured as a unit.
+	BackfillFilter BackfillFilterConfig `mapstructure:"backfillFilter"`
 
 	// Backfill configures the `tango backfill` mode that pulls historical data
 	// from ThinkingData's OpenAPI (async SQL endpoints) and routes the rows
@@ -197,6 +207,43 @@ type PipelineConfig struct {
 	DeadLetterCap int `mapstructure:"deadLetterCap"`
 }
 
+// BackfillFilterConfig configures the backfill selection filter. It is
+// deliberately separate from FilterConfig: a backfill run already targets one
+// virtual table, so this filter selects the table and (for the event table)
+// constrains on "#event_name" and arbitrary properties — but never on "#type",
+// which has no meaning once the table is fixed. The table lives here rather
+// than as a standalone Backfill field, because backfill selection is one unit.
+type BackfillFilterConfig struct {
+	// Table selects which virtual table to query. Allowed values: "event",
+	// "user". Defaults to "event".
+	Table string `mapstructure:"table"`
+	// Events is convenience sugar that, when non-empty (event table only),
+	// restricts the backfill to the named "#event_name" values. It is folded
+	// into the include expressions as a single `#event_name in [...]` term.
+	Events []string `mapstructure:"events"`
+	// Include / Exclude are expr-lang expressions evaluated exactly like the
+	// reporting filter, but intended for "#event_name" and property predicates
+	// (e.g. `country == "CN"`). They are both pushed down to the TA SQL WHERE
+	// clause and enforced again by the in-process safety-net filter.
+	Include []string `mapstructure:"include"`
+	Exclude []string `mapstructure:"exclude"`
+}
+
+// IncludeExprs returns the effective include expressions: the explicit Include
+// list plus, when Events is set on the event table, a derived
+// `#event_name in [...]` term. Returns nil when nothing constrains the rows.
+func (b BackfillFilterConfig) IncludeExprs() []string {
+	out := append([]string(nil), b.Include...)
+	if b.Table != BackfillTableUser && len(b.Events) > 0 {
+		quoted := make([]string, 0, len(b.Events))
+		for _, e := range b.Events {
+			quoted = append(quoted, strconv.Quote(e))
+		}
+		out = append(out, `#event_name in [`+strings.Join(quoted, ", ")+`]`)
+	}
+	return out
+}
+
 // FilterConfig configures the expr-lang include/exclude rules.
 type FilterConfig struct {
 	// Include is a list of expr-lang expressions. If non-empty, a parsed
@@ -211,8 +258,11 @@ type FilterConfig struct {
 	Exclude []string `mapstructure:"exclude"`
 }
 
-// AgentConfig controls the task-worker (`tango agent`) mode.
+// AgentConfig controls the in-daemon task-worker (agent) feature.
 type AgentConfig struct {
+	// Enabled turns the agent feature on inside the daemon.
+	Enabled bool `mapstructure:"enabled"`
+
 	// TasksCollection holds the task queue documents. Defaults "_tango_tasks".
 	TasksCollection string `mapstructure:"tasksCollection"`
 
@@ -270,10 +320,6 @@ type BackfillConfig struct {
 	// ProjectID identifies the TA project; used to construct the table name
 	// (v_event_<id> / v_user_<id>).
 	ProjectID int `mapstructure:"projectID"`
-
-	// Table selects which virtual table to query. Allowed values: "event",
-	// "user". Defaults to "event".
-	Table string `mapstructure:"table"`
 
 	// PartDateRange is the inclusive [start, end] partition-date range that
 	// drives the per-day chunking. Format "YYYY-MM-DD". Required.
@@ -417,7 +463,6 @@ func (c Config) BatchChannelSize() int {
 	return c.Pipeline.BatchSize * 2
 }
 
-
 // Load builds a Config from defaults → YAML file → env vars → CLI flags.
 //
 // Priority (lowest to highest):
@@ -511,65 +556,66 @@ func applyEnvOverrides(v *viper.Viper) {
 		kind string
 	}{
 		// String types (AutomaticEnv handles these)
-		"TANGO_MODE":                              {key: "mode"},
-		"TANGO_INSTANCE_ID":                       {key: "instanceID"},
-		"TANGO_LOGGING_LEVEL":                    {key: "logging.level"},
-		"TANGO_LOGGING_FORMAT":                   {key: "logging.format"},
-		"TANGO_MONGO_URI":                        {key: "mongo.uri"},
+		"TANGO_MODE":                            {key: "mode"},
+		"TANGO_INSTANCE_ID":                     {key: "instanceID"},
+		"TANGO_LOGGING_LEVEL":                   {key: "logging.level"},
+		"TANGO_LOGGING_FORMAT":                  {key: "logging.format"},
+		"TANGO_MONGO_URI":                       {key: "mongo.uri"},
 		"TANGO_MONGO_MAXELAPSEDTIME":            {key: "mongo.maxElapsedTime"},
 		"TANGO_MONGO_CONNECTTIMEOUT":            {key: "mongo.connectTimeout"},
-		"TANGO_MONGO_SERVERSELECTIONTIMEOUT":     {key: "mongo.serverSelectionTimeout"},
+		"TANGO_MONGO_SERVERSELECTIONTIMEOUT":    {key: "mongo.serverSelectionTimeout"},
 		"TANGO_SOURCE_LOGPATTERN":               {key: "source.logPattern"},
 		"TANGO_SOURCE_TAILMODE":                 {key: "source.tailMode"},
-		"TANGO_SOURCE_RESCANINTERVAL":          {key: "source.rescanInterval"},
+		"TANGO_SOURCE_RESCANINTERVAL":           {key: "source.rescanInterval"},
 		"TANGO_SOURCE_POLLINTERVAL":             {key: "source.pollInterval"},
 		"TANGO_SOURCE_MAXLINEBYTES":             {key: "source.maxLineBytes"},
 		"TANGO_PIPELINE_BATCH_SIZE":             {key: "pipeline.batchSize"},
-		"TANGO_PIPELINE_BATCH_SIZE_MIN":        {key: "pipeline.batchSizeMin"},
-		"TANGO_PIPELINE_BATCH_SIZE_MAX":        {key: "pipeline.batchSizeMax"},
+		"TANGO_PIPELINE_BATCH_SIZE_MIN":         {key: "pipeline.batchSizeMin"},
+		"TANGO_PIPELINE_BATCH_SIZE_MAX":         {key: "pipeline.batchSizeMax"},
 		"TANGO_PIPELINE_BATCH_WORKERS":          {key: "pipeline.batchWorkers"},
 		"TANGO_PIPELINE_FLUSH_INTERVAL":         {key: "pipeline.flushInterval"},
 		"TANGO_PIPELINE_CHANNEL_BUFFER":         {key: "pipeline.channelBuffer"},
-		"TANGO_PIPELINE_DEAD_LETTER_CAP":       {key: "pipeline.deadLetterCap"},
+		"TANGO_PIPELINE_DEAD_LETTER_CAP":        {key: "pipeline.deadLetterCap"},
 		"TANGO_FILTER_INCLUDE":                  {key: "filter.include"},
 		"TANGO_FILTER_EXCLUDE":                  {key: "filter.exclude"},
-		"TANGO_BACKFILL_API_BASE_URL":          {key: "backfill.apiBaseURL"},
-		"TANGO_BACKFILL_TOKEN":                 {key: "backfill.token"},
-		"TANGO_BACKFILL_PROJECT_ID":            {key: "backfill.projectID"},
-		"TANGO_BACKFILL_TABLE":                 {key: "backfill.table"},
-		"TANGO_BACKFILL_PART_DATE_RANGE_START": {key: "backfill.partDateRange.start"},
-		"TANGO_BACKFILL_PART_DATE_RANGE_END":   {key: "backfill.partDateRange.end"},
+		"TANGO_BACKFILL_API_BASE_URL":           {key: "backfill.apiBaseURL"},
+		"TANGO_BACKFILL_TOKEN":                  {key: "backfill.token"},
+		"TANGO_BACKFILL_PROJECT_ID":             {key: "backfill.projectID"},
+		"TANGO_BACKFILL_FILTER_TABLE":           {key: "backfillFilter.table"},
+		"TANGO_BACKFILL_FILTER_EVENTS":          {key: "backfillFilter.events"},
+		"TANGO_BACKFILL_PART_DATE_RANGE_START":  {key: "backfill.partDateRange.start"},
+		"TANGO_BACKFILL_PART_DATE_RANGE_END":    {key: "backfill.partDateRange.end"},
 		"TANGO_BACKFILL_EVENT_TIME_RANGE_START": {key: "backfill.eventTimeRange.start"},
-		"TANGO_BACKFILL_EVENT_TIME_RANGE_END":  {key: "backfill.eventTimeRange.end"},
-		"TANGO_BACKFILL_RUN_ID":                {key: "backfill.runID"},
-		"TANGO_BACKFILL_PROGRESS_COLLECTION":   {key: "backfill.progressCollection"},
-		"TANGO_BACKFILL_PROXY":                {key: "backfill.proxy"},
-		"TANGO_BACKFILL_SCHEMA_PREFIX":         {key: "backfill.schemaPrefix"},
-		"TANGO_REMOTE_CONFIG_ENABLED":          {key: "remoteConfig.enabled"},
+		"TANGO_BACKFILL_EVENT_TIME_RANGE_END":   {key: "backfill.eventTimeRange.end"},
+		"TANGO_BACKFILL_RUN_ID":                 {key: "backfill.runID"},
+		"TANGO_BACKFILL_PROGRESS_COLLECTION":    {key: "backfill.progressCollection"},
+		"TANGO_BACKFILL_PROXY":                  {key: "backfill.proxy"},
+		"TANGO_BACKFILL_SCHEMA_PREFIX":          {key: "backfill.schemaPrefix"},
+		"TANGO_REMOTE_CONFIG_ENABLED":           {key: "remoteConfig.enabled"},
 		"TANGO_REMOTE_CONFIG_COLLECTION":        {key: "remoteConfig.collection"},
-		"TANGO_REMOTE_CONFIG_DOCUMENT_ID":      {key: "remoteConfig.documentID"},
-		"TANGO_REMOTE_CONFIG_SYNC_INTERVAL":    {key: "remoteConfig.syncInterval"},
-		"TANGO_AGENT_TASKS_COLLECTION":         {key: "agent.tasksCollection"},
-		"TANGO_AGENT_INSTANCES_COLLECTION":     {key: "agent.instancesCollection"},
-		"TANGO_AGENT_POLL_INTERVAL":            {key: "agent.pollInterval"},
-		"TANGO_AGENT_LEASE_DURATION":           {key: "agent.leaseDuration"},
-		"TANGO_AGENT_HEARTBEAT_INTERVAL":       {key: "agent.heartbeatInterval"},
-		"TANGO_AGENT_INSTANCE_TTL":             {key: "agent.instanceTTL"},
+		"TANGO_REMOTE_CONFIG_DOCUMENT_ID":       {key: "remoteConfig.documentID"},
+		"TANGO_REMOTE_CONFIG_SYNC_INTERVAL":     {key: "remoteConfig.syncInterval"},
+		"TANGO_AGENT_TASKS_COLLECTION":          {key: "agent.tasksCollection"},
+		"TANGO_AGENT_INSTANCES_COLLECTION":      {key: "agent.instancesCollection"},
+		"TANGO_AGENT_POLL_INTERVAL":             {key: "agent.pollInterval"},
+		"TANGO_AGENT_LEASE_DURATION":            {key: "agent.leaseDuration"},
+		"TANGO_AGENT_HEARTBEAT_INTERVAL":        {key: "agent.heartbeatInterval"},
+		"TANGO_AGENT_INSTANCE_TTL":              {key: "agent.instanceTTL"},
 	}
 
 	// Process int types first, then duration, then string (as strings are default)
 	intKeys := map[string]string{
-		"TANGO_SOURCE_MAXLINEBYTES":          "source.maxLineBytes",
-		"TANGO_PIPELINE_BATCH_SIZE":          "pipeline.batchSize",
-		"TANGO_PIPELINE_BATCH_SIZE_MIN":      "pipeline.batchSizeMin",
-		"TANGO_PIPELINE_BATCH_SIZE_MAX":      "pipeline.batchSizeMax",
-		"TANGO_PIPELINE_BATCH_WORKERS":       "pipeline.batchWorkers",
-		"TANGO_PIPELINE_CHANNEL_BUFFER":      "pipeline.channelBuffer",
-		"TANGO_PIPELINE_DEAD_LETTER_CAP":    "pipeline.deadLetterCap",
-		"TANGO_BACKFILL_PROJECT_ID":          "backfill.projectID",
-		"TANGO_BACKFILL_PAGE_SIZE":           "backfill.pageSize",
-		"TANGO_BACKFILL_PAGE_RETRIES":        "backfill.pageRetries",
-		"TANGO_BACKFILL_LIMIT":              "backfill.limit",
+		"TANGO_SOURCE_MAXLINEBYTES":      "source.maxLineBytes",
+		"TANGO_PIPELINE_BATCH_SIZE":      "pipeline.batchSize",
+		"TANGO_PIPELINE_BATCH_SIZE_MIN":  "pipeline.batchSizeMin",
+		"TANGO_PIPELINE_BATCH_SIZE_MAX":  "pipeline.batchSizeMax",
+		"TANGO_PIPELINE_BATCH_WORKERS":   "pipeline.batchWorkers",
+		"TANGO_PIPELINE_CHANNEL_BUFFER":  "pipeline.channelBuffer",
+		"TANGO_PIPELINE_DEAD_LETTER_CAP": "pipeline.deadLetterCap",
+		"TANGO_BACKFILL_PROJECT_ID":      "backfill.projectID",
+		"TANGO_BACKFILL_PAGE_SIZE":       "backfill.pageSize",
+		"TANGO_BACKFILL_PAGE_RETRIES":    "backfill.pageRetries",
+		"TANGO_BACKFILL_LIMIT":           "backfill.limit",
 	}
 	for envKey, cfgKey := range intKeys {
 		if val := os.Getenv(envKey); val != "" {
@@ -582,19 +628,19 @@ func applyEnvOverrides(v *viper.Viper) {
 
 	// Process duration types
 	durationKeys := map[string]string{
-		"TANGO_MONGO_MAXELAPSEDTIME":          "mongo.maxElapsedTime",
-		"TANGO_MONGO_CONNECTTIMEOUT":          "mongo.connectTimeout",
-		"TANGO_MONGO_SERVERSELECTIONTIMEOUT":   "mongo.serverSelectionTimeout",
-		"TANGO_SOURCE_RESCANINTERVAL":          "source.rescanInterval",
-		"TANGO_SOURCE_POLLINTERVAL":            "source.pollInterval",
-		"TANGO_PIPELINE_FLUSH_INTERVAL":        "pipeline.flushInterval",
-		"TANGO_BACKFILL_POLL_INTERVAL":        "backfill.pollInterval",
-		"TANGO_BACKFILL_POLL_TIMEOUT":         "backfill.pollTimeout",
-		"TANGO_REMOTE_CONFIG_SYNC_INTERVAL":   "remoteConfig.syncInterval",
-		"TANGO_AGENT_POLL_INTERVAL":            "agent.pollInterval",
-		"TANGO_AGENT_LEASE_DURATION":           "agent.leaseDuration",
-		"TANGO_AGENT_HEARTBEAT_INTERVAL":       "agent.heartbeatInterval",
-		"TANGO_AGENT_INSTANCE_TTL":             "agent.instanceTTL",
+		"TANGO_MONGO_MAXELAPSEDTIME":         "mongo.maxElapsedTime",
+		"TANGO_MONGO_CONNECTTIMEOUT":         "mongo.connectTimeout",
+		"TANGO_MONGO_SERVERSELECTIONTIMEOUT": "mongo.serverSelectionTimeout",
+		"TANGO_SOURCE_RESCANINTERVAL":        "source.rescanInterval",
+		"TANGO_SOURCE_POLLINTERVAL":          "source.pollInterval",
+		"TANGO_PIPELINE_FLUSH_INTERVAL":      "pipeline.flushInterval",
+		"TANGO_BACKFILL_POLL_INTERVAL":       "backfill.pollInterval",
+		"TANGO_BACKFILL_POLL_TIMEOUT":        "backfill.pollTimeout",
+		"TANGO_REMOTE_CONFIG_SYNC_INTERVAL":  "remoteConfig.syncInterval",
+		"TANGO_AGENT_POLL_INTERVAL":          "agent.pollInterval",
+		"TANGO_AGENT_LEASE_DURATION":         "agent.leaseDuration",
+		"TANGO_AGENT_HEARTBEAT_INTERVAL":     "agent.heartbeatInterval",
+		"TANGO_AGENT_INSTANCE_TTL":           "agent.instanceTTL",
 	}
 	for envKey, cfgKey := range durationKeys {
 		if val := os.Getenv(envKey); val != "" {
@@ -609,7 +655,7 @@ func applyEnvOverrides(v *viper.Viper) {
 		"TANGO_BACKFILL_PAGINATE":            "backfill.paginate",
 		"TANGO_BACKFILL_FORCE_SKIP_EXISTING": "backfill.forceSkipExisting",
 		"TANGO_BACKFILL_SKIP_LOCAL_FILTER":   "backfill.skipLocalFilter",
-		"TANGO_REMOTE_CONFIG_ENABLED":         "remoteConfig.enabled",
+		"TANGO_REMOTE_CONFIG_ENABLED":        "remoteConfig.enabled",
 	}
 	for envKey, cfgKey := range boolKeys {
 		if val := os.Getenv(envKey); val != "" {
@@ -623,26 +669,26 @@ func applyEnvOverrides(v *viper.Viper) {
 
 	// Process string types (including instanceID special case)
 	stringKeys := map[string]string{
-		"TANGO_MODE":                              "mode",
-		"TANGO_INSTANCE_ID":                       "instanceID",
-		"TANGO_LOGGING_LEVEL":                    "logging.level",
-		"TANGO_LOGGING_FORMAT":                   "logging.format",
-		"TANGO_MONGO_URI":                        "mongo.uri",
-		"TANGO_SOURCE_TAILMODE":                  "source.tailMode",
+		"TANGO_MODE":                            "mode",
+		"TANGO_INSTANCE_ID":                     "instanceID",
+		"TANGO_LOGGING_LEVEL":                   "logging.level",
+		"TANGO_LOGGING_FORMAT":                  "logging.format",
+		"TANGO_MONGO_URI":                       "mongo.uri",
+		"TANGO_SOURCE_TAILMODE":                 "source.tailMode",
 		"TANGO_BACKFILL_API_BASE_URL":           "backfill.apiBaseURL",
 		"TANGO_BACKFILL_TOKEN":                  "backfill.token",
-		"TANGO_BACKFILL_TABLE":                   "backfill.table",
+		"TANGO_BACKFILL_FILTER_TABLE":           "backfillFilter.table",
 		"TANGO_BACKFILL_PART_DATE_RANGE_START":  "backfill.partDateRange.start",
 		"TANGO_BACKFILL_PART_DATE_RANGE_END":    "backfill.partDateRange.end",
-		"TANGO_BACKFILL_EVENT_TIME_RANGE_START":  "backfill.eventTimeRange.start",
-		"TANGO_BACKFILL_EVENT_TIME_RANGE_END":    "backfill.eventTimeRange.end",
-		"TANGO_BACKFILL_RUN_ID":                  "backfill.runID",
-		"TANGO_BACKFILL_PROGRESS_COLLECTION":     "backfill.progressCollection",
+		"TANGO_BACKFILL_EVENT_TIME_RANGE_START": "backfill.eventTimeRange.start",
+		"TANGO_BACKFILL_EVENT_TIME_RANGE_END":   "backfill.eventTimeRange.end",
+		"TANGO_BACKFILL_RUN_ID":                 "backfill.runID",
+		"TANGO_BACKFILL_PROGRESS_COLLECTION":    "backfill.progressCollection",
 		"TANGO_BACKFILL_PROXY":                  "backfill.proxy",
-		"TANGO_BACKFILL_SCHEMA_PREFIX":           "backfill.schemaPrefix",
-		"TANGO_REMOTE_CONFIG_COLLECTION":         "remoteConfig.collection",
+		"TANGO_BACKFILL_SCHEMA_PREFIX":          "backfill.schemaPrefix",
+		"TANGO_REMOTE_CONFIG_COLLECTION":        "remoteConfig.collection",
 		"TANGO_REMOTE_CONFIG_DOCUMENT_ID":       "remoteConfig.documentID",
-		"TANGO_AGENT_TASKS_COLLECTION":           "agent.tasksCollection",
+		"TANGO_AGENT_TASKS_COLLECTION":          "agent.tasksCollection",
 		"TANGO_AGENT_INSTANCES_COLLECTION":      "agent.instancesCollection",
 	}
 	_ = overrides // suppress unused warning
@@ -731,6 +777,7 @@ func applyDefaults(c *Config) {
 		c.Pipeline.DeadLetterCap = 128
 	}
 	applyBackfillDefaults(&c.Backfill)
+	applyBackfillFilterDefaults(&c.BackfillFilter)
 	applyRemoteConfigDefaults(&c.RemoteConfig)
 	applyAgentDefaults(&c.Agent)
 }
@@ -768,10 +815,13 @@ func applyRemoteConfigDefaults(rc *RemoteConfig) {
 	}
 }
 
-func applyBackfillDefaults(b *BackfillConfig) {
+func applyBackfillFilterDefaults(b *BackfillFilterConfig) {
 	if b.Table == "" {
 		b.Table = BackfillTableEvent
 	}
+}
+
+func applyBackfillDefaults(b *BackfillConfig) {
 	if b.PageSize <= 0 {
 		b.PageSize = 10000
 	}
@@ -842,17 +892,27 @@ func (c *Config) Validate() error {
 	// play; otherwise we don't want a malformed SQL pushdown to block the
 	// daemon/once/ingest paths.
 	if c.Mode == ModeBackfill {
-		if err := c.Backfill.validate(); err != nil {
+		switch c.BackfillFilter.Table {
+		case BackfillTableEvent, BackfillTableUser:
+			// valid
+		default:
+			return fmt.Errorf("config: backfillFilter.table must be %q or %q; got %q",
+				BackfillTableEvent, BackfillTableUser, c.BackfillFilter.Table)
+		}
+		if err := c.Backfill.validate(c.BackfillFilter.Table); err != nil {
 			return fmt.Errorf("config: %w", err)
 		}
-		if _, err := filter.CompileToSQL(c.Filter.Include, c.Filter.Exclude); err != nil {
+		if _, err := filter.New(c.BackfillFilter.IncludeExprs(), c.BackfillFilter.Exclude); err != nil {
+			return fmt.Errorf("config: %w", err)
+		}
+		if _, err := filter.CompileToSQL(c.BackfillFilter.IncludeExprs(), c.BackfillFilter.Exclude); err != nil {
 			return fmt.Errorf("config: %w", err)
 		}
 	}
 	return nil
 }
 
-func (b *BackfillConfig) validate() error {
+func (b *BackfillConfig) validate(table string) error {
 	if b.APIBaseURL == "" {
 		return fmt.Errorf("backfill.apiBaseURL is required")
 	}
@@ -865,13 +925,6 @@ func (b *BackfillConfig) validate() error {
 	if b.ProjectID <= 0 {
 		return fmt.Errorf("backfill.projectID must be a positive integer")
 	}
-	switch b.Table {
-	case BackfillTableEvent, BackfillTableUser:
-		// valid
-	default:
-		return fmt.Errorf("backfill.table must be %q or %q; got %q",
-			BackfillTableEvent, BackfillTableUser, b.Table)
-	}
 	if b.RunID == "" {
 		return fmt.Errorf("backfill.runID is required (used as resume key)")
 	}
@@ -880,7 +933,7 @@ func (b *BackfillConfig) validate() error {
 	}
 	// User tables in TA do not have a $part_date partition column, so the
 	// date range is required only for the event table.
-	if b.Table == BackfillTableEvent {
+	if table == BackfillTableEvent {
 		if _, err := time.Parse("2006-01-02", b.PartDateRange.Start); err != nil {
 			return fmt.Errorf("backfill.partDateRange.start invalid (want YYYY-MM-DD): %w", err)
 		}
@@ -919,6 +972,19 @@ func (b *BackfillConfig) validate() error {
 // components (daemon, once, ingest) that need a ready-to-use filter.
 func (c *Config) BuildFilter() (*filter.Filter, error) {
 	return filter.New(c.Filter.Include, c.Filter.Exclude)
+}
+
+// BuildBackfillFilter compiles the backfill selection filter into a local
+// (in-process) filter used as a safety net behind the SQL pushdown. It is
+// driven by BackfillFilter (table + events), never by the reporting Filter.
+func (c *Config) BuildBackfillFilter() (*filter.Filter, error) {
+	return filter.New(c.BackfillFilter.IncludeExprs(), c.BackfillFilter.Exclude)
+}
+
+// BackfillWhere renders the backfill filter as a Presto WHERE-clause body
+// (no leading WHERE), pushing the event-name predicate down to the TA OpenAPI.
+func (c *Config) BackfillWhere() (string, error) {
+	return filter.CompileToSQL(c.BackfillFilter.IncludeExprs(), c.BackfillFilter.Exclude)
 }
 
 // MongoDBFromURI extracts the database name from a MongoDB URI path.

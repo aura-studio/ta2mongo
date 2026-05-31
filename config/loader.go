@@ -1,0 +1,75 @@
+package config
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+
+	"github.com/go-viper/mapstructure/v2"
+	"github.com/spf13/pflag"
+	"github.com/spf13/viper"
+)
+
+// newViper builds a viper instance with TANGO_* environment binding enabled.
+// AutomaticEnv binds a key like "mongo.uri" to TANGO_MONGO_URI as long as the
+// key is known to viper (registered via a default), which the per-config
+// setXDefaults functions ensure.
+func newViper() *viper.Viper {
+	v := viper.New()
+	v.SetEnvPrefix("TANGO")
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	v.AutomaticEnv()
+	return v
+}
+
+// readConfigFile reads the config file at path into v, inferring YAML vs JSON
+// from the extension. An empty or non-existent path is skipped silently so a
+// pure env/flag configuration still works.
+func readConfigFile(v *viper.Viper, path string) error {
+	if path == "" {
+		return nil
+	}
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("stat config %q: %w", path, err)
+	}
+	v.SetConfigFile(path) // extension (.yaml/.yml/.json) selects the parser
+	if err := v.ReadInConfig(); err != nil {
+		return fmt.Errorf("read config %q: %w", path, err)
+	}
+	return nil
+}
+
+// bindFlagsTo binds only the flags present in the set to their mapped config
+// keys. Unset flags fall back to file/env/default.
+func bindFlagsTo(v *viper.Viper, flags *pflag.FlagSet, keys FlagKeyMap) error {
+	if flags == nil {
+		return nil
+	}
+	var bindErr error
+	flags.Visit(func(f *pflag.Flag) {
+		if bindErr != nil {
+			return
+		}
+		key := f.Name
+		if mapped, ok := keys[f.Name]; ok {
+			key = mapped
+		}
+		if err := v.BindPFlag(key, f); err != nil {
+			bindErr = fmt.Errorf("bind flag %q: %w", f.Name, err)
+		}
+	})
+	return bindErr
+}
+
+// durationDecodeHook returns the mapstructure option used to decode string
+// durations ("30s") and comma-separated string slices from the config.
+func durationDecodeHook() viper.DecoderConfigOption {
+	return viper.DecodeHook(mapstructure.ComposeDecodeHookFunc(
+		mapstructure.StringToTimeDurationHookFunc(),
+		mapstructure.StringToSliceHookFunc(","),
+	))
+}

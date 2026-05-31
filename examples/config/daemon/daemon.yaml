@@ -1,0 +1,52 @@
+# daemon.yaml — tango daemon (reporting role + optional agent feature).
+# Run with: tangod --config daemon.yaml
+#
+# YAML and JSON are both supported (the file extension selects the parser).
+# Every key can also be set via a TANGO_* environment variable, and a few via
+# CLI flags (--mongoURI, --logLevel, --instanceID).
+
+logging:
+  level: info
+  format: text
+
+mongo:
+  uri: mongodb://localhost:27017/tango
+  maxElapsedTime: 10s
+
+# Reporting (upload) filter: applied to every tailed record. Distinct from the
+# backfill filter. Expressions run against the flattened record, so #type /
+# #event_name / properties.* are all addressable.
+reportFilter:
+  include:
+    - '#type == "track"'
+    - '#type == "user_set"'
+  exclude:
+    - 'debug == true'
+
+source:
+  logPattern:
+    - '/var/log/ta/.*\.log'
+  tailMode: hybrid
+  rescanInterval: 30s
+
+pipeline:
+  batchSize: 1000
+  batchWorkers: 4
+  flushInterval: 1s
+
+# remoteConfig lets a control plane push the reporting filter; report-sync tasks
+# write this document, and the daemon hot-reloads it on the sync interval.
+remoteConfig:
+  enabled: false
+  syncInterval: 1h
+
+# Agent is a FEATURE of the daemon. When enabled, the daemon registers a
+# heartbeat and claims published tasks (report-sync / backfill / sql).
+# instanceID is ONLY configured here — it is meaningless without the agent.
+agent:
+  enabled: false
+  instanceID: ""
+  pollInterval: 10s
+  leaseDuration: 5m
+  heartbeatInterval: 30s
+  instanceTTL: 90s

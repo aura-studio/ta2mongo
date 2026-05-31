@@ -31,6 +31,10 @@ const (
 	// TaskSQL runs an explicit SQL statement supplied in the payload and
 	// imports the rows through the same streaming pipeline as backfill.
 	TaskSQL TaskType = "sql"
+	// TaskReportSync pushes a new reporting (upload) filter to daemons: the
+	// agent applies the payload's filter to its daemon's live filter and
+	// persists it as the remote-config override so restarts converge.
+	TaskReportSync TaskType = "report-sync"
 )
 
 // TaskStatus is the lifecycle state of a task.
@@ -45,19 +49,25 @@ const (
 
 // Task is one unit of work in the queue.
 type Task struct {
-	ID        string         `bson:"_id"`
-	Type      TaskType       `bson:"type"`
-	Payload   map[string]any `bson:"payload"`
-	Target    string         `bson:"target"` // "" = any instance
-	Status    TaskStatus     `bson:"status"`
-	ClaimedBy string         `bson:"claimedBy,omitempty"`
-	LeaseUntil time.Time     `bson:"leaseUntil,omitempty"`
-	Attempts  int            `bson:"attempts"`
-	MaxAttempts int          `bson:"maxAttempts"`
-	Result    map[string]any `bson:"result,omitempty"`
-	Error     string         `bson:"error,omitempty"`
-	CreatedAt time.Time      `bson:"createdAt"`
-	UpdatedAt time.Time      `bson:"updatedAt"`
-	StartedAt *time.Time     `bson:"startedAt,omitempty"`
-	FinishedAt *time.Time    `bson:"finishedAt,omitempty"`
+	ID          string         `bson:"_id"`
+	Type        TaskType       `bson:"type"`
+	Payload     map[string]any `bson:"payload"`
+	Target      string         `bson:"target"` // "" = any instance
+	Status      TaskStatus     `bson:"status"`
+	ClaimedBy   string         `bson:"claimedBy,omitempty"`
+	LeaseUntil  time.Time      `bson:"leaseUntil,omitempty"`
+	Attempts    int            `bson:"attempts"`
+	MaxAttempts int            `bson:"maxAttempts"`
+	Result      map[string]any `bson:"result,omitempty"`
+	Error       string         `bson:"error,omitempty"`
+	CreatedAt   time.Time      `bson:"createdAt"`
+	UpdatedAt   time.Time      `bson:"updatedAt"`
+	// NotBefore gates re-claiming after a retry: a failed-with-retry task is
+	// not claimable again until now >= NotBefore (exponential backoff). Zero
+	// means immediately claimable.
+	NotBefore time.Time `bson:"notBefore,omitempty"`
+	// StartedAt is the time of the FIRST claim and is preserved across
+	// reclaims (set once via $ifNull in the claim pipeline).
+	StartedAt  *time.Time `bson:"startedAt,omitempty"`
+	FinishedAt *time.Time `bson:"finishedAt,omitempty"`
 }

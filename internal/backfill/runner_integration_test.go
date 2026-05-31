@@ -238,12 +238,12 @@ func newTestConfig(mockURL, dbName, runID string) config.Config {
 		Mongo:    config.MongoConfig{URI: testMongoURI + "/" + dbName, MaxElapsedTime: 5 * time.Second},
 		Pipeline: config.PipelineConfig{BatchSize: 100, BatchWorkers: 2, FlushInterval: 100 * time.Millisecond, DeadLetterCap: 128},
 		Logging:  config.LoggingConfig{Level: "warn"},
-		Source:   config.SourceConfig{TailMode: config.TailModeHybrid},
+		Source:         config.SourceConfig{TailMode: config.TailModeHybrid},
+		BackfillFilter: config.BackfillFilterConfig{Table: "event"},
 		Backfill: config.BackfillConfig{
 			APIBaseURL:         mockURL,
 			Token:              "test-token",
 			ProjectID:          102,
-			Table:              "event",
 			PartDateRange:      config.DateRange{Start: "2026-05-01", End: "2026-05-02"},
 			PageSize:           1000,
 			PollInterval:       pollInterval,
@@ -594,7 +594,7 @@ func TestRunner_FilterPushdownAndLocalAgree(t *testing.T) {
 	cfg := newTestConfig(mockTA.URL(), dbName, "filter-1")
 	cfg.Backfill.PartDateRange = config.DateRange{Start: "2026-05-01", End: "2026-05-01"}
 	// Only keep events with country == "CN".
-	cfg.Filter.Include = []string{`country == "CN"`}
+	cfg.BackfillFilter.Include = []string{`country == "CN"`}
 	defer dropTestDB(t, cfg.Mongo.URI)
 
 	// In real life the SQL pushdown would filter server-side. Our mock does

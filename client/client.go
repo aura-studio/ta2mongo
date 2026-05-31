@@ -52,6 +52,11 @@ type Options struct {
 	// Logger is an optional logrus logger. If nil, a default logger is created
 	// at Info level.
 	Logger *logrus.Logger
+
+	// FilterInclude / FilterExclude are optional reporting-filter expressions
+	// applied to Ingest / IngestBatch (string upload). Empty = pass everything.
+	FilterInclude []string
+	FilterExclude []string
 }
 
 // Option is a functional option for building a Client.
@@ -75,6 +80,15 @@ func WithBatchSize(n int) Option {
 // WithLogger sets the logger instance.
 func WithLogger(l *logrus.Logger) Option {
 	return func(o *Options) { o.Logger = l }
+}
+
+// WithFilter sets the reporting-filter expressions applied to string uploads
+// (Ingest / IngestBatch).
+func WithFilter(include, exclude []string) Option {
+	return func(o *Options) {
+		o.FilterInclude = include
+		o.FilterExclude = exclude
+	}
 }
 
 func (o *Options) defaults() {
@@ -157,6 +171,7 @@ func New(ctx context.Context, optFns ...Option) (*Client, error) {
 			BatchWorkers:  1,
 			FlushInterval: time.Second,
 		},
+		Filter: config.FilterConfig{Include: opts.FilterInclude, Exclude: opts.FilterExclude},
 	}
 
 	st := store.New(db, cfg, opts.Logger)

@@ -65,12 +65,12 @@ func TestMerge_DurationFromString(t *testing.T) {
 func TestMerge_NestedBackfill(t *testing.T) {
 	base := baseConfig()
 	doc := map[string]any{
-		"backfill": map[string]any{
+		"backfillFilter": map[string]any{
 			"table": "user",
 		},
 	}
-	// backfill is a nested struct; ensure nested merge works without nuking
-	// sibling top-level filter.
+	// backfillFilter is a nested struct; ensure nested merge works without
+	// nuking sibling top-level filter.
 	got, err := Merge(base, doc)
 	if err != nil {
 		t.Fatal(err)
@@ -78,8 +78,8 @@ func TestMerge_NestedBackfill(t *testing.T) {
 	if len(got.Filter.Include) != 1 || got.Filter.Include[0] != `#type == "user_set"` {
 		t.Errorf("top-level Filter.Include clobbered: %v", got.Filter.Include)
 	}
-	if got.Backfill.Table != "user" {
-		t.Errorf("backfill.table = %q, want user", got.Backfill.Table)
+	if got.BackfillFilter.Table != "user" {
+		t.Errorf("backfillFilter.table = %q, want user", got.BackfillFilter.Table)
 	}
 }
 

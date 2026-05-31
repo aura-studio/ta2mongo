@@ -1,156 +1,69 @@
 # tango 命令行使用说明
 
-## 基本语法
+重构后 tango 拆为两个二进制：`tangod`（daemon 角色）与 `tango`（client 角色）。
 
-```
-tango <subcommand> [flags]
-```
+## 通用
 
-## 全局 Flag
-
-| Flag | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `--config` | string | `tango.yaml` | YAML 配置文件路径（文件不存在时静默跳过） |
-
-## 配置 Flags（所有子命令共享）
-
-所有配置参数均可通过命令行 flag 覆盖，flag 名与 YAML key 和环境变量后缀一致：
-
-| Flag | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `--mongoURI` | string | *(必填)* | MongoDB 连接 URI |
-| `--logPattern` | string[] | `[]` | 日志文件路径匹配正则（可多次指定） |
-| `--rescanInterval` | duration | `30s` | 文件重扫间隔（如 `30s`、`1m`） |
-| `--batchSize` | int | `1000` | 目标批量大小 |
-| `--batchWorkers` | int | `2` | 并行写入 worker 数 |
-| `--flushInterval` | duration | `1s` | 批量定时刷新间隔 |
-| `--maxElapsedTime` | duration | `10s` | bulk write 最大重试总时间 |
-| `--logLevel` | string | `info` | 日志级别：debug/info/warn/error |
+- `--config <path>`：配置文件路径，支持 `.yaml` / `.yml` / `.json`（按扩展名识别；文件不存在则静默跳过，回退到默认值 + 环境变量 + flag）。
+- `--mongoURI`、`--logLevel`：常用覆盖项。
+- 所有键均可用 `TANGO_*` 环境变量覆盖（如 `TANGO_MONGO_URI`、`TANGO_AGENT_INSTANCEID`）。
 
 ---
 
-## 子命令
-
-### `tango daemon`
-
-持续追尾日志文件，增量导入 MongoDB。进程常驻，直到收到 SIGINT/SIGTERM。
+## `tangod` —— daemon 角色
 
 ```bash
-tango daemon --config tango.yaml
-
-# 不使用配置文件，直接传参：
-tango daemon --mongoURI mongodb://localhost:27017/tango \
-             --logPattern '/var/log/ta.*.log' \
-             --batchWorkers 4
+tangod --config daemon.yaml
 ```
 
-- 需要 `logPattern`
-- 从文件末尾开始消费（增量）
-- 支持 log rotation（ReOpen + Follow）
-- 周期性重扫新文件（`rescanInterval`）
+- 追尾 `source.logPattern` 匹配的日志，应用 `reportFilter`，写入 MongoDB。
+- `agent.enabled: true` 时进程内同时运行 agent（注册心跳、领取/执行任务）。
+- `--instanceID`：等价 `agent.instanceID`，开启 agent 时必填。
 
 ---
 
-### `tango once`
-
-从匹配文件的**开头**读取全部内容，处理完毕后输出统计摘要并退出。
-
-```bash
-tango once --config tango.yaml
-
-tango once --mongoURI mongodb://localhost:27017/tango \
-           --logPattern '/var/log/ta.*.log'
-```
-
-- 需要 `logPattern`
-- 从文件开头读取（全量）
-- 不 follow、不 reopen、不重扫
-- 退出时输出详细统计（重试次数、错误数、吞吐量等）
-- 存在错误时以非零退出码退出
-
----
-
-### `tango ingest [json-line ...]`
-
-同步阻塞式上传。逐条处理 JSON 行，出错直接返回。适合 CLI 单次上传或管道输入。
-
-```bash
-# 位置参数传入：
-tango ingest --mongoURI mongodb://localhost:27017/tango \
-  '{"#type":"track","#event_name":"login","#time":"2024-01-01","#uuid":"u1","#account_id":"alice"}'
-
-# 从 stdin 管道读取：
-cat events.jsonl | tango ingest --config tango.yaml
-
-# 混合：先处理参数，再处理 stdin：
-echo '{"#type":"track",...}' | tango ingest --config tango.yaml '{"#type":"user_set",...}'
-```
-
-- 不需要 `logPattern`
-- 每行独立处理：parse → identity → write → 返回结果
-- 失败行记录 Error 日志并继续后续行
-- 最终以非零退出码报告失败总数
-- stdin 单行最大 10 MB，空行跳过
-
----
-
-## 配置优先级
+## `tango` —— client 角色
 
 ```
-内置默认值  <  tango.yaml  <  TANGO_* 环境变量  <  --flag 命令行参数
+tango <subcommand> [flags] --config client.yaml
 ```
 
-高优先级来源只覆盖**明确设置**的字段，未设置的字段继续沿用低优先级来源的值。
+| 子命令 | 功能 | 关键 flag |
+|--------|------|-----------|
+| `tango ingest [json ...]` | 字符串单次上报（无重传），参数或 stdin 逐行 | — |
+| `tango upload` | 文件单次上报（有重传/断点续传） | `--logPattern`（覆盖 `fileUpload.logPattern`） |
+| `tango backfill` | 执行历史回填（用 `backfill` + `backfillFilter`） | — |
+| `tango sql <statement>` | 执行临时 SQL 并导入 | — |
+| `tango publish report-sync` | 发布上报同步任务 | `--include` `--exclude` `--target` |
+| `tango publish backfill` | 发布回填任务（用配置里的 backfill 段） | `--target` |
+| `tango publish sql <statement>` | 发布临时 SQL 任务 | `--target` |
+| `tango serve` | 启动 HTTP/REST 服务 | `--addr`（覆盖 `server.addr`） |
 
-- `--config` 指定 YAML 文件路径（默认 `tango.yaml`），文件不存在时静默跳过
-- 环境变量名规则：`TANGO_` + 参数名全大写，如 `TANGO_MONGOURI`、`TANGO_BATCHWORKERS`
-- CLI flag 只有**明确传入**时才生效，未传入的 flag 不会覆盖环境变量或文件中的值
+### HTTP/REST 端点（`tango serve`）
 
-```bash
-# tango.yaml 中设置 batchWorkers: 2，命令行覆盖为 8，其余参数仍来自文件
-tango daemon --config tango.yaml --batchWorkers 8
+| 方法 | 路径 | body | 功能 |
+|------|------|------|------|
+| POST | `/ingest` | `{"line":...}` 或 `{"lines":[...]}` | 字符串上报 |
+| POST | `/upload` | `{"patterns":[...],"batchSize":N}` | 文件上报（续传） |
+| POST | `/backfill` | `{}` | 回填执行 |
+| POST | `/sql` | `{"sql":"..."}` | SQL 执行 |
+| POST | `/publish/report-sync` | `{"include":[],"exclude":[],"target":""}` | 发布上报同步任务 |
+| POST | `/publish/backfill` | `{"payload":{...},"target":""}` | 发布回填任务 |
+| POST | `/publish/sql` | `{"sql":"...","table":"event","target":""}` | 发布 SQL 任务 |
+| GET | `/healthz` | — | 健康检查 |
 
-# 环境变量注入敏感参数，其余参数来自文件
-TANGO_MONGOURI=mongodb://prod:27017/tango tango daemon --config tango.yaml
+### Go 库（embeddable）
 
-# 纯命令行，不使用配置文件
-tango daemon --mongoURI mongodb://localhost:27017/tango \
-             --logPattern '/var/log/ta\..*\.log' \
-             --batchWorkers 4
+```go
+import "rocket-nano/tools/tango/client"
+
+cli, _ := client.New(ctx, client.WithURI("mongodb://localhost:27017/tango"))
+defer cli.Close()
+cli.EnsureIndexes(ctx)
+
+cli.Ingest(ctx, line)                              // 1) 字符串上报
+cli.UploadFiles(ctx, client.UploadRequest{...})    // 2) 文件上报（续传）
+cli.RunBackfill(ctx, cc.BackfillRuntime())         // 3) 回填
+cli.ExecuteSQL(ctx, cc.SQLRuntime(), "SELECT ...") // 4) SQL
+cli.PublishReportSync(ctx, include, exclude, "")   // 5) 任务发布
 ```
-
-完整的配置来源说明及各类型写法规则参见 [config.md](config.md)。
-
----
-
-## 模式选择指南
-
-| 场景 | 推荐模式 |
-|------|----------|
-| 后台服务持续导入日志 | `daemon` |
-| 批量迁移 / 历史数据回填 / CI 流水线 | `once` |
-| CLI 单次上传少量数据 | `ingest` |
-| 应用内嵌集成（Go 库调用） | `client` 包 |
-
----
-
-## 退出码
-
-| 退出码 | 含义 |
-|--------|------|
-| `0` | 成功 |
-| `1` | 配置错误 / 连接失败 / 处理异常 |
-
-- `daemon`：正常收到信号退出为 0
-- `once`：有任何 parse/identity/write 错误时退出码 1
-- `ingest`：有任何行失败时退出码 1
-
----
-
-## 信号处理
-
-所有模式均监听 `SIGINT`（Ctrl+C）和 `SIGTERM`：
-
-- `daemon`：停止 tail，flush 剩余 batch，断开 MongoDB，退出
-- `once`：停止读文件，flush 剩余 batch，输出已完成部分的统计，退出
-- `ingest`：中断当前处理，断开 MongoDB，退出

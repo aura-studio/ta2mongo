@@ -76,16 +76,16 @@ func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Runner
 		return nil, err
 	}
 
-	filterWhere, err := filter.CompileToSQL(cfg.Filter.Include, cfg.Filter.Exclude)
+	filterWhere, err := cfg.BackfillWhere()
 	if err != nil {
 		_ = r.mongo.Disconnect(context.Background())
 		return nil, fmt.Errorf("backfill: %w", err)
 	}
-	sig := SQLSignature(cfg.Backfill.Table, cfg.Backfill.ProjectID, filterWhere,
+	sig := SQLSignature(cfg.BackfillFilter.Table, cfg.Backfill.ProjectID, filterWhere,
 		cfg.Backfill.EventTimeRange.Start, cfg.Backfill.EventTimeRange.End)
 
 	startDate, endDate := cfg.Backfill.PartDateRange.Start, cfg.Backfill.PartDateRange.End
-	if cfg.Backfill.Table == config.BackfillTableUser {
+	if cfg.BackfillFilter.Table == config.BackfillTableUser {
 		// User tables are not partitioned; collapse to a single virtual "day"
 		// so the existing day-keyed checkpoint logic carries over unchanged.
 		startDate, endDate = UserChunkKey, UserChunkKey
@@ -93,7 +93,7 @@ func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Runner
 
 	cp, err := NewCheckpoint(ctx, db.Collection(cfg.Backfill.ProgressCollection),
 		cfg.Backfill.RunID, cfg.Backfill.APIBaseURL, cfg.Backfill.ProjectID,
-		cfg.Backfill.Table, startDate, endDate, sig)
+		cfg.BackfillFilter.Table, startDate, endDate, sig)
 	if err != nil {
 		_ = r.mongo.Disconnect(context.Background())
 		return nil, fmt.Errorf("backfill: %w", err)
@@ -113,7 +113,7 @@ func NewExecutor(ctx context.Context, cfg config.Config, logger *logrus.Logger) 
 // and NewExecutor. It returns the runner (with checkpoint left nil) and the
 // database handle for the caller to finish setup.
 func newBase(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Runner, *mongo.Database, error) {
-	flt, err := cfg.BuildFilter()
+	flt, err := cfg.BuildBackfillFilter()
 	if err != nil {
 		return nil, nil, fmt.Errorf("backfill: %w", err)
 	}
@@ -173,7 +173,7 @@ func (r *Runner) Run(ctx context.Context) error {
 	r.logger.WithFields(logrus.Fields{
 		"runID":     r.cfg.Backfill.RunID,
 		"projectID": r.cfg.Backfill.ProjectID,
-		"table":     r.cfg.Backfill.Table,
+		"table":     r.cfg.BackfillFilter.Table,
 		"chunks":    len(days),
 		"startDate": r.cfg.Backfill.PartDateRange.Start,
 		"endDate":   r.cfg.Backfill.PartDateRange.End,
@@ -263,11 +263,11 @@ func (r *Runner) runDay(ctx context.Context, day string) error {
 		r.progress.SetPageInfo(progress.PageID, progress.PageCount)
 	}
 	r.logger.WithFields(logrus.Fields{
-		"chunk":      day,
-		"taskId":     progress.TaskID,
-		"pageCount":  info.ResultStat.PageCount,
-		"rowCount":   info.ResultStat.RowCount,
-		"headers":    info.ResultStat.Headers,
+		"chunk":     day,
+		"taskId":    progress.TaskID,
+		"pageCount": info.ResultStat.PageCount,
+		"rowCount":  info.ResultStat.RowCount,
+		"headers":   info.ResultStat.Headers,
 	}).Info("backfill: task ready; starting pagination")
 
 	// Paginate from the next unprocessed page.
@@ -449,7 +449,7 @@ func (r *Runner) ingestPageWithRetry(ctx context.Context, taskID string, pageID 
 // response, flushing batches of userFlushBatch upserts so a mid-page network
 // failure cannot lose more than one batch.
 func (r *Runner) ingestPage(ctx context.Context, taskID string, pageID int, headers []string) (int, error) {
-	if r.cfg.Backfill.Table == config.BackfillTableUser {
+	if r.cfg.BackfillFilter.Table == config.BackfillTableUser {
 		return r.streamUserPage(ctx, taskID, pageID, headers)
 	}
 	return r.fetchAndIngestEventPage(ctx, taskID, pageID, headers)
@@ -598,7 +598,7 @@ func (r *Runner) buildDaySQL(day string) string {
 	if schema := r.cfg.Backfill.SchemaPrefix; schema != "" {
 		fmt.Fprintf(&b, "%s.", schema)
 	}
-	switch r.cfg.Backfill.Table {
+	switch r.cfg.BackfillFilter.Table {
 	case config.BackfillTableUser:
 		fmt.Fprintf(&b, "v_user_%d", r.cfg.Backfill.ProjectID)
 	default:
@@ -606,7 +606,7 @@ func (r *Runner) buildDaySQL(day string) string {
 	}
 
 	predicates := []string{}
-	if r.cfg.Backfill.Table == config.BackfillTableEvent {
+	if r.cfg.BackfillFilter.Table == config.BackfillTableEvent {
 		predicates = append(predicates, fmt.Sprintf(`"$part_date" = '%s'`, day))
 		if start := r.cfg.Backfill.EventTimeRange.Start; start != "" {
 			predicates = append(predicates, fmt.Sprintf(`"#event_time" >= '%s'`, start))
@@ -615,7 +615,7 @@ func (r *Runner) buildDaySQL(day string) string {
 			predicates = append(predicates, fmt.Sprintf(`"#event_time" <= '%s'`, end))
 		}
 	}
-	if filterWhere, _ := filter.CompileToSQL(r.cfg.Filter.Include, r.cfg.Filter.Exclude); filterWhere != "" {
+	if filterWhere, _ := r.cfg.BackfillWhere(); filterWhere != "" {
 		predicates = append(predicates, filterWhere)
 	}
 	if len(predicates) > 0 {

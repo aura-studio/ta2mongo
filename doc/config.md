@@ -1,12 +1,23 @@
 # tango 配置
 
-## 配置来源与优先级（5 层，低 → 高覆盖高）
+> **重构后：两份配置文件。**
+> - `daemon.{yaml,json}` → `tangod`（上报 + 可选 agent）。详见 [examples/config/daemon](../examples/config/daemon)。
+> - `client.{yaml,json}` → `tango`（五项分区功能）。详见 [examples/config/client](../examples/config/client)。
+>
+> YAML、JSON 均支持（按扩展名识别）。要点：
+> - **两种 filter**：上报 filter 在 daemon 的 `reportFilter` / client 的 `stringUpload.filter`、`fileUpload.filter`；backfill filter 在 `backfillFilter`（含 `table`，**backfill 段不再有独立 table 字段**，且**不过滤 #type**）。
+> - **instanceID 仅在 agent 下**：`agent.instanceID`（开启 `agent.enabled` 时必填）。
+> - client 五项功能分区：`stringUpload` / `fileUpload` / `backfill`(+`backfillFilter`) / `sql` / `publish`，外加 `server`(HTTP)。
+>
+> 下文的 per-key 默认值表是底层 runtime 字段参考，仍然适用于对应的配置段。
+
+## 配置来源与优先级（低 → 高覆盖高）
 
 1. **内置默认值**（最低优先级）
-2. **YAML 配置文件**（`--config` 指定或默认 `tango.yaml`）
+2. **配置文件**（`--config` 指定的 `daemon.*` / `client.*`，支持 YAML/JSON）
 3. **环境变量**（`TANGO_*`）
-4. **命令行参数**（仅 `--config`、`--mongoURI`、`--logLevel`）
-5. **远程配置**（MongoDB 文档，仅 `filter` 支持热生效）
+4. **命令行参数**（`--config`、`--mongoURI`、`--logLevel`、`--instanceID`）
+5. **远程配置**（MongoDB 文档，仅上报 `filter` 支持热生效；report-sync 任务写入该文档）
 
 ---
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"rocket-nano/tools/tango/config"
+	"rocket-nano/tools/tango/internal/filter"
 	"rocket-nano/tools/tango/internal/taskqueue"
 )
 
@@ -82,6 +83,25 @@ func (c *Client) PublishSQLTask(ctx context.Context, sql, table, target string) 
 		Type:    taskqueue.TaskSQL,
 		Payload: map[string]any{"sql": sql, "table": table},
 		Target:  target,
+	})
+}
+
+// PublishReportSync publishes a report-sync task: each claiming daemon agent
+// applies the given reporting (upload) filter to its live filter and persists
+// it as the remote-config override. Passing target "" fans it out to any agent
+// (typically you publish one per targeted daemon, or rely on the persisted
+// override + each daemon's sync loop). The filter is compiled here so a
+// malformed expression is rejected before publishing.
+func (c *Client) PublishReportSync(ctx context.Context, include, exclude []string, target string) (string, error) {
+	if _, err := filter.New(include, exclude); err != nil {
+		return "", fmt.Errorf("client: refusing to publish report-sync, filter does not compile: %w", err)
+	}
+	return c.PublishTask(ctx, TaskSpec{
+		Type: taskqueue.TaskReportSync,
+		Payload: map[string]any{
+			"filter": map[string]any{"include": include, "exclude": exclude},
+		},
+		Target: target,
 	})
 }
 

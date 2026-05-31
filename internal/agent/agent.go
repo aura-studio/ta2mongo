@@ -12,23 +12,37 @@ import (
 
 	"github.com/go-viper/mapstructure/v2"
 	"github.com/sirupsen/logrus"
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"rocket-nano/tools/tango/config"
 	"rocket-nano/tools/tango/internal/backfill"
+	"rocket-nano/tools/tango/internal/filter"
 	"rocket-nano/tools/tango/internal/taskqueue"
 )
 
-// Agent is the task-worker runtime.
+// Agent is the task-worker runtime. It is a feature of the daemon: when the
+// daemon enables it, the agent registers a heartbeat, claims published tasks,
+// executes them (report-sync / backfill / sql), and reports the outcome.
 type Agent struct {
 	cfg      config.Config
 	logger   *logrus.Logger
 	client   *mongo.Client
+	db       *mongo.Database
 	queue    *taskqueue.Queue
 	registry *taskqueue.Registry
 	hostname string
+
+	// reportFilter, when set by the hosting daemon, is the live reporting
+	// filter that a report-sync task hot-swaps in place. Nil for a standalone
+	// agent (report-sync then only persists the override document).
+	reportFilter *filter.Holder
 }
+
+// AttachReportingFilter lets the hosting daemon share its live reporting filter
+// holder so a report-sync task can hot-swap it without a restart.
+func (a *Agent) AttachReportingFilter(h *filter.Holder) { a.reportFilter = h }
 
 // New connects to MongoDB and constructs an Agent. Caller must call Shutdown.
 func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Agent, error) {
@@ -51,6 +65,7 @@ func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Agent,
 		cfg:      cfg,
 		logger:   logger,
 		client:   mc,
+		db:       db,
 		queue:    taskqueue.NewQueue(db.Collection(cfg.Agent.TasksCollection)),
 		registry: taskqueue.NewRegistry(db.Collection(cfg.Agent.InstancesCollection), cfg.Agent.InstanceTTL),
 		hostname: hostname,
@@ -84,10 +99,10 @@ func (a *Agent) Run(ctx context.Context) error {
 	}).Info("agent: started")
 
 	// Register immediately so targeting fail-fast works without waiting for
-	// the first heartbeat tick.
-	if err := a.heartbeat(ctx); err != nil {
-		a.logger.WithError(err).Warn("agent: initial heartbeat failed")
-	}
+	// the first heartbeat tick. Retry briefly: a transient failure here would
+	// otherwise make this (running) agent look offline to targeted publishers
+	// until the first heartbeat-loop tick.
+	a.initialHeartbeat(ctx)
 	go a.heartbeatLoop(ctx)
 
 	poll := time.NewTicker(a.cfg.Agent.PollInterval)
@@ -101,7 +116,8 @@ func (a *Agent) Run(ctx context.Context) error {
 			a.runTask(ctx, task)
 			continue // try to claim another immediately
 		case err == taskqueue.ErrNoTask:
-			// nothing to do; wait for next tick
+			// nothing to do; run queue maintenance, then wait for next tick.
+			a.reap(ctx)
 		default:
 			a.logger.WithError(err).Warn("agent: claim failed")
 		}
@@ -112,6 +128,38 @@ func (a *Agent) Run(ctx context.Context) error {
 			return nil
 		case <-poll.C:
 		}
+	}
+}
+
+// initialHeartbeat registers the instance with a few quick retries so a
+// transient error does not leave a live agent looking offline.
+func (a *Agent) initialHeartbeat(ctx context.Context) {
+	for attempt := 0; attempt < 3; attempt++ {
+		if err := a.heartbeat(ctx); err == nil {
+			return
+		} else if attempt == 2 {
+			a.logger.WithError(err).Warn("agent: initial heartbeat failed after retries")
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
+// reap runs queue maintenance: it fails tasks orphaned by crashed agents (lease
+// expired + attempts exhausted) and targeted tasks whose target is offline past
+// the instance TTL grace window. Errors are logged, not fatal.
+func (a *Agent) reap(ctx context.Context) {
+	n, err := a.queue.Reap(ctx, a.registry, a.cfg.Agent.InstanceTTL)
+	if err != nil {
+		a.logger.WithError(err).Debug("agent: reap failed")
+		return
+	}
+	if n > 0 {
+		a.logger.WithField("reaped", n).Info("agent: reaped stuck/orphaned tasks")
 	}
 }
 
@@ -158,14 +206,19 @@ func (a *Agent) runTask(ctx context.Context, task *taskqueue.Task) {
 	cancel()    // stop the renewer
 	<-renewDone // wait for it to exit
 
+	// Report the outcome with a bounded context so a hung Mongo cannot block
+	// shutdown indefinitely (detached from execCtx, which is already cancelled).
+	reportCtx, reportCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer reportCancel()
+
 	if err != nil {
 		log.WithError(err).Error("agent: task failed")
-		if ferr := a.queue.Fail(context.Background(), task, a.cfg.InstanceID, err); ferr != nil {
+		if ferr := a.queue.Fail(reportCtx, task, a.cfg.InstanceID, err); ferr != nil {
 			log.WithError(ferr).Warn("agent: reporting failure failed")
 		}
 		return
 	}
-	if cerr := a.queue.Complete(context.Background(), task.ID, a.cfg.InstanceID, result); cerr != nil {
+	if cerr := a.queue.Complete(reportCtx, task.ID, a.cfg.InstanceID, result); cerr != nil {
 		log.WithError(cerr).Warn("agent: reporting success failed")
 		return
 	}
@@ -204,6 +257,8 @@ func (a *Agent) startLeaseRenewer(ctx context.Context, cancel context.CancelFunc
 // execute dispatches a task to the right handler and returns a result payload.
 func (a *Agent) execute(ctx context.Context, task *taskqueue.Task) (map[string]any, error) {
 	switch task.Type {
+	case taskqueue.TaskReportSync:
+		return a.executeReportSync(ctx, task)
 	case taskqueue.TaskBackfill:
 		return a.executeBackfill(ctx, task)
 	case taskqueue.TaskSQL:
@@ -211,6 +266,46 @@ func (a *Agent) execute(ctx context.Context, task *taskqueue.Task) (map[string]a
 	default:
 		return nil, fmt.Errorf("agent: unknown task type %q", task.Type)
 	}
+}
+
+// executeReportSync applies a new reporting (upload) filter: it compiles the
+// payload's include/exclude expressions, hot-swaps the daemon's live filter
+// (when attached), and persists the override document so that restarts and
+// other daemons on the same database converge on the same filter.
+func (a *Agent) executeReportSync(ctx context.Context, task *taskqueue.Task) (map[string]any, error) {
+	include, exclude := reportSyncFilters(task.Payload)
+	flt, err := filter.New(include, exclude)
+	if err != nil {
+		return nil, fmt.Errorf("agent: report-sync filter does not compile: %w", err)
+	}
+	if a.reportFilter != nil {
+		a.reportFilter.Store(flt)
+	}
+	// Persist to the remote-config override document so the change survives a
+	// restart and reaches other daemons via their sync loop.
+	_, err = a.db.Collection(a.cfg.RemoteConfig.Collection).UpdateOne(ctx,
+		bson.M{"_id": a.cfg.RemoteConfig.DocumentID},
+		bson.M{"$set": bson.M{"filter": bson.M{"include": include, "exclude": exclude}}},
+		options.Update().SetUpsert(true),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("agent: persist report-sync filter: %w", err)
+	}
+	return map[string]any{
+		"applied_live":   a.reportFilter != nil,
+		"filter_include": include,
+		"filter_exclude": exclude,
+	}, nil
+}
+
+// reportSyncFilters extracts include/exclude expression lists from a report-sync
+// payload, accepting either top-level filterInclude/filterExclude arrays or a
+// nested filter:{include,exclude} object (the remote-config document shape).
+func reportSyncFilters(payload map[string]any) (include, exclude []string) {
+	if f, ok := payload["filter"].(map[string]any); ok {
+		return toStringSlice(f["include"]), toStringSlice(f["exclude"])
+	}
+	return toStringSlice(payload["filterInclude"]), toStringSlice(payload["filterExclude"])
 }
 
 // executeBackfill builds a config from the agent's base settings overlaid with
@@ -221,8 +316,11 @@ func (a *Agent) executeBackfill(ctx context.Context, task *taskqueue.Task) (map[
 	if err := decodePayload(task.Payload, &cfg.Backfill); err != nil {
 		return nil, fmt.Errorf("agent: decode backfill payload: %w", err)
 	}
-	// Allow the task to set top-level filter expressions too.
-	overlayFilters(task.Payload, &cfg)
+	// Overlay the backfill selection filter (table / events / include /
+	// exclude) from the payload — backfill never uses the reporting filter.
+	if err := overlayBackfillFilter(task.Payload, &cfg); err != nil {
+		return nil, fmt.Errorf("agent: decode backfill filter: %w", err)
+	}
 	if cfg.Backfill.RunID == "" {
 		cfg.Backfill.RunID = task.ID // checkpoint keyed by task id
 	}
@@ -256,12 +354,14 @@ func (a *Agent) executeSQL(ctx context.Context, task *taskqueue.Task) (map[strin
 	}
 	cfg := a.cfg
 	if t, ok := task.Payload["table"].(string); ok && t != "" {
-		cfg.Backfill.Table = t
+		cfg.BackfillFilter.Table = t
 	}
 	if sp, ok := task.Payload["schemaPrefix"].(string); ok {
 		cfg.Backfill.SchemaPrefix = sp
 	}
-	overlayFilters(task.Payload, &cfg)
+	if err := overlayBackfillFilter(task.Payload, &cfg); err != nil {
+		return nil, fmt.Errorf("agent: decode sql filter: %w", err)
+	}
 	cfg.Mode = config.ModeBackfill
 
 	r, err := backfill.NewExecutor(ctx, cfg, a.logger)
@@ -300,14 +400,30 @@ func decodePayload(payload map[string]any, target any) error {
 	return dec.Decode(payload)
 }
 
-// overlayFilters lets a task payload set top-level filterInclude/filterExclude.
-func overlayFilters(payload map[string]any, cfg *config.Config) {
+// overlayBackfillFilter populates the backfill selection filter from a task
+// payload. It accepts a nested backfillFilter:{table,events,include,exclude}
+// object and/or top-level conveniences (table, events, filterInclude,
+// filterExclude). Backfill never uses the reporting filter, so nothing here
+// touches cfg.Filter.
+func overlayBackfillFilter(payload map[string]any, cfg *config.Config) error {
+	if bf, ok := payload["backfillFilter"].(map[string]any); ok {
+		if err := decodePayload(bf, &cfg.BackfillFilter); err != nil {
+			return err
+		}
+	}
+	if v, ok := payload["table"].(string); ok && v != "" {
+		cfg.BackfillFilter.Table = v
+	}
+	if v, ok := payload["events"]; ok {
+		cfg.BackfillFilter.Events = toStringSlice(v)
+	}
 	if v, ok := payload["filterInclude"]; ok {
-		cfg.Filter.Include = toStringSlice(v)
+		cfg.BackfillFilter.Include = toStringSlice(v)
 	}
 	if v, ok := payload["filterExclude"]; ok {
-		cfg.Filter.Exclude = toStringSlice(v)
+		cfg.BackfillFilter.Exclude = toStringSlice(v)
 	}
+	return nil
 }
 
 func toStringSlice(v any) []string {
