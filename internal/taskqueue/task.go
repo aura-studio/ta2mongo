@@ -1,5 +1,5 @@
 // Package taskqueue implements a MongoDB-backed task queue with optional
-// instance targeting, used by `tango agent` workers.
+// instance targeting, used by the daemon's agent feature (agent.enabled).
 //
 // Design (pull model, no central scheduler, no heartbeat dependency for
 // correctness):

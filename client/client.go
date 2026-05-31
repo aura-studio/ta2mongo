@@ -57,6 +57,14 @@ type Options struct {
 	// applied to Ingest / IngestBatch (string upload). Empty = pass everything.
 	FilterInclude []string
 	FilterExclude []string
+
+	// TasksCollection / InstancesCollection / InstanceTTL configure the task
+	// queue used by the publishing methods (function #5). They must match the
+	// consuming daemon agent's agent.tasksCollection / instancesCollection /
+	// instanceTTL. Empty/zero fall back to the package defaults.
+	TasksCollection     string
+	InstancesCollection string
+	InstanceTTL         time.Duration
 }
 
 // Option is a functional option for building a Client.
@@ -91,6 +99,17 @@ func WithFilter(include, exclude []string) Option {
 	}
 }
 
+// WithTaskQueue sets the task-queue collections and instance TTL used by the
+// publishing methods, so they target the same queue the consuming daemon agent
+// reads. Empty/zero values keep the package defaults.
+func WithTaskQueue(tasksCollection, instancesCollection string, instanceTTL time.Duration) Option {
+	return func(o *Options) {
+		o.TasksCollection = tasksCollection
+		o.InstancesCollection = instancesCollection
+		o.InstanceTTL = instanceTTL
+	}
+}
+
 func (o *Options) defaults() {
 	if o.MaxElapsedTime <= 0 {
 		o.MaxElapsedTime = 10 * time.Second
@@ -103,6 +122,15 @@ func (o *Options) defaults() {
 		l.SetFormatter(&logrus.TextFormatter{FullTimestamp: true})
 		l.SetLevel(logrus.InfoLevel)
 		o.Logger = l
+	}
+	if o.TasksCollection == "" {
+		o.TasksCollection = config.DefaultTasksCollection
+	}
+	if o.InstancesCollection == "" {
+		o.InstancesCollection = config.DefaultInstancesCollection
+	}
+	if o.InstanceTTL <= 0 {
+		o.InstanceTTL = config.DefaultInstanceTTL
 	}
 }
 

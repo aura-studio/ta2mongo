@@ -16,10 +16,6 @@ TANGO_AGENT_INSTANCEID=node-1     tangod --config examples/config/daemon/daemon.
 > 注意：`mongo.uri`、`backfill.token`、`backfill.proxy` 等敏感值示例里留空或占位，
 > 实际使用请用环境变量注入。`instanceID` 仅在 daemon 的 `agent` 段（`agent.instanceID`）配置。
 
----
-
-## 旧版分组样例（runtime 字段参考，仍可被 `config.Load` 解析）
-
-下列目录是重构前的单文件 `tango.yaml` 样例，保留作为各配置段字段的参考：
-[daemon-tail](daemon-tail/)、[once-import](once-import/)、[backfill-event](backfill-event/)、
-[backfill-user](backfill-user/)、[agent-worker](agent-worker/)、[remote-config](remote-config/)。
+各场景在两份样例里以注释区分：
+- 实时采集 / agent worker → `daemon/`（`agent.enabled` 控制是否兼任 worker）。
+- 字符串上报 / 文件上报（断点续传）/ 回填 / SQL / 任务发布 → `client/` 的对应配置段。

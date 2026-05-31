@@ -1,7 +1,7 @@
-// Package agent implements the `tango agent` task-worker mode: a long-running
-// process that registers a heartbeat, claims tasks from the shared MongoDB
-// queue, executes them (backfill / sql), renews the lease while working, and
-// reports the outcome.
+// Package agent implements the daemon's agent feature (enabled via
+// agent.enabled): a long-running worker that registers a heartbeat, claims
+// tasks from the shared MongoDB queue, executes them (report-sync / backfill /
+// sql), renews the lease while working, and reports the outcome.
 package agent
 
 import (

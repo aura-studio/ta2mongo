@@ -57,6 +57,7 @@ func buildClient(cmd *cobra.Command, cc config.ClientConfig, logger *logrus.Logg
 		client.WithURI(cc.Mongo.URI),
 		client.WithMaxElapsedTime(cc.Mongo.MaxElapsedTime),
 		client.WithLogger(logger),
+		client.WithTaskQueue(cc.Publish.TasksCollection, cc.Publish.InstancesCollection, cc.Publish.InstanceTTL),
 	}, extra...)
 	return client.New(cmd.Context(), opts...)
 }

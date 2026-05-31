@@ -130,27 +130,6 @@ func (c ClientConfig) runtimeBase() Config {
 	return rt
 }
 
-// StringUploadRuntime builds the runtime Config for single-string ingest.
-func (c ClientConfig) StringUploadRuntime() Config {
-	rt := c.runtimeBase()
-	rt.Mode = ModeIngest
-	rt.Filter = c.StringUpload.Filter
-	rt.Pipeline = PipelineConfig{BatchSize: c.StringUpload.BatchSize, BatchWorkers: 1, FlushInterval: time.Second}
-	applyDefaults(&rt)
-	return rt
-}
-
-// FileUploadRuntime builds the runtime Config for file ingest with resume.
-func (c ClientConfig) FileUploadRuntime() Config {
-	rt := c.runtimeBase()
-	rt.Mode = ModeOnce
-	rt.Filter = c.FileUpload.Filter
-	rt.Source = SourceConfig{LogPattern: c.FileUpload.LogPattern, MaxLineBytes: c.FileUpload.MaxLineBytes, TailMode: TailModeHybrid}
-	rt.Pipeline = c.FileUpload.Pipeline
-	applyDefaults(&rt)
-	return rt
-}
-
 // BackfillRuntime builds the runtime Config for a backfill execution.
 func (c ClientConfig) BackfillRuntime() Config {
 	rt := c.runtimeBase()

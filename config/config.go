@@ -1,17 +1,19 @@
-// Package config defines the tango configuration structure and loading logic.
+// Package config defines tango's configuration.
 //
-// Configuration is loaded from five sources in increasing priority order:
-//  1. Built-in defaults
-//  2. YAML config file (optional; skipped silently if the file does not exist)
-//  3. Remote config (MongoDB document, only filter fields)
-//  4. Environment variables (prefix: TANGO_, e.g. TANGO_MONGO_URI)
-//  5. CLI flags (highest priority)
+// The two file-facing schemas are DaemonConfig (daemon.go, for
+// daemon.{yaml,json}) and ClientConfig (client.go, for client.{yaml,json});
+// both project onto the shared runtime Config in this file, which the internal
+// packages (daemon/once/ingest/backfill/agent) consume. loader.go holds the
+// shared YAML/JSON + TANGO_* env + flag loading helpers.
 //
-// All YAML keys and CLI flag names are flat camelCase, e.g.
+// Sources, in increasing priority: built-in defaults < config file (YAML or
+// JSON, by extension) < TANGO_* environment variables < CLI flags. The
+// remote-config document (MongoDB) overrides only the reporting filter and is
+// applied separately at startup / via report-sync tasks.
 //
-//	mongoURI        => TANGO_MONGOURI         / --mongoURI
-//	logLevel        => TANGO_LOGGING_LEVEL   / --logLevel
-//	batchSize       => TANGO_PIPELINE_BATCH_SIZE
+// The runtime Load below loads the flat runtime Config directly; it is retained
+// for tests and remote-config merging — production binaries use LoadDaemon /
+// LoadClient.
 package config
 
 import (
@@ -64,7 +66,9 @@ const (
 	DefaultInstanceTTL         = 90 * time.Second
 )
 
-// ModeAgent is the run mode for the task-worker subcommand.
+// ModeAgent is retained as a runtime mode value for backward compatibility with
+// remote-config documents and tests. The agent is now a daemon feature
+// (agent.enabled), not a standalone run mode.
 const ModeAgent = "agent"
 
 // TailMode constants control how the tailer watches for file changes.
@@ -93,10 +97,10 @@ type Config struct {
 	// Mode selects the run mode: daemon (default), once, ingest, backfill, agent.
 	Mode string `mapstructure:"mode"`
 
-	// InstanceID uniquely identifies this tango process within a database
-	// namespace. Sourced from the TANGO_INSTANCE_ID environment variable.
-	// Required for the `tango agent` task-worker mode (used to target tasks at
-	// a specific instance and to register heartbeats); other modes ignore it.
+	// InstanceID uniquely identifies this agent within a database namespace
+	// (used to target tasks and register heartbeats). It is populated from the
+	// daemon config's agent.instanceID and only used when the agent feature is
+	// enabled; other paths ignore it.
 	InstanceID string `mapstructure:"instanceID"`
 
 	// Logging configures log output.
@@ -138,9 +142,9 @@ type Config struct {
 	// never overridable remotely — they must come from the local file.
 	RemoteConfig RemoteConfig `mapstructure:"remoteConfig"`
 
-	// Agent configures the `tango agent` task-worker mode: a long-running
-	// process that registers a heartbeat, claims tasks published to a shared
-	// MongoDB queue, executes them (backfill / sql), and reports results.
+	// Agent configures the daemon's agent feature (agent.enabled): a worker
+	// that registers a heartbeat, claims tasks published to a shared MongoDB
+	// queue, executes them (report-sync / backfill / sql), and reports results.
 	Agent AgentConfig `mapstructure:"agent"`
 }
 

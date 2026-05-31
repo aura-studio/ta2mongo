@@ -84,7 +84,8 @@
 | `backfill.proxy` | `""` |
 | `backfill.projectID` | `0` |
 | `backfill.schemaPrefix` | `""` |
-| `backfill.table` | `event` |
+| `backfillFilter.table` | `event` （表名属于 backfill filter，不再是 `backfill.table`） |
+| `backfillFilter.events` | *(空)* （事件名 IN 过滤的语法糖） |
 | `backfill.partDateRange.start` | *(空)* |
 | `backfill.partDateRange.end` | *(空)* |
 | `backfill.pageSize` | `10000` |

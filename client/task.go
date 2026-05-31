@@ -129,7 +129,7 @@ func (c *Client) taskComponents() (*taskqueue.Queue, *taskqueue.Registry, error)
 		return nil, nil, fmt.Errorf("client: %w", err)
 	}
 	db := c.client.Database(dbName)
-	q := taskqueue.NewQueue(db.Collection(config.DefaultTasksCollection))
-	reg := taskqueue.NewRegistry(db.Collection(config.DefaultInstancesCollection), config.DefaultInstanceTTL)
+	q := taskqueue.NewQueue(db.Collection(c.opts.TasksCollection))
+	reg := taskqueue.NewRegistry(db.Collection(c.opts.InstancesCollection), c.opts.InstanceTTL)
 	return q, reg, nil
 }
