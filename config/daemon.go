@@ -2,44 +2,39 @@ package config
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 )
 
 // Daemon run modes, selected by the daemon subcommand
-// (`tango daemon standalone` / `tango daemon agent`).
+// (`tango daemon standalone` / `tango daemon cluster`).
 const (
 	// DaemonModeStandalone is the self-contained reporting daemon: tail logs →
 	// parse → report filter → write to Mongo. The filter is local; it does NOT
-	// pull remote config and does NOT claim tasks.
+	// pull remote config.
 	DaemonModeStandalone = "standalone"
-	// DaemonModeAgent is the cluster worker daemon: it does everything
-	// standalone does (report) and additionally syncs the report filter from the
-	// remote-config document and registers as a task agent — claiming and
-	// executing published tasks (report-sync / backfill / sql).
-	DaemonModeAgent = "agent"
+	// DaemonModeCluster does everything standalone does and additionally syncs
+	// the report filter from the remote-config document (hot-reload), so a fleet
+	// of daemons converges on a centrally-managed filter.
+	DaemonModeCluster = "cluster"
 )
 
 // DaemonConfig is the schema of the daemon config file. It is organised into
-// three parts:
+// two parts:
 //
 //   - generic: process-wide settings shared by both modes (logging + the
 //     MongoDB connection).
 //   - report:  the reporting pipeline — tail logs → parse → report filter →
-//     write to Mongo. Used by both modes. report.filter has two sources: local
-//     (this file) and remote (a MongoDB document, consulted only in agent mode,
-//     that hot-reloads the filter from a control plane).
-//   - agent:   task-agent settings (heartbeat + claim/execute). Used only in
-//     agent mode. instanceID lives here because it is only meaningful then.
+//     write to Mongo. report.filter has two sources: local (this file) and
+//     remote (a MongoDB document, consulted only in cluster mode, that
+//     hot-reloads the filter from a control plane).
 //
 // There is no enabled switch: the active mode is chosen by the subcommand, not
 // the file.
 type DaemonConfig struct {
 	Generic GenericConfig      `mapstructure:"generic"`
 	Report  DaemonReportConfig `mapstructure:"report"`
-	Agent   DaemonAgentConfig  `mapstructure:"agent"`
 }
 
 // GenericConfig holds the process-wide settings shared by both modes: log output
@@ -50,8 +45,7 @@ type GenericConfig struct {
 }
 
 // DaemonReportConfig is the reporting pipeline block, used by both modes. The
-// daemon tails logPattern files, applies the report filter, and writes to
-// Mongo.
+// daemon tails logPattern files, applies the report filter, and writes to Mongo.
 type DaemonReportConfig struct {
 	Source   SourceConfig       `mapstructure:"source"`
 	Pipeline PipelineConfig     `mapstructure:"pipeline"`
@@ -60,63 +54,40 @@ type DaemonReportConfig struct {
 
 // DaemonFilterConfig groups the two filter sources under report.filter:
 //   - local:  the include/exclude rules from this config file.
-//   - remote: the MongoDB control-plane document that, in agent mode, overrides
-//     and hot-reloads the local rules. Consulted only in agent mode; standalone
-//     keeps the local filter verbatim.
+//   - remote: the MongoDB control-plane document that, in cluster mode,
+//     overrides and hot-reloads the local rules. Consulted only in cluster
+//     mode; standalone keeps the local filter verbatim.
 type DaemonFilterConfig struct {
 	Local  FilterConfig `mapstructure:"local"`
 	Remote RemoteConfig `mapstructure:"remote"`
 }
 
-// DaemonAgentConfig is the task-agent block, used only in agent mode.
-type DaemonAgentConfig struct {
-	// InstanceID uniquely identifies this agent within the database namespace.
-	// Required in agent mode. This is the only place instanceID is configured.
-	InstanceID string `mapstructure:"instanceID"`
-
-	TasksCollection     string        `mapstructure:"tasksCollection"`
-	InstancesCollection string        `mapstructure:"instancesCollection"`
-	PollInterval        time.Duration `mapstructure:"pollInterval"`
-	LeaseDuration       time.Duration `mapstructure:"leaseDuration"`
-	HeartbeatInterval   time.Duration `mapstructure:"heartbeatInterval"`
-	InstanceTTL         time.Duration `mapstructure:"instanceTTL"`
-}
-
 // ToRuntime projects the file-facing daemon config onto the internal runtime
-// Config consumed by the daemon/agent packages. The mode-derived switches
-// (RemoteConfig.Enabled, Agent.Enabled) are applied by LoadDaemon, not here.
+// Config. The mode-derived switch (RemoteConfig.Enabled) is applied by
+// LoadDaemon, not here.
 func (d DaemonConfig) ToRuntime() Config {
 	return Config{
 		Mode:         ModeDaemon,
-		InstanceID:   d.Agent.InstanceID,
 		Logging:      d.Generic.Logging,
 		Mongo:        d.Generic.Mongo,
 		Source:       d.Report.Source,
 		Pipeline:     d.Report.Pipeline,
 		Filter:       d.Report.Filter.Local,
 		RemoteConfig: d.Report.Filter.Remote,
-		Agent: AgentConfig{
-			TasksCollection:     d.Agent.TasksCollection,
-			InstancesCollection: d.Agent.InstancesCollection,
-			PollInterval:        d.Agent.PollInterval,
-			LeaseDuration:       d.Agent.LeaseDuration,
-			HeartbeatInterval:   d.Agent.HeartbeatInterval,
-			InstanceTTL:         d.Agent.InstanceTTL,
-		},
 	}
 }
 
 // LoadDaemon loads and validates a daemon config for the given run mode
-// (DaemonModeStandalone / DaemonModeAgent) from path (+ env + flags), returning
-// both the file-facing config and the projected runtime Config with defaults
-// and mode-derived switches applied. An empty/absent path falls back to
-// defaults + env + flags.
+// (DaemonModeStandalone / DaemonModeCluster) from path (+ env + flags),
+// returning both the file-facing config and the projected runtime Config with
+// defaults and the mode-derived switch applied. An empty/absent path falls back
+// to defaults + env + flags.
 func LoadDaemon(path string, flags *pflag.FlagSet, mode string) (DaemonConfig, Config, error) {
 	switch mode {
-	case DaemonModeStandalone, DaemonModeAgent:
+	case DaemonModeStandalone, DaemonModeCluster:
 		// valid
 	default:
-		return DaemonConfig{}, Config{}, fmt.Errorf("config: unknown daemon mode %q (want %q or %q)", mode, DaemonModeStandalone, DaemonModeAgent)
+		return DaemonConfig{}, Config{}, fmt.Errorf("config: unknown daemon mode %q (want %q or %q)", mode, DaemonModeStandalone, DaemonModeCluster)
 	}
 
 	v := newViper()
@@ -136,24 +107,8 @@ func LoadDaemon(path string, flags *pflag.FlagSet, mode string) (DaemonConfig, C
 	rt := dc.ToRuntime()
 	applyDefaults(&rt)
 
-	// Mode determines the control-plane switches, not the file.
-	switch mode {
-	case DaemonModeStandalone:
-		rt.RemoteConfig.Enabled = false
-		rt.Agent.Enabled = false
-	case DaemonModeAgent:
-		rt.RemoteConfig.Enabled = true
-		rt.Agent.Enabled = true
-	}
-
-	// Mirror runtime-normalised agent settings back so callers reading dc see
-	// the same effective values.
-	dc.Agent.TasksCollection = rt.Agent.TasksCollection
-	dc.Agent.InstancesCollection = rt.Agent.InstancesCollection
-	dc.Agent.PollInterval = rt.Agent.PollInterval
-	dc.Agent.LeaseDuration = rt.Agent.LeaseDuration
-	dc.Agent.HeartbeatInterval = rt.Agent.HeartbeatInterval
-	dc.Agent.InstanceTTL = rt.Agent.InstanceTTL
+	// Cluster mode enables the control-plane filter sync; standalone keeps it off.
+	rt.RemoteConfig.Enabled = mode == DaemonModeCluster
 
 	if err := rt.Validate(); err != nil {
 		return DaemonConfig{}, Config{}, err
@@ -163,17 +118,13 @@ func LoadDaemon(path string, flags *pflag.FlagSet, mode string) (DaemonConfig, C
 	if len(dc.Report.Source.LogPattern) == 0 {
 		return DaemonConfig{}, Config{}, fmt.Errorf("config: report.source.logPattern is required (at least one regex)")
 	}
-	if mode == DaemonModeAgent && dc.Agent.InstanceID == "" {
-		return DaemonConfig{}, Config{}, fmt.Errorf("config: agent.instanceID is required in agent mode")
-	}
 	return dc, rt, nil
 }
 
 // setDaemonDefaults registers viper defaults for the daemon schema so that
 // AutomaticEnv binding works for every key and unset values are sane. Env vars
 // follow the nested key with TANGO_ prefix and "." → "_" (e.g.
-// generic.mongo.uri → TANGO_GENERIC_MONGO_URI, agent.instanceID →
-// TANGO_AGENT_INSTANCEID).
+// generic.mongo.uri → TANGO_GENERIC_MONGO_URI).
 func setDaemonDefaults(v *viper.Viper) {
 	v.SetDefault("generic.logging.level", "info")
 	v.SetDefault("generic.logging.format", "text")
@@ -195,5 +146,4 @@ func setDaemonDefaults(v *viper.Viper) {
 	v.SetDefault("report.filter.remote.collection", DefaultRemoteConfigCollection)
 	v.SetDefault("report.filter.remote.documentID", DefaultRemoteConfigDocumentID)
 	v.SetDefault("report.filter.remote.syncInterval", DefaultRemoteConfigInterval)
-	v.SetDefault("agent.instanceID", "")
 }
