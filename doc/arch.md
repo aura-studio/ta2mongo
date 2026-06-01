@@ -4,14 +4,16 @@
 
 `tango`：将 ThinkingData 日志（JSON 行）采集并写入 MongoDB 的 `user` / `event` / `dead_letter` 集合。
 
-经过重构，tango 是**单一二进制**（`cmd/tango`），围绕**两种角色**组织，由顶层 `daemon` / `client` 子命令选择；每种角色有**独立的配置文件**，共享 `internal/` 与 `config/`：
+经过重构，tango 是**单一二进制**（根目录 `main.go` 装配 `cmd/daemon`、`cmd/client` 两个子程序包），围绕**两种角色**组织，由顶层子命令选择；每种角色有**独立的配置文件**，共享 `internal/` 与 `config/`：
 
-| 角色 | 子命令 | 配置文件 | 职责 |
+| 角色 | 子命令 | 默认配置文件 | 职责 |
 |------|--------|----------|------|
-| **Daemon** | `tango daemon standalone` / `tango daemon agent` | `daemon.{yaml,json}` | 配置分 **common / report / agent** 三部分；运行模式由**子命令**选择:standalone（纯上报、本地自治）与 agent（上报 + 配置同步 + 任务派发）。 |
-| **Client** | `tango client <subcmd>` | `client.{yaml,json}` | 操作 / SDK：五项分区功能，三种使用方式（CLI / HTTP REST / Go 库）。 |
+| **Daemon · standalone** | `tango daemon standalone` | `standalone.{yaml,yml,json}` | 纯上报、本地自治。配置只用 common + report。 |
+| **Daemon · agent** | `tango daemon agent` | `agent.{yaml,yml,json}` | 上报 + 配置同步 + 任务派发。配置用 common + report(+remoteConfig) + agent。 |
+| **Client** | `tango client <subcmd>` | `client.{yaml,yml,json}` | 操作 / SDK：五项分区功能，三种使用方式（CLI / HTTP REST / Go 库）。 |
 
-> 配置文件 YAML、JSON 均支持（按扩展名自动识别）；所有键可用 `TANGO_*` 环境变量覆盖，常用项也有 CLI flag（`--mongoURI` / `--logLevel` / `--instanceID`）。`--config` 留空时自动在**二进制同级目录**查找 `tango.{yaml,yml,json}`（按此顺序取首个存在者），找不到则静默回退到默认值 + 环境变量 + flag。
+> daemon 配置统一分 **common / report / agent** 三部分,运行模式由**子命令**选择(非配置开关)。
+> 配置文件 YAML、JSON 均支持（按扩展名自动识别）；所有键可用 `TANGO_*` 环境变量覆盖，常用项也有 CLI flag（`--mongoURI` / `--logLevel` / `--instanceID`）。`--config` 留空时各子命令在**二进制同级目录**查找各自的默认文件（standalone/agent/client），找不到则静默回退到默认值 + 环境变量 + flag。
 
 ---
 
@@ -19,12 +21,15 @@
 
 ```
 .
+├── main.go          # 单一入口：装配 cmd/daemon + cmd/client 子命令并执行
 ├── cmd/
-│   └── tango/       # 单一入口：daemon 子命令（上报 + 可选 agent）+ client 子命令（CLI + serve HTTP）
+│   ├── daemon/      # `tango daemon` 子命令树（standalone / agent 两种模式）
+│   └── client/      # `tango client` 子命令树（CLI 子命令 + serve HTTP）
 ├── config/          # 共享子结构 + DaemonConfig(daemon.go) / ClientConfig(client.go) + loader.go
 ├── client/          # 对外 Go 库（embeddable SDK，五项功能的统一实现）
 ├── doc/ examples/
-└── internal/        # 两个二进制共享的内部实现
+└── internal/        # 共享的内部实现
+    ├── cli/                       # cmd/* 共享：配置路径解析 + logger
     ├── daemon/ once/ ingest/      # 处理管线
     ├── backfill/                  # TA OpenAPI 历史回填
     ├── agent/ taskqueue/          # 任务 agent + MongoDB 任务队列

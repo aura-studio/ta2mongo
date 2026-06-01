@@ -131,16 +131,22 @@ func TestLoadClient_JSON(t *testing.T) {
 }
 
 // TestExampleDaemonConfigsLoad ensures the shipped daemon examples parse and
-// validate under the daemon schema (both YAML and JSON) in both run modes.
+// validate under their respective run mode (full, minimal, and JSON variants).
 func TestExampleDaemonConfigsLoad(t *testing.T) {
-	for _, p := range []string{"../examples/config/daemon/daemon.yaml", "../examples/config/daemon/daemon.json"} {
-		for _, mode := range []string{DaemonModeStandalone, DaemonModeAgent} {
-			t.Run(p+"/"+mode, func(t *testing.T) {
-				if _, _, err := LoadDaemon(p, nil, mode); err != nil {
-					t.Fatalf("LoadDaemon(%s, %s): %v", p, mode, err)
-				}
-			})
-		}
+	cases := []struct{ path, mode string }{
+		{"../examples/config/standalone/standalone.yaml", DaemonModeStandalone},
+		{"../examples/config/standalone/standalone.min.yaml", DaemonModeStandalone},
+		{"../examples/config/standalone/standalone.json", DaemonModeStandalone},
+		{"../examples/config/agent/agent.yaml", DaemonModeAgent},
+		{"../examples/config/agent/agent.min.yaml", DaemonModeAgent},
+		{"../examples/config/agent/agent.json", DaemonModeAgent},
+	}
+	for _, c := range cases {
+		t.Run(c.path, func(t *testing.T) {
+			if _, _, err := LoadDaemon(c.path, nil, c.mode); err != nil {
+				t.Fatalf("LoadDaemon(%s, %s): %v", c.path, c.mode, err)
+			}
+		})
 	}
 }
 

@@ -1,4 +1,6 @@
-package main
+// Package daemon implements the `tango daemon` subcommand tree: the two daemon
+// run modes, standalone and agent.
+package daemon
 
 import (
 	"context"
@@ -14,57 +16,65 @@ import (
 
 	"rocket-nano/tools/tango/config"
 	"rocket-nano/tools/tango/internal/agent"
-	"rocket-nano/tools/tango/internal/daemon"
+	"rocket-nano/tools/tango/internal/cli"
+	svcdaemon "rocket-nano/tools/tango/internal/daemon"
 	"rocket-nano/tools/tango/internal/filter"
 	"rocket-nano/tools/tango/internal/remoteconfig"
 )
 
-// newDaemonCmd groups the two daemon run modes under `tango daemon`:
+// NewCommand builds the `tango daemon` parent command with its two run modes:
 //
 //   - standalone: self-contained reporting — tail TA logs → report filter →
-//     MongoDB. Local filter; no remote config, no tasks.
+//     MongoDB. Local filter; no remote config, no tasks. Default config file:
+//     standalone.{yaml,yml,json} next to the binary.
 //   - agent:      report PLUS sync the filter from the remote-config document
-//     and run the task agent (register a heartbeat, claim/execute published
-//     report-sync / backfill / sql tasks).
-func newDaemonCmd() *cobra.Command {
+//     and run the task agent (claim/execute report-sync / backfill / sql).
+//     Default config file: agent.{yaml,yml,json} next to the binary.
+func NewCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "daemon",
 		Short: "Daemon role: standalone (report only) or agent (report + sync + tasks)",
 	}
-	cmd.AddCommand(newDaemonStandaloneCmd(), newDaemonAgentCmd())
+	cmd.AddCommand(newStandaloneCmd(), newAgentCmd())
 	return cmd
 }
 
-// newDaemonStandaloneCmd is `tango daemon standalone`.
-func newDaemonStandaloneCmd() *cobra.Command {
+func newStandaloneCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "standalone",
 		Short: "Standalone reporting: tail TA logs into MongoDB (local filter, no remote config, no tasks)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runDaemon(cmd, config.DaemonModeStandalone)
+			path := cli.ResolveConfigPath(configFlag(cmd), "standalone.yaml", "standalone.yml", "standalone.json")
+			return runDaemon(cmd, config.DaemonModeStandalone, path)
 		},
 	}
 }
 
-// newDaemonAgentCmd is `tango daemon agent`.
-func newDaemonAgentCmd() *cobra.Command {
+func newAgentCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "agent",
 		Short: "Agent: report + remote-config sync + claim/execute tasks (report-sync / backfill / sql)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runDaemon(cmd, config.DaemonModeAgent)
+			path := cli.ResolveConfigPath(configFlag(cmd), "agent.yaml", "agent.yml", "agent.json")
+			return runDaemon(cmd, config.DaemonModeAgent, path)
 		},
 	}
 	cmd.Flags().String("instanceID", "", "agent instance id (maps to agent.instanceID; required)")
 	return cmd
 }
 
-func runDaemon(cmd *cobra.Command, mode string) error {
-	_, rt, err := config.LoadDaemon(daemonConfigPath(), cmd.Flags(), mode)
+// configFlag reads the inherited --config persistent flag (empty when unset).
+func configFlag(cmd *cobra.Command) string {
+	v, _ := cmd.Flags().GetString("config")
+	return v
+}
+
+func runDaemon(cmd *cobra.Command, mode, path string) error {
+	_, rt, err := config.LoadDaemon(path, cmd.Flags(), mode)
 	if err != nil {
 		return err
 	}
-	logger := newDaemonLogger(rt)
+	logger := cli.NewLogger(rt.Logging.Level)
 
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -78,7 +88,7 @@ func runDaemon(cmd *cobra.Command, mode string) error {
 		if err != nil {
 			return err
 		}
-		logger = newDaemonLogger(rt)
+		logger = cli.NewLogger(rt.Logging.Level)
 	}
 
 	logger.WithFields(logrus.Fields{
@@ -95,7 +105,7 @@ func runDaemon(cmd *cobra.Command, mode string) error {
 // the in-process agent alongside it, sharing the live reporting filter so a
 // report-sync task hot-swaps it without a restart.
 func runReport(ctx context.Context, rt config.Config, logger *logrus.Logger, agentOn bool) error {
-	d, err := daemon.New(ctx, rt, logger)
+	d, err := svcdaemon.New(ctx, rt, logger)
 	if err != nil {
 		logger.WithError(err).Error("tango daemon: init failed")
 		return err
@@ -122,43 +132,20 @@ func runReport(ctx context.Context, rt config.Config, logger *logrus.Logger, age
 	return d.Run(ctx)
 }
 
-// daemonConfigPath resolves the daemon config file: the shared --config flag if
-// set, otherwise the auto-detected default next to the binary (see
-// defaultConfigPath).
-func daemonConfigPath() string {
-	if configFile != "" {
-		return configFile
-	}
-	return defaultConfigPath()
-}
-
-// newAgent constructs an agent and ensures its indexes. When flt is non-nil the
-// agent shares the hosting daemon's live reporting filter so a report-sync task
-// can hot-swap it without a restart.
-func newAgent(ctx context.Context, rt config.Config, logger *logrus.Logger, flt *filter.Holder) (*agent.Agent, error) {
-	a, err := agent.New(ctx, rt, logger)
-	if err != nil {
-		logger.WithError(err).Error("tango daemon: agent init failed")
-		return nil, err
-	}
-	if flt != nil {
-		a.AttachReportingFilter(flt)
-	}
-	if err := a.EnsureIndexes(ctx); err != nil {
-		_ = a.Shutdown()
-		logger.WithError(err).Error("tango daemon: agent ensure indexes failed")
-		return nil, err
-	}
-	return a, nil
-}
-
 // startAgent constructs and runs the in-process agent alongside the reporting
 // pipeline, returning a cleanup func that shuts it down. The agent runs in its
 // own goroutine; daemon.Run blocks the main goroutine until ctx is cancelled,
 // at which point the agent's Run also returns.
 func startAgent(ctx context.Context, rt config.Config, logger *logrus.Logger, flt *filter.Holder) (func(), error) {
-	a, err := newAgent(ctx, rt, logger, flt)
+	a, err := agent.New(ctx, rt, logger)
 	if err != nil {
+		logger.WithError(err).Error("tango daemon: agent init failed")
+		return nil, err
+	}
+	a.AttachReportingFilter(flt)
+	if err := a.EnsureIndexes(ctx); err != nil {
+		_ = a.Shutdown()
+		logger.WithError(err).Error("tango daemon: agent ensure indexes failed")
 		return nil, err
 	}
 	done := make(chan struct{})
@@ -174,17 +161,6 @@ func startAgent(ctx context.Context, rt config.Config, logger *logrus.Logger, fl
 			logger.WithError(err).Error("tango daemon: agent shutdown error")
 		}
 	}, nil
-}
-
-func newDaemonLogger(cfg config.Config) *logrus.Logger {
-	l := logrus.New()
-	l.SetFormatter(&logrus.TextFormatter{FullTimestamp: true})
-	level, err := logrus.ParseLevel(strings.ToLower(cfg.Logging.Level))
-	if err != nil {
-		level = logrus.InfoLevel
-	}
-	l.SetLevel(level)
-	return l
 }
 
 // maskURI masks the credentials portion of a MongoDB URI for safe logging.

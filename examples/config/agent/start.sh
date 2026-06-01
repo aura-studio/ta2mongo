@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 场景 2 启动脚本：agent 模式 —— 上报 + 配置同步 + 领取两种任务派发（backfill / sql）。
+# agent 模式启动脚本：上报 + 配置同步 + 领取两种任务派发（backfill / sql）。
 #
 # 用法：
 #   ./start.sh                                  # instanceID 取自配置文件
@@ -11,12 +11,10 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
-CONFIG="$SCRIPT_DIR/daemon.yaml"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+CONFIG="$SCRIPT_DIR/agent.yaml"
 
 : "${TANGO_COMMON_MONGO_URI:=}"
-# 若想用主机名作为实例 ID，取消下一行注释：
-# export TANGO_AGENT_INSTANCEID="${TANGO_AGENT_INSTANCEID:-$(hostname)}"
 
 cd "$REPO_ROOT"
-exec go run ./cmd/tango daemon agent --config "$CONFIG" "$@"
+exec go run . daemon agent --config "$CONFIG" "$@"

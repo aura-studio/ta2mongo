@@ -1,58 +1,25 @@
-// Command tango is the single tango binary. Its role is selected by the
-// top-level mode subcommand:
-//
-//   - tango daemon            — daemon role: tail TA logs → reporting filter →
-//     MongoDB, optionally hosting the task agent.
-//   - tango client <subcmd>   — client role: the five client functions (string
-//     upload, file upload with resume, backfill,
-//     ad-hoc SQL, task publishing) across one-shot CLI
-//     subcommands and an HTTP/REST server
-//     (`tango client serve`). The same functions are
-//     also available as an embeddable Go library via
-//     the importable client package.
-package main
+// Package client implements the `tango client` subcommand tree: the five client
+// functions (string upload, file upload, backfill, ad-hoc SQL, task publishing)
+// as one-shot CLI subcommands plus the HTTP/REST server (`tango client serve`).
+package client
 
 import (
 	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
-	"rocket-nano/tools/tango/client"
+	sdk "rocket-nano/tools/tango/client"
 	"rocket-nano/tools/tango/config"
+	"rocket-nano/tools/tango/internal/cli"
 )
 
-var configFile string
-
-func main() {
-	if err := newRoot().Execute(); err != nil {
-		os.Exit(1)
-	}
-}
-
-func newRoot() *cobra.Command {
-	root := &cobra.Command{
-		Use:   "tango",
-		Short: "Tango: daemon and client roles in one binary (select via the daemon/client subcommand)",
-	}
-	// Shared connection/logging overrides. When --config is empty we auto-detect
-	// tango.{yaml,yml,json} next to the binary (see defaultConfigPath).
-	root.PersistentFlags().StringVar(&configFile, "config", "",
-		"path to config file (.yaml/.yml/.json); default: tango.{yaml,yml,json} next to the binary; skipped if absent")
-	root.PersistentFlags().String("mongoURI", "", "MongoDB connection URI (maps to mongo.uri)")
-	root.PersistentFlags().String("logLevel", "", "log level: debug, info, warn, error")
-
-	root.AddCommand(newDaemonCmd(), newClientCmd())
-	return root
-}
-
-// newClientCmd groups the client-role subcommands under `tango client`.
-func newClientCmd() *cobra.Command {
+// NewCommand builds the `tango client` parent command and its subcommands.
+func NewCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "client",
 		Short: "Client role: upload, backfill, sql, and task publishing",
@@ -61,58 +28,41 @@ func newClientCmd() *cobra.Command {
 	return cmd
 }
 
+// configFlag reads the inherited --config persistent flag (empty when unset).
+func configFlag(cmd *cobra.Command) string {
+	v, _ := cmd.Flags().GetString("config")
+	return v
+}
+
+// clientConfigPath resolves the client config file: --config if set, else the
+// auto-detected client.{yaml,yml,json} next to the binary.
+func clientConfigPath(cmd *cobra.Command) string {
+	return cli.ResolveConfigPath(configFlag(cmd), "client.yaml", "client.yml", "client.json")
+}
+
 // loadClientConfig loads the client config (file + env + flags).
 func loadClientConfig(cmd *cobra.Command) (config.ClientConfig, *logrus.Logger, error) {
-	cc, err := config.LoadClient(clientConfigPath(), cmd.Flags())
+	cc, err := config.LoadClient(clientConfigPath(cmd), cmd.Flags())
 	if err != nil {
 		return config.ClientConfig{}, nil, err
 	}
-	return cc, newLogger(cc.Logging.Level), nil
-}
-
-// clientConfigPath resolves the client config file: the shared --config flag if
-// set, otherwise the auto-detected default next to the binary.
-func clientConfigPath() string {
-	if configFile != "" {
-		return configFile
-	}
-	return defaultConfigPath()
-}
-
-// defaultConfigPath returns the config file to use when --config is omitted: the
-// first of tango.{yaml,yml,json} that exists in the binary's own directory. It
-// returns "" when none is found (the loaders then skip silently and fall back to
-// defaults + env + flags). The directory is the executable's, not the current
-// working directory, so the daemon finds its config regardless of where it is
-// launched from.
-func defaultConfigPath() string {
-	dir := "."
-	if exe, err := os.Executable(); err == nil {
-		dir = filepath.Dir(exe)
-	}
-	for _, name := range []string{"tango.yaml", "tango.yml", "tango.json"} {
-		p := filepath.Join(dir, name)
-		if info, err := os.Stat(p); err == nil && !info.IsDir() {
-			return p
-		}
-	}
-	return ""
+	return cc, cli.NewLogger(cc.Logging.Level), nil
 }
 
 // buildClient constructs a connected client from the config, layering the given
 // functional options on top of the config-derived connection settings.
-func buildClient(cmd *cobra.Command, cc config.ClientConfig, logger *logrus.Logger, extra ...client.Option) (*client.Client, error) {
-	opts := append([]client.Option{
-		client.WithURI(cc.Mongo.URI),
-		client.WithMaxElapsedTime(cc.Mongo.MaxElapsedTime),
-		client.WithLogger(logger),
-		client.WithTaskQueue(cc.Publish.TasksCollection, cc.Publish.InstancesCollection, cc.Publish.InstanceTTL),
+func buildClient(cmd *cobra.Command, cc config.ClientConfig, logger *logrus.Logger, extra ...sdk.Option) (*sdk.Client, error) {
+	opts := append([]sdk.Option{
+		sdk.WithURI(cc.Mongo.URI),
+		sdk.WithMaxElapsedTime(cc.Mongo.MaxElapsedTime),
+		sdk.WithLogger(logger),
+		sdk.WithTaskQueue(cc.Publish.TasksCollection, cc.Publish.InstancesCollection, cc.Publish.InstanceTTL),
 	}, extra...)
-	return client.New(cmd.Context(), opts...)
+	return sdk.New(cmd.Context(), opts...)
 }
 
 // loadClient is the common path for commands that need a plain client.
-func loadClient(cmd *cobra.Command, extra ...client.Option) (config.ClientConfig, *client.Client, *logrus.Logger, error) {
+func loadClient(cmd *cobra.Command, extra ...sdk.Option) (config.ClientConfig, *sdk.Client, *logrus.Logger, error) {
 	cc, logger, err := loadClientConfig(cmd)
 	if err != nil {
 		return config.ClientConfig{}, nil, nil, err
@@ -134,8 +84,8 @@ func newIngestCmd() *cobra.Command {
 				return err
 			}
 			cli, err := buildClient(cmd, cc, logger,
-				client.WithBatchSize(cc.StringUpload.BatchSize),
-				client.WithFilter(cc.StringUpload.Filter.Include, cc.StringUpload.Filter.Exclude))
+				sdk.WithBatchSize(cc.StringUpload.BatchSize),
+				sdk.WithFilter(cc.StringUpload.Filter.Include, cc.StringUpload.Filter.Exclude))
 			if err != nil {
 				return err
 			}
@@ -184,7 +134,7 @@ func newUploadCmd() *cobra.Command {
 				return err
 			}
 			cli, err := buildClient(cmd, cc, logger,
-				client.WithFilter(cc.FileUpload.Filter.Include, cc.FileUpload.Filter.Exclude))
+				sdk.WithFilter(cc.FileUpload.Filter.Include, cc.FileUpload.Filter.Exclude))
 			if err != nil {
 				return err
 			}
@@ -195,7 +145,7 @@ func newUploadCmd() *cobra.Command {
 			if err := cli.EnsureIndexes(cmd.Context()); err != nil {
 				return err
 			}
-			res, err := cli.UploadFiles(cmd.Context(), client.UploadRequest{
+			res, err := cli.UploadFiles(cmd.Context(), sdk.UploadRequest{
 				Patterns:             patterns,
 				BatchSize:            cc.FileUpload.Pipeline.BatchSize,
 				CheckpointCollection: cc.FileUpload.CheckpointCollection,
@@ -338,17 +288,6 @@ func newPublishSQLCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&target, "target", "", "target instance id (empty = any)")
 	return cmd
-}
-
-func newLogger(level string) *logrus.Logger {
-	l := logrus.New()
-	l.SetFormatter(&logrus.TextFormatter{FullTimestamp: true})
-	lvl, err := logrus.ParseLevel(strings.ToLower(level))
-	if err != nil {
-		lvl = logrus.InfoLevel
-	}
-	l.SetLevel(lvl)
-	return l
 }
 
 func printJSON(v any) error {

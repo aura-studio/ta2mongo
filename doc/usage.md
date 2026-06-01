@@ -1,17 +1,21 @@
 # tango 命令行使用说明
 
-tango 现为**单一二进制**，通过顶层 `daemon` / `client` 子命令选择角色：
+tango 现为**单一二进制**（根目录 `main.go` 装配 `cmd/daemon`、`cmd/client` 两个子程序包），通过顶层子命令选择角色与模式：
 
 ```
-tango daemon  [flags]              # daemon 角色
-tango client  <subcommand> [flags] # client 角色
+tango daemon standalone [flags]    # daemon 角色 · standalone 模式
+tango daemon agent      [flags]    # daemon 角色 · agent 模式
+tango client <subcommand> [flags]  # client 角色
 ```
 
 ## 通用
 
-- `--config <path>`：配置文件路径，支持 `.yaml` / `.yml` / `.json`（按扩展名识别；文件不存在则静默跳过，回退到默认值 + 环境变量 + flag）。留空时自动在**二进制同级目录**查找 `tango.{yaml,yml,json}`（按此顺序取首个存在者）。daemon 与 client 共用同一默认文件名，但分别按各自的 schema 解析。
-- `--mongoURI`、`--logLevel`：常用覆盖项（顶层持久 flag，两种角色共用）。
-- 所有键均可用 `TANGO_*` 环境变量覆盖（嵌套键以 `.` → `_` 映射）。daemon 的连接串是 `TANGO_COMMON_MONGO_URI`（配置在 `common.mongo.uri`），client 是 `TANGO_MONGO_URI`；实例 ID 为 `TANGO_AGENT_INSTANCEID`。
+- `--config <path>`：配置文件路径，支持 `.yaml` / `.yml` / `.json`（按扩展名识别；文件不存在则静默跳过，回退到默认值 + 环境变量 + flag）。**留空时各子命令在二进制同级目录查找各自的默认文件**（按 yaml→yml→json 取首个存在者），互不读取对方的文件：
+  - `tango daemon standalone` → `standalone.{yaml,yml,json}`
+  - `tango daemon agent` → `agent.{yaml,yml,json}`
+  - `tango client ...` → `client.{yaml,yml,json}`
+- `--mongoURI`、`--logLevel`：常用覆盖项（顶层持久 flag，所有子命令共用）。
+- 所有键均可用 `TANGO_*` 环境变量覆盖（嵌套键以 `.` → `_` 映射、转大写）。daemon 的连接串是 `TANGO_COMMON_MONGO_URI`（配置在 `common.mongo.uri`），client 是 `TANGO_MONGO_URI`；实例 ID 为 `TANGO_AGENT_INSTANCEID`。
 
 ---
 
@@ -20,8 +24,8 @@ tango client  <subcommand> [flags] # client 角色
 daemon 有两种运行模式,由**子命令**选择(不是配置开关):
 
 ```bash
-tango daemon standalone --config daemon.yaml                    # 模式 1
-tango daemon agent      --config daemon.yaml --instanceID node-1 # 模式 2
+tango daemon standalone                  # 模式 1（默认读同级 standalone.{yaml,yml,json}）
+tango daemon agent --instanceID node-1   # 模式 2（默认读同级 agent.{yaml,yml,json}）
 ```
 
 配置分三部分：**common**（logging + mongo）、**report**（上报管线，含 `source` / `pipeline` / `filter` / `remoteConfig`）、**agent**（任务 agent 设置）。两种模式**都 tail 日志做上报**,故 `report.source.logPattern` 始终必填。
@@ -36,7 +40,7 @@ tango daemon agent      --config daemon.yaml --instanceID node-1 # 模式 2
 ## `tango client` —— client 角色
 
 ```
-tango client <subcommand> [flags] --config client.yaml
+tango client <subcommand> [flags]    # 默认读同级 client.{yaml,yml,json}
 ```
 
 | 子命令 | 功能 | 关键 flag |

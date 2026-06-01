@@ -1,0 +1,44 @@
+{
+  "common": {
+    "logging": { "level": "info", "format": "text" },
+    "mongo": {
+      "uri": "mongodb://localhost:27017/tango",
+      "maxElapsedTime": "10s",
+      "connectTimeout": "10s",
+      "serverSelectionTimeout": "30s"
+    }
+  },
+  "report": {
+    "source": {
+      "logPattern": ["/var/log/ta/.*\\.log"],
+      "tailMode": "hybrid",
+      "rescanInterval": "30s",
+      "pollInterval": "200ms",
+      "maxLineBytes": 10485760
+    },
+    "pipeline": {
+      "batchSize": 1000,
+      "batchWorkers": 4,
+      "flushInterval": "1s",
+      "deadLetterCap": 128
+    },
+    "filter": {
+      "include": ["#type == \"track\""],
+      "exclude": ["debug == true"]
+    },
+    "remoteConfig": {
+      "collection": "_tango_config",
+      "documentID": "default",
+      "syncInterval": "1h"
+    }
+  },
+  "agent": {
+    "instanceID": "node-1",
+    "tasksCollection": "_tango_tasks",
+    "instancesCollection": "_tango_instances",
+    "pollInterval": "10s",
+    "leaseDuration": "5m",
+    "heartbeatInterval": "30s",
+    "instanceTTL": "90s"
+  }
+}

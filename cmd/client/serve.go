@@ -1,4 +1,4 @@
-package main
+package client
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
-	"rocket-nano/tools/tango/client"
+	sdk "rocket-nano/tools/tango/client"
 	"rocket-nano/tools/tango/config"
 )
 
@@ -44,7 +44,7 @@ func newServeCmd() *cobra.Command {
 
 type server struct {
 	cc     config.ClientConfig
-	cli    *client.Client
+	cli    *sdk.Client
 	logger *logrus.Logger
 }
 
@@ -141,7 +141,7 @@ func (s *server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	if req.BatchSize == 0 {
 		req.BatchSize = s.cc.FileUpload.Pipeline.BatchSize
 	}
-	res, err := s.cli.UploadFiles(r.Context(), client.UploadRequest{
+	res, err := s.cli.UploadFiles(r.Context(), sdk.UploadRequest{
 		Patterns:             req.Patterns,
 		BatchSize:            req.BatchSize,
 		CheckpointCollection: s.cc.FileUpload.CheckpointCollection,

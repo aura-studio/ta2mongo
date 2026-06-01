@@ -1,36 +1,46 @@
 # tango 配置样例
 
-tango 现为**单一二进制**，通过 `daemon` / `client` 子命令选择角色，仍用两份配置。**推荐样例：**
+tango 是**单一二进制**，通过子命令选择角色与模式（详见 [../../doc/usage.md](../../doc/usage.md)
+与字段参考 [../../doc/config.md](../../doc/config.md)）。每个模式各一套样例：**全量版**（含每个字段
+的 required/optional 与默认值注释）+ **精简版**（只含 required 字段）。
 
-| 角色 | 目录 | 运行 |
-|------|------|------|
-| daemon — standalone（纯上报） | [daemon/](daemon/) `daemon.yaml` / `daemon.json` | `tango daemon standalone --config examples/config/daemon/daemon.yaml` |
-| daemon — agent（上报+同步+任务） | [daemon/](daemon/) `daemon.yaml` / `daemon.json` | `tango daemon agent --config examples/config/daemon/daemon.yaml --instanceID node-1` |
-| client（CLI / HTTP / 库） | [client/](client/) `client.yaml` / `client.json` | `tango client <subcommand> --config examples/config/client/client.yaml` |
+| 模式 | 子命令 | 目录 | 默认配置名 |
+|------|--------|------|------|
+| daemon · standalone | `tango daemon standalone` | [standalone/](standalone/) | `standalone.{yaml,yml,json}` |
+| daemon · agent | `tango daemon agent` | [agent/](agent/) | `agent.{yaml,yml,json}` |
+| client | `tango client <subcmd>` | [client/](client/) | `client.{yaml,yml,json}` |
 
-daemon 配置分为三部分：**common**（logging + mongo，进程级共享）、**report**（上报管线，
-含 `source` / `pipeline` / `filter` / `remoteConfig`）、**agent**（任务 agent 设置）。
-**运行模式由子命令选择**（不是配置开关）：`standalone` 只用 common + report 做纯上报；
-`agent` 在上报之上自动开启 `remoteConfig` 配置同步与 agent 任务派发，并需要 `agent.instanceID`。
+每个 daemon 目录含：
+
+- `<mode>.yaml` —— **全量版**，逐字段标注 `[required]` / `[optional]`（默认值）。
+- `<mode>.min.yaml` —— **精简版**，仅 required 字段，其余走默认。
+- `<mode>.json` —— JSON 形式的全量版。
+- `start.sh` —— 启动脚本（内部 `go run . daemon <mode>`）。
+
+## 运行
 
 ```bash
-# 环境变量可覆盖任意键（嵌套键：. → _，加 TANGO_ 前缀）：
-TANGO_COMMON_MONGO_URI=mongodb://host/db tango daemon standalone --config examples/config/daemon/daemon.yaml
-TANGO_AGENT_INSTANCEID=node-1            tango daemon agent      --config examples/config/daemon/daemon.json
+# 用脚本：
+examples/config/standalone/start.sh
+examples/config/agent/start.sh --instanceID node-1
+
+# 或手动指定配置：
+tango daemon standalone --config examples/config/standalone/standalone.yaml
+tango daemon agent      --config examples/config/agent/agent.yaml --instanceID node-1
+tango client serve      --config examples/config/client/client.yaml
+
+# 留空 --config 时，子命令自动读取二进制同级目录的 standalone/agent/client.{yaml,yml,json}。
+# 敏感值用环境变量注入（daemon 连接串前缀是 TANGO_COMMON_MONGO_URI）：
+TANGO_COMMON_MONGO_URI=mongodb://user:pass@host/db examples/config/agent/start.sh
 ```
 
-> 注意：`common.mongo.uri`、`backfill.token`、`backfill.proxy` 等敏感值示例里留空或占位，
-> 实际使用请用环境变量注入。`instanceID` 仅在 daemon 的 `agent` 段（`agent.instanceID`）配置。
+## required 字段速查
 
-各场景在两份样例里以注释区分：
-- 实时采集（standalone）/ 集群 worker（agent）→ `daemon/`（由子命令选模式）。
-- 字符串上报 / 文件上报（断点续传）/ 回填 / SQL / 任务发布 → `client/` 的对应配置段。
+| 模式 | required 字段 |
+|------|------|
+| standalone | `common.mongo.uri`、`report.source.logPattern` |
+| agent | `common.mongo.uri`、`report.source.logPattern`、`agent.instanceID` |
+| client | `mongo.uri`（回填/SQL 另需 `backfill.apiBaseURL`/`token`/`projectID`/`runID` 等） |
 
-## daemon 两种模式（开箱即用）
-
-[scenarios/](scenarios/) 给出两套完整的 `daemon.yaml` + `start.sh`：
-
-| 场景 | 模式 | 子命令 | 目录 | 配置同步 | 任务派发 |
-|------|------|--------|------|:---:|:---:|
-| 1 | standalone | `tango daemon standalone` | [scenarios/01-standalone](scenarios/01-standalone/) | ❌ | ❌ |
-| 2 | agent | `tango daemon agent` | [scenarios/02-agent](scenarios/02-agent/) | ✅ | ✅ |
+> daemon 两种模式都 tail 日志上报，故 `report.source.logPattern` 始终必填。standalone
+> 不使用 `agent` 段与 `report.remoteConfig`（写了也忽略）。
