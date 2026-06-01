@@ -1,48 +1,40 @@
 # tango 配置参考
 
 本文是**字段参考**（每个键的含义、required/optional、默认值）。命令行用法见
-[usage.md](usage.md)，设计与数据流见 [arch.md](arch.md)。完整可运行样例见
-[examples/config](../examples/config)。
+[usage.md](usage.md)，架构见 [arch.md](arch.md)，完整样例见 [examples/config](../examples/config)。
 
-## 两份配置文件，三种默认名
+## 配置文件与默认名
 
-| 角色 / 模式 | 子命令 | schema | `--config` 留空时默认读取 |
-|------|--------|--------|------|
-| daemon · standalone | `tango daemon standalone` | DaemonConfig | `standalone.{yaml,yml,json}` |
-| daemon · agent | `tango daemon agent` | DaemonConfig | `agent.{yaml,yml,json}` |
-| client | `tango client <subcmd>` | ClientConfig | `client.{yaml,yml,json}` |
+| 模式 | 子命令 | `--config` 留空时默认读取 |
+|------|--------|------|
+| standalone | `tango daemon standalone` | `standalone.{yaml,yml,json}` |
+| cluster | `tango daemon cluster` | `cluster.{yaml,yml,json}` |
 
-默认文件在**二进制同级目录**按 `yaml → yml → json` 取首个存在者；各子命令只读自己的
-文件（standalone 不读 agent 文件，反之亦然）。文件缺失或解析为空时静默跳过。
+默认文件在**二进制同级目录**按 `yaml → yml → json` 取首个存在者；各子命令只读自己的文件。
+文件缺失或为空时静默跳过。
 
 ## 来源与优先级（低 → 高）
 
 1. 内置默认值
 2. 配置文件（YAML/JSON，按扩展名识别）
-3. `TANGO_*` 环境变量
-4. CLI flag（完整层级名，如 `--generic.mongo.uri` / `--agent.instanceID` / client `--mongo.uri`；`--config` 是文件路径）
-5. 远程配置文档（仅 agent 模式、仅上报 `filter` 热生效；report-sync 任务写入该文档）
+3. `TANGO_*` 环境变量（viper 原始层级：`.` → `_`、转大写）
+4. CLI flag（完整层级名，如 `--generic.mongo.uri`；`--config` 是文件路径）
+5. （cluster 模式）远程配置文档——仅覆盖上报 `filter`，启动时拉取 + 每 `syncInterval` 热重载
 
-### 环境变量映射
-
-`TANGO_` 前缀 + 嵌套键 `.` → `_`、转大写。注意 **daemon 与 client 的连接串前缀不同**
-（schema 不同）：
+### 环境变量示例
 
 | 配置键 | 环境变量 |
 |--------|----------|
-| daemon `generic.mongo.uri` | `TANGO_GENERIC_MONGO_URI` |
-| daemon `generic.logging.level` | `TANGO_GENERIC_LOGGING_LEVEL` |
-| daemon `report.source.tailMode` | `TANGO_REPORT_SOURCE_TAILMODE` |
-| daemon `agent.instanceID` | `TANGO_AGENT_INSTANCEID` |
-| client `mongo.uri` | `TANGO_MONGO_URI` |
+| `generic.mongo.uri` | `TANGO_GENERIC_MONGO_URI` |
+| `generic.logging.level` | `TANGO_GENERIC_LOGGING_LEVEL` |
+| `report.source.tailMode` | `TANGO_REPORT_SOURCE_TAILMODE` |
 
 ---
 
-## daemon 配置（DaemonConfig）
+## 配置结构
 
-三部分：`generic` / `report` / `agent`。运行模式由子命令决定,不是配置开关——因此
-**没有 `enabled` 字段**。standalone 只用 `generic` + `report`（忽略 `agent` 与
-`report.filter.remote`）；agent 额外启用 `report.filter.remote` 配置同步与 `agent` 任务派发。
+两部分：`generic`（进程级共享）与 `report`（上报管线）。无 `enabled` 开关——模式由子命令决定。
+`report.filter.remote` 仅在 cluster 模式生效。
 
 ### generic（两种模式都用）
 
@@ -74,92 +66,35 @@
 | `report.filter.local.include` | optional | `[]`(全放行) | expr 表达式，OR 语义命中其一即保留 |
 | `report.filter.local.exclude` | optional | `[]` | 命中其一即丢弃（在 include 之后） |
 
-### report.filter.remote（仅 agent 模式生效）
+### report.filter.remote（仅 cluster 模式生效）
 
 | 键 | required/optional | 默认 | 说明 |
 |----|----|----|----|
-| `report.filter.remote.collection` | optional | `_tango_config` | 配置文档所在集合 |
-| `report.filter.remote.documentID` | optional | `default` | 配置文档 `_id` |
+| `report.filter.remote.collection` | optional | `_tango_config` | 控制面文档所在集合 |
+| `report.filter.remote.documentID` | optional | `default` | 控制面文档 `_id` |
 | `report.filter.remote.syncInterval` | optional | `1h` | 重新拉取并热重载的间隔 |
 
-> 是否启用同步由模式决定（agent 开、standalone 关），无 `enabled` 字段。连接类字段
-> （`generic.mongo.uri` 等）永不可被远端覆盖；只有上报 `filter` 支持运行时热生效。
-
-### agent（仅 agent 模式生效）
-
-| 键 | required/optional | 默认 | 说明 |
-|----|----|----|----|
-| `agent.instanceID` | **required**(agent 模式) | — | 实例唯一标识；也可用 `--agent.instanceID` / `TANGO_AGENT_INSTANCEID` |
-| `agent.tasksCollection` | optional | `_tango_tasks` | 任务队列集合 |
-| `agent.instancesCollection` | optional | `_tango_instances` | 实例心跳集合（TTL 过期） |
-| `agent.pollInterval` | optional | `10s` | 轮询认领任务间隔 |
-| `agent.leaseDuration` | optional | `5m` | 任务租约；超时未续可被其他 agent 回收 |
-| `agent.heartbeatInterval` | optional | `30s` | 心跳刷新间隔 |
-| `agent.instanceTTL` | optional | `90s` | 心跳超过此时长视为离线 |
+> 是否启用同步由模式决定（cluster 开、standalone 关）。连接类字段（`generic.mongo.uri`、
+> `report.filter.remote` 本身）永不可被远端覆盖；只有上报 `filter` 支持运行时热生效。
 
 完整样例：[standalone.max.yaml](../examples/config/standalone/standalone.max.yaml)（全量+注释）、
 [standalone.min.yaml](../examples/config/standalone/standalone.min.yaml)（仅 required）；yaml/json
-各有 max/min 两份，agent 同理见 [examples/config/agent](../examples/config/agent)。
+各有 max/min 两份，cluster 同理见 [examples/config/cluster](../examples/config/cluster)。
 
 ---
 
-## client 配置（ClientConfig）
+## 上报 filter 表达式
 
-client 用扁平的 `mongo`（连接串 `TANGO_MONGO_URI`），按五项功能分区，外加 `server`：
-
-| 段 | 关键键（默认） | 用途 |
-|----|----|----|
-| `logging` / `mongo` | `mongo.uri`**(required)**、`mongo.maxElapsedTime`(10s) | 共享连接/日志 |
-| `stringUpload` | `batchSize`(1000)、`filter.{include,exclude}` | 字符串单次上报（无重传） |
-| `fileUpload` | `logPattern`、`maxLineBytes`(10MB)、`pipeline.*`、`filter.*`、`checkpointCollection`(`_tango_fileupload`) | 文件上报（断点续传） |
-| `backfill` | 见下「backfill」 | 历史回填执行 |
-| `backfillFilter` | `table`(`event`)、`events`、`include`、`exclude` | 回填选表与谓词 |
-| `sql` | `schemaPrefix` | 临时 SQL 的执行覆盖（连接取自 backfill） |
-| `publish` | `tasksCollection`(`_tango_tasks`)、`instancesCollection`(`_tango_instances`)、`instanceTTL`(90s) | 任务发布端 |
-| `server` | `addr`(`:8080`) | `tango client serve` 监听地址 |
-
-### backfill（client backfill / sql；agent 的 backfill/sql 任务参数来自任务 payload，不读此段）
-
-| 键 | required/optional | 默认 | 说明 |
-|----|----|----|----|
-| `backfill.apiBaseURL` | **required** | — | 数数 OpenAPI 网关，无尾斜杠 |
-| `backfill.token` | **required** | — | 项目查询 token |
-| `backfill.projectID` | **required** | — | 拼表名 `v_event_<id>` / `v_user_<id>` |
-| `backfill.runID` | **required** | — | 断点续传标识；同 runID 重启即续跑 |
-| `backfill.partDateRange.{start,end}` | event 表 **required** | — | `YYYY-MM-DD`；user 表无分区不需要 |
-| `backfill.pageSize` | optional | `10000` | 服务端分页大小（≥1000） |
-| `backfill.paginate` | optional | `true` | true=分页+逐页续传；false=单次全量流式 |
-| `backfill.pollInterval` | optional | `3s` | 任务状态轮询间隔 |
-| `backfill.pollTimeout` | optional | `30m` | 单 chunk submit→FINISHED 最长等待 |
-| `backfill.pageRetries` | optional | `3` | 单页瞬时错误重试次数 |
-| `backfill.progressCollection` | optional | `_backfill_progress` | 续传检查点集合 |
-| `backfill.forceSkipExisting` | optional | `true` | event 一律 `$setOnInsert` 跳过已存在 `#uuid` |
-| `backfill.skipLocalFilter` | optional | `false` | true=只信 SQL 下推，关闭本地兜底 |
-| `backfill.proxy` | optional | `""` | `http`/`https`/`socks5`；空=直连 |
-| `backfill.schemaPrefix` | optional | `""` | 表名前缀，如 `ta` → `ta.v_event_35` |
-| `backfill.limit` | optional | `0` | >0 时每条 SQL 追加 `LIMIT n`（冒烟用） |
-
-完整样例：[examples/config/client](../examples/config/client)。
-
----
-
-## 两种 filter
-
-| | 上报 filter | backfill filter |
-|---|---|---|
-| 位置 | daemon `report.filter.local` / client `stringUpload.filter`、`fileUpload.filter` | `backfillFilter` |
-| 维度 | `#type` / `#event_name` / `properties.*` | **表名(event/user)** + 事件/属性（**不含 #type**） |
-| 表达式 | `include` / `exclude`（expr-lang） | `include` / `exclude` + `events`(语法糖 → `#event_name in [...]`) |
-
-上报 filter 示例（expr-lang，作用于扁平化记录，`#` 前缀字段可直接引用）：
+expr-lang，作用于扁平化记录，`#` 前缀字段可直接引用：
 
 ```yaml
 filter:
-  include:
-    - '#type == "track" && #event_name in ["login", "pay"]'
-    - '#type startsWith "user_"'
-  exclude:
-    - 'properties.is_loadtest == true'
+  local:
+    include:
+      - '#type == "track" && #event_name in ["login", "pay"]'
+      - '#type startsWith "user_"'
+    exclude:
+      - 'properties.is_loadtest == true'
 ```
 
 被过滤掉的记录**不写 dead_letter**，是有意丢弃。

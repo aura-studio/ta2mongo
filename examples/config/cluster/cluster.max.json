@@ -36,14 +36,5 @@
         "syncInterval": "1h"
       }
     }
-  },
-  "agent": {
-    "instanceID": "node-1",
-    "tasksCollection": "_tango_tasks",
-    "instancesCollection": "_tango_instances",
-    "pollInterval": "10s",
-    "leaseDuration": "5m",
-    "heartbeatInterval": "30s",
-    "instanceTTL": "90s"
   }
 }

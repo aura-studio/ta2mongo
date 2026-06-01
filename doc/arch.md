@@ -2,18 +2,17 @@
 
 ## 1. 目标
 
-`tango`：将 ThinkingData 日志（JSON 行）采集并写入 MongoDB 的 `user` / `event` / `dead_letter` 集合。
+`tango`：将 ThinkingData 日志（JSON 行）采集并写入 MongoDB 的 `user` / `event` /
+`dead_letter` 集合。v1.0.0 是**单一二进制、纯上报 daemon**，两种运行模式由子命令选择：
 
-经过重构，tango 是**单一二进制**（根目录 `main.go` 装配 `cmd/daemon`、`cmd/client` 两个子程序包），围绕**两种角色**组织，由顶层子命令选择；每种角色有**独立的配置文件**，共享 `internal/` 与 `config/`：
-
-| 角色 | 子命令 | 默认配置文件 | 职责 |
+| 模式 | 子命令 | 默认配置文件 | 职责 |
 |------|--------|----------|------|
-| **Daemon · standalone** | `tango daemon standalone` | `standalone.{yaml,yml,json}` | 纯上报、本地自治。配置只用 generic + report。 |
-| **Daemon · agent** | `tango daemon agent` | `agent.{yaml,yml,json}` | 上报 + 配置同步 + 任务派发。配置用 generic + report(+remoteConfig) + agent。 |
-| **Client** | `tango client <subcmd>` | `client.{yaml,yml,json}` | 操作 / SDK：五项分区功能，三种使用方式（CLI / HTTP REST / Go 库）。 |
+| **standalone** | `tango daemon standalone` | `standalone.{yaml,yml,json}` | 纯上报、完全本地自治：filter 写死在本地配置。 |
+| **cluster** | `tango daemon cluster` | `cluster.{yaml,yml,json}` | 上报 + 从 MongoDB 控制面文档同步并**热重载**上报 filter。 |
 
-> daemon 配置统一分 **generic / report / agent** 三部分,运行模式由**子命令**选择(非配置开关)。
-> 配置文件 YAML、JSON 均支持（按扩展名自动识别）；所有键可用 `TANGO_*` 环境变量覆盖，命令行用完整层级名 flag 覆盖（如 `--generic.mongo.uri`、`--agent.instanceID`）。`--config` 留空时各子命令在**二进制同级目录**查找各自的默认文件（standalone/agent/client），找不到则静默回退到默认值 + 环境变量 + flag。
+> 配置文件 YAML、JSON 均支持（按扩展名识别）。`--config` 留空时各子命令在**二进制同级目录**
+> 查找各自默认文件，找不到则回退到默认值 + 环境变量 + flag。所有键可用 `TANGO_*` 环境变量
+> 覆盖；命令行用**完整层级名** flag 覆盖（如 `--generic.mongo.uri`）。
 
 ---
 
@@ -21,110 +20,62 @@
 
 ```
 .
-├── main.go          # 单一入口：装配子命令并执行（v1.0.0 只接线 cmd/daemon）
+├── main.go          # 单一入口：装配 cmd/daemon 子命令并执行
 ├── cmd/
-│   ├── daemon/      # `tango daemon` 子命令树（standalone / agent 两种模式）
-│   └── client/      # `tango client` 子命令树（v1.0.0 未接线，保留以备后续）
-├── config/          # DaemonConfig(daemon.go) / ClientConfig(client.go) + loader.go
-├── client/          # 对外 Go 库（embeddable SDK）
+│   └── daemon/      # `tango daemon` 子命令树（standalone / cluster 两种模式）
+├── config/          # DaemonConfig(daemon.go) + 运行时 Config(config.go) + loader.go
 ├── doc/ examples/
 └── internal/        # 按单向依赖分三层（service → process → core）
-    ├── core/        # 无内部依赖的基础件：
-    │                #   cli remoteconfig filter store talog tailer dynamicbatch taskqueue
-    ├── process/     # 仅依赖 core 的处理层：ingest pipeline
-    └── service/     # 依赖 process+core 的运行时：daemon backfill agent
+    ├── core/        # 无内部依赖的基础件：cli filter remoteconfig store talog tailer dynamicbatch
+    ├── process/     # 仅依赖 core 的处理层：pipeline
+    └── service/     # 依赖 process+core 的运行时：daemon
 ```
 
 > **internal 分层规则**：依赖只能从上往下（service → process → core），不得反向或成环。
-> 新增包按其依赖归入对应层；同层内（如 service 内 agent → backfill）也保持单向无环。
 
 ---
 
-## 3. Daemon 角色（`tango daemon standalone` / `tango daemon agent`）
-
-daemon 配置分三部分：**generic**（`logging` + `mongo`，进程级共享）、**report**（上报管线，含 `source` / `pipeline` / `filter` / `filter.remote`）、**agent**（任务 agent 设置）。**运行模式由子命令选择**,不是配置开关:
-
-| 模式 | 子命令 | 配置同步 | 任务派发 | instanceID |
-|------|--------|:---:|:---:|:---:|
-| standalone | `tango daemon standalone` | ❌ | ❌ | 不需要 |
-| agent | `tango daemon agent` | ✅ | ✅ | 必填 |
-
-两种模式**都做上报**,故 `report.source.logPattern` 始终必填。
-
-### 3.1 report 功能（reporting，两种模式共用）
-
-数据流（与原 daemon 一致）：
+## 3. 数据流（两种模式共用上报管线）
 
 ```
 Tailer ──lineCh──▶ Dispatcher(按用户亲和性路由) ──▶ Worker[i](Parse→上报Filter→Identity→Batch) ──▶ MongoDB BulkWrite
 ```
 
-- **上报 filter**（`report.filter.local`）：对每条记录生效的 expr 表达式（针对 `#type` / `#event_name` / `properties.*`）。它与 backfill filter 是**两个独立概念**。
-- 远端配置（`report.filter.remote`）可热更新上报 filter；report-sync 任务即写入该文档。**仅 agent 模式生效**;standalone 保持本地 filter 不变。
-
-### 3.2 agent 模式额外能力
-
-`tango daemon agent` 在上报之上额外:① 启动配置同步循环热重载 filter;② 运行 agent——注册心跳、领取并执行已发布的任务、汇报结果。agent 与上报管线**共享同一个 live filter holder**,使 report-sync 任务可直接热替换上报 filter。`agent.instanceID` 必填。
-
-`instanceID` **仅在 agent 配置下**（`agent.instanceID`），开启 agent 时必填；其它情况无意义。
-
-### 3.3 agent 任务（发布式，三种）
-
-| 任务类型 | 说明 | filter 形式 |
-|----------|------|-------------|
-| **report-sync** | 同步上报 filter：领取者把 payload 的 filter 应用到 daemon 的 live 上报 filter 并持久化到远端配置文档 | 上报 filter（include/exclude） |
-| **backfill** | 历史回填 | **backfill filter**：选表 + 事件/属性谓词，**不过滤 #type**；表名属于 filter（配置中无独立 `table` 字段） |
-| **sql** | 临时执行一条 SQL 并导入结果 | 复用 backfill filter 的表选择 |
+- **Tailer**：追尾 `report.source.logPattern` 匹配的日志文件（hybrid / poll / event）。
+- **Dispatcher**：按 `#account_id`（优先）或 `#distinct_id` 一致性哈希路由到固定 worker，
+  保证同一用户的操作顺序处理。
+- **上报 filter**（`report.filter.local`）：对每条记录生效的 expr 表达式（针对 `#type` /
+  `#event_name` / `properties.*`）。被过滤掉的记录**不写 dead_letter**，是有意丢弃。
+- **Store**：批量 bulk-write，按 `#uuid`（event）/ `#user_id`（user）upsert，带指数退避重试
+  （`generic.mongo.maxElapsedTime` 为单次写的退避总时长上限）。
 
 ---
 
-## 4. 两种 filter
+## 4. cluster 模式：控制面 filter 同步
 
-| | 上报 filter（`report.filter.local` / runtime `Filter`） | backfill filter（`backfillFilter`） |
-|---|---|---|
-| 使用方 | daemon 上报、client 字符串/文件上报 | backfill 任务、client backfill / sql |
-| 维度 | `#type` / `#event_name` / 属性 | **表名(event/user)** + 事件/属性（**不含 #type**） |
-| 表达式 | `include` / `exclude` | `include` / `exclude` + `events`(语法糖→`#event_name in [...]`) |
-| 表名 | — | 在 filter 内（`table`），backfill 配置无独立表名字段 |
+`tango daemon cluster` 在上报之上启用一个同步循环：
 
-`config.BackfillFilterConfig.IncludeExprs()` 把 `events` 折叠进 include，再复用同一套 `filter.New` / `filter.CompileToSQL`，因此本地过滤与 SQL 下推走同一条代码路径。
+- **启动时**：从 `report.filter.remote` 指定的集合 / 文档拉取一次，把远端 filter 合并覆盖
+  本地 filter。
+- **运行中**：每 `syncInterval`（默认 1h）再拉取，命中 include/exclude 变更即**热替换** live
+  filter（无需重启），让数据中心能渐进放量。
+- **不可覆盖**：连接类字段（`generic.mongo.uri`、`report.filter.remote` 本身）永远来自本地文件，
+  不接受远端覆盖。
 
----
+standalone 模式不启用此循环，filter 完全由本地配置决定。
 
-## 5. Client 角色（`tango`）
+控制面文档形如：
 
-五项**分区配置**的功能，统一由 `client/` 库实现：
-
-| # | 功能 | 库方法 | 配置段 | 说明 |
-|---|------|--------|--------|------|
-| 1 | 字符串单次上报（**无重传**） | `Ingest` / `IngestBatch` | `stringUpload` | 一次性写入 |
-| 2 | 文件单次上报（**有重传**） | `UploadFiles` | `fileUpload` | 按文件字节偏移检查点；中断/失败后从断点续传，未确认行重发 |
-| 3 | backfill 执行 | `RunBackfill` | `backfill` + `backfillFilter` | 复用 internal/backfill |
-| 4 | SQL 执行 | `ExecuteSQL` | `sql`（凭据取自 backfill） | 临时 SQL |
-| 5 | MongoDB 任务发布 | `PublishReportSync` / `PublishBackfillTask` / `PublishSQLTask` | `publish` | agent 任务机制的发布端 |
-
-三种使用方式（faces）：
-
-- **CLI**：`tango client ingest|upload|backfill|sql|publish <report-sync|backfill|sql>`。
-- **HTTP/REST**：`tango client serve`，暴露 `POST /ingest /upload /backfill /sql /publish/{report-sync,backfill,sql}`。
-- **Go 库**：直接 `import rocket-nano/tools/tango/client`。
+```json
+{ "_id": "default", "filter": { "include": ["#type == \"track\""], "exclude": [] } }
+```
 
 ---
 
-## 6. 任务队列（taskqueue）与可靠性修复
+## 5. 配置结构
 
-拉模型：agent 用原子 `findOneAndUpdate` 领取任务并打租约；长任务周期续租，持有者宕机则租约过期被他人重领。本次重构修复了以下缺陷：
-
-- **B1** 宕机耗尽重试的任务会永久停在 `claimed`：新增 `Reap` 把 `claimed && 租约过期 && attempts>=maxAttempts` 置为 `failed`。
-- **B2** 定向任务目标永久离线则永远 `pending`，且终态任务不清理：`Reap` 对超过宽限期、目标离线的定向 pending 任务置 `failed`；`finishedAt` 上加 TTL 索引清理终态任务。
-- **B3** 续租短暂失败导致并发执行 / 过期持有者仍能 finalize：`Complete` / `Fail` 增加 `leaseUntil >= now` 校验，汇报使用有界 context。
-- **B4** 重试无退避、瞬间烧尽次数：`Fail` 重试设置 `notBefore = now + 指数退避`，`Claim` 增加 `notBefore <= now` 闸门。
-- **B5** 重领覆盖 `startedAt`、初次心跳失败误判离线：`Claim` 用 `$ifNull` 只在首次领取写 `startedAt`；初次心跳带短重试。
-
-agent 在每个空闲轮询周期调用 `Reap` 执行上述维护。
-
----
-
-## 7. 其余（解析 / 身份 / 写模型 / 索引）
-
-talog 解析、IdentityResolver 身份解析、user/event/dead_letter 写模型与索引、指数退避重试策略均与重构前一致，详见 `store` / `talog` 包源码与本仓库历史版本说明。
+daemon 配置分两部分：**generic**（`logging` + `mongo`，进程级共享）与 **report**
+（上报管线：`source` / `pipeline` / `filter`）。`report.filter` 又分 `local`（本地规则）
+与 `remote`（cluster 模式的控制面同步源）。运行时投影为扁平的 `config.Config`
+（`Logging` / `Mongo` / `Source` / `Pipeline` / `Filter` / `RemoteConfig`）。详见
+[config.md](config.md)。

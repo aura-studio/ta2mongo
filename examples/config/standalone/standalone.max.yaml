@@ -42,4 +42,4 @@ report:
         - '#type == "user_set"'
       exclude:                   # [optional]（默认 []）命中其一即丢弃（在 include 之后）
         - 'debug == true'
-    # remote: 仅 agent 模式生效，standalone 忽略，此处省略。
+    # remote: 仅 cluster 模式生效，standalone 忽略，此处省略。

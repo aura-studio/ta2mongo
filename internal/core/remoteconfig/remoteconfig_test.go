@@ -62,15 +62,15 @@ func TestMerge_DurationFromString(t *testing.T) {
 	}
 }
 
-func TestMerge_NestedBackfill(t *testing.T) {
+func TestMerge_NestedRemoteConfig(t *testing.T) {
 	base := baseConfig()
 	doc := map[string]any{
-		"backfillFilter": map[string]any{
-			"table": "user",
+		"remoteConfig": map[string]any{
+			"collection": "other_config",
 		},
 	}
-	// backfillFilter is a nested struct; ensure nested merge works without
-	// nuking sibling top-level filter.
+	// remoteConfig is a nested struct; ensure nested merge works without nuking
+	// the sibling top-level filter.
 	got, err := Merge(base, doc)
 	if err != nil {
 		t.Fatal(err)
@@ -78,8 +78,8 @@ func TestMerge_NestedBackfill(t *testing.T) {
 	if len(got.Filter.Include) != 1 || got.Filter.Include[0] != `#type == "user_set"` {
 		t.Errorf("top-level Filter.Include clobbered: %v", got.Filter.Include)
 	}
-	if got.BackfillFilter.Table != "user" {
-		t.Errorf("backfillFilter.table = %q, want user", got.BackfillFilter.Table)
+	if got.RemoteConfig.Collection != "other_config" {
+		t.Errorf("remoteConfig.collection = %q, want other_config", got.RemoteConfig.Collection)
 	}
 }
 

@@ -1,87 +1,53 @@
 # tango 命令行使用说明
 
-tango 现为**单一二进制**（根目录 `main.go` 装配子程序包），通过顶层子命令选择角色与模式：
+tango 是**单一二进制**（纯上报 daemon），由子命令选择运行模式：
 
 ```
-tango daemon standalone [flags]    # daemon 角色 · standalone 模式
-tango daemon agent      [flags]    # daemon 角色 · agent 模式
+tango daemon standalone [flags]    # 纯上报、本地 filter
+tango daemon cluster    [flags]    # 上报 + 从 MongoDB 同步并热重载 filter
 ```
-
-> **v1.0.0：仅暴露 daemon 入口。** client 角色（上报/回填/SQL/任务发布 + HTTP 服务）已在
-> `cmd/client` 实现，但入口在 v1.0.0 未接线；下文「client 角色」一节是后续启用后的用法
-> （在 `main.go` 加回 `clientcmd.NewCommand()` 即可开启）。
 
 ## 通用
 
-- `--config <path>`：配置文件路径，支持 `.yaml` / `.yml` / `.json`（按扩展名识别；文件不存在则静默跳过，回退到默认值 + 环境变量 + flag）。**留空时各子命令在二进制同级目录查找各自的默认文件**（按 yaml→yml→json 取首个存在者），互不读取对方的文件：
+- `--config <path>`：配置文件路径，支持 `.yaml` / `.yml` / `.json`（按扩展名识别；文件不存在则
+  静默跳过，回退到默认值 + 环境变量 + flag）。**留空时各子命令在二进制同级目录查找各自默认文件**
+  （按 yaml→yml→json 取首个存在者），互不读取对方的文件：
   - `tango daemon standalone` → `standalone.{yaml,yml,json}`
-  - `tango daemon agent` → `agent.{yaml,yml,json}`
-  - `tango client ...` → `client.{yaml,yml,json}`
-- **命令行用「完整层级名」flag 覆盖配置**（viper 原生层级，不再有 `--mongoURI` 这类短别名）：flag 名即配置键。daemon：`--generic.mongo.uri`、`--generic.logging.level`、`--agent.instanceID`；client：`--mongo.uri`、`--logging.level`。`--config` 是文件路径、非配置键。
-- 所有键均可用 `TANGO_*` 环境变量覆盖（viper 原始层级：嵌套键 `.` → `_`、整体转大写）。daemon 的连接串是 `TANGO_GENERIC_MONGO_URI`（配置键 `generic.mongo.uri`），client 是 `TANGO_MONGO_URI`；实例 ID 为 `TANGO_AGENT_INSTANCEID`。
+  - `tango daemon cluster` → `cluster.{yaml,yml,json}`
+- **命令行用「完整层级名」flag 覆盖配置**（viper 原生层级，flag 名即配置键）：
+  `--generic.mongo.uri`、`--generic.logging.level`。`--config` 是文件路径、非配置键。
+- 所有键均可用 `TANGO_*` 环境变量覆盖（viper 原始层级：嵌套键 `.` → `_`、整体转大写），
+  如 `generic.mongo.uri` → `TANGO_GENERIC_MONGO_URI`。
 
 ---
 
-## `tango daemon` —— daemon 角色
-
-daemon 有两种运行模式,由**子命令**选择(不是配置开关):
+## `tango daemon standalone`
 
 ```bash
-tango daemon standalone                  # 模式 1（默认读同级 standalone.{yaml,yml,json}）
-tango daemon agent --agent.instanceID node-1   # 模式 2（默认读同级 agent.{yaml,yml,json}）
+tango daemon standalone                                  # 默认读同级 standalone.{yaml,yml,json}
+tango daemon standalone --config /etc/tango/standalone.yaml
+tango daemon standalone --generic.mongo.uri mongodb://host/db
 ```
 
-配置分三部分：**generic**（logging + mongo）、**report**（上报管线，含 `source` / `pipeline` / `filter` / `filter.remote`）、**agent**（任务 agent 设置）。两种模式**都 tail 日志做上报**,故 `report.source.logPattern` 始终必填。
-
-| 模式 | 子命令 | 行为 |
-|------|--------|------|
-| **standalone** | `tango daemon standalone` | 纯上报、完全本地自治：追尾 `report.source.logPattern` 的日志,应用 `report.filter.local`,写入 MongoDB。不拉远端配置、不领任务（`agent` 段与 `report.filter.remote` 被忽略）。 |
-| **agent** | `tango daemon agent` | 在上报之上自动开启:① 配置同步——定期拉 `report.filter.remote` 文档热重载 filter;② 任务派发——注册心跳、领取并执行 `report-sync` / `backfill` / `sql` 任务。`--agent.instanceID`（即配置键 agent.instanceID）**必填**。 |
+追尾 `report.source.logPattern` 匹配的日志，应用 `report.filter.local`，写入 MongoDB。
+不拉远端配置，filter 完全由本地决定。`report.source.logPattern` 必填。
 
 ---
 
-## `tango client` —— client 角色
+## `tango daemon cluster`
 
+```bash
+tango daemon cluster                                     # 默认读同级 cluster.{yaml,yml,json}
+tango daemon cluster --config /etc/tango/cluster.yaml
 ```
-tango client <subcommand> [flags]    # 默认读同级 client.{yaml,yml,json}
-```
 
-| 子命令 | 功能 | 关键 flag |
-|--------|------|-----------|
-| `tango client ingest [json ...]` | 字符串单次上报（无重传），参数或 stdin 逐行 | — |
-| `tango client upload` | 文件单次上报（有重传/断点续传） | `--logPattern`（覆盖 `fileUpload.logPattern`） |
-| `tango client backfill` | 执行历史回填（用 `backfill` + `backfillFilter`） | — |
-| `tango client sql <statement>` | 执行临时 SQL 并导入 | — |
-| `tango client publish report-sync` | 发布上报同步任务 | `--include` `--exclude` `--target` |
-| `tango client publish backfill` | 发布回填任务（用配置里的 backfill 段） | `--target` |
-| `tango client publish sql <statement>` | 发布临时 SQL 任务 | `--target` |
-| `tango client serve` | 启动 HTTP/REST 服务 | `--addr`（覆盖 `server.addr`） |
+在 standalone 上报的基础上，启动时从 `report.filter.remote` 指定的 MongoDB 文档拉取一次，
+之后每 `syncInterval`（默认 1h）再拉取，命中变更即**热重载**上报 filter（无需重启）。
+连接类字段不可被远端覆盖。`report.source.logPattern` 同样必填。
 
-### HTTP/REST 端点（`tango client serve`）
+---
 
-| 方法 | 路径 | body | 功能 |
-|------|------|------|------|
-| POST | `/ingest` | `{"line":...}` 或 `{"lines":[...]}` | 字符串上报 |
-| POST | `/upload` | `{"patterns":[...],"batchSize":N}` | 文件上报（续传） |
-| POST | `/backfill` | `{}` | 回填执行 |
-| POST | `/sql` | `{"sql":"..."}` | SQL 执行 |
-| POST | `/publish/report-sync` | `{"include":[],"exclude":[],"target":""}` | 发布上报同步任务 |
-| POST | `/publish/backfill` | `{"payload":{...},"target":""}` | 发布回填任务 |
-| POST | `/publish/sql` | `{"sql":"...","table":"event","target":""}` | 发布 SQL 任务 |
-| GET | `/healthz` | — | 健康检查 |
+## 配置
 
-### Go 库（embeddable）
-
-```go
-import "rocket-nano/tools/tango/client"
-
-cli, _ := client.New(ctx, client.WithURI("mongodb://localhost:27017/tango"))
-defer cli.Close()
-cli.EnsureIndexes(ctx)
-
-cli.Ingest(ctx, line)                              // 1) 字符串上报
-cli.UploadFiles(ctx, client.UploadRequest{...})    // 2) 文件上报（续传）
-cli.RunBackfill(ctx, cc.BackfillRuntime())         // 3) 回填
-cli.ExecuteSQL(ctx, cc.SQLRuntime(), "SELECT ...") // 4) SQL
-cli.PublishReportSync(ctx, include, exclude, "")   // 5) 任务发布
-```
+两种模式共用 `generic` + `report` 两段配置，仅 `report.filter.remote` 在 cluster 模式生效。
+字段说明见 [config.md](config.md)，完整样例见 [examples/config](../examples/config)。
