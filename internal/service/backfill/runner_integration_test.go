@@ -57,10 +57,10 @@ type fakePage struct {
 type fakeTask struct {
 	pages       []fakePage
 	rowCount    int64
-	pollsBefore int     // how many task-info polls return RUNNING before FINISHED
-	pollCount   int     // monotonic poll count, mutated under mu
-	expireAfter int     // -1 = never; otherwise: # of result-page calls after which the task starts returning "expired"
-	pageCalls   int     // mutated under mu
+	pollsBefore int // how many task-info polls return RUNNING before FINISHED
+	pollCount   int // monotonic poll count, mutated under mu
+	expireAfter int // -1 = never; otherwise: # of result-page calls after which the task starts returning "expired"
+	pageCalls   int // mutated under mu
 	mu          sync.Mutex
 }
 
@@ -234,10 +234,10 @@ func newTestConfig(mockURL, dbName, runID string) config.Config {
 	pollInterval := 5 * time.Millisecond
 	pollTimeout := 10 * time.Second
 	return config.Config{
-		Mode:     config.ModeBackfill,
-		Mongo:    config.MongoConfig{URI: testMongoURI + "/" + dbName, MaxElapsedTime: 5 * time.Second},
-		Pipeline: config.PipelineConfig{BatchSize: 100, BatchWorkers: 2, FlushInterval: 100 * time.Millisecond, DeadLetterCap: 128},
-		Logging:  config.LoggingConfig{Level: "warn"},
+		Mode:           config.ModeBackfill,
+		Mongo:          config.MongoConfig{URI: testMongoURI + "/" + dbName, MaxElapsedTime: 5 * time.Second},
+		Pipeline:       config.PipelineConfig{BatchSize: 100, BatchWorkers: 2, FlushInterval: 100 * time.Millisecond, DeadLetterCap: 128},
+		Logging:        config.LoggingConfig{Level: "warn"},
 		Source:         config.SourceConfig{TailMode: config.TailModeHybrid},
 		BackfillFilter: config.BackfillFilterConfig{Table: "event"},
 		Backfill: config.BackfillConfig{

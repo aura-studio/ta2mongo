@@ -393,5 +393,3 @@ func TestIdentityResolver_MultipleDistinctIDs(t *testing.T) {
 		}
 	}
 }
-
-

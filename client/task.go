@@ -5,8 +5,8 @@ import (
 	"fmt"
 
 	"rocket-nano/tools/tango/config"
-	"rocket-nano/tools/tango/internal/filter"
-	"rocket-nano/tools/tango/internal/taskqueue"
+	"rocket-nano/tools/tango/internal/core/filter"
+	"rocket-nano/tools/tango/internal/core/taskqueue"
 )
 
 // TaskSpec describes a task to publish.

@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"rocket-nano/tools/tango/config"
-	"rocket-nano/tools/tango/internal/backfill"
+	"rocket-nano/tools/tango/internal/service/backfill"
 )
 
 // BackfillResult summarises a backfill execution (function #3).

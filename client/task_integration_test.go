@@ -8,7 +8,7 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 
 	"rocket-nano/tools/tango/config"
-	"rocket-nano/tools/tango/internal/taskqueue"
+	"rocket-nano/tools/tango/internal/core/taskqueue"
 )
 
 func TestPublishSQLTask_Untargeted(t *testing.T) {

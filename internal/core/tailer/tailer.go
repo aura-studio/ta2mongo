@@ -143,10 +143,10 @@ func normalizePath(path string) string {
 // globMatch matches name against a glob pattern. Both must use forward
 // slashes. Supported wildcards:
 //
-//	*      matches any sequence of non-separator characters
-//	**     matches zero or more directory levels
-//	?      matches any single non-separator character
-//	[...]  matches a character class
+//   - matches any sequence of non-separator characters
+//     **     matches zero or more directory levels
+//     ?      matches any single non-separator character
+//     [...]  matches a character class
 func globMatch(pattern, name string) bool {
 	return doGlobMatch(
 		strings.Split(pattern, "/"),

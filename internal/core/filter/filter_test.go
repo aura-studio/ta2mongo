@@ -166,8 +166,8 @@ func TestRewriteHashRefs(t *testing.T) {
 		in, want string
 	}{
 		{`#type == "track"`, `$env["#type"] == "track"`},
-		{`#type == "#track"`, `$env["#type"] == "#track"`},                              // hash in string is preserved
-		{`a == b`, `a == b`},                                                            // no hashes
+		{`#type == "#track"`, `$env["#type"] == "#track"`}, // hash in string is preserved
+		{`a == b`, `a == b`},                               // no hashes
 		{`#event_name in ["a", "#b"]`, `$env["#event_name"] in ["a", "#b"]`},
 		{`tag == '#x' && #type == "user_set"`, `tag == '#x' && $env["#type"] == "user_set"`},
 		{"`#raw` == \"x\"", "`#raw` == \"x\""}, // backtick literal preserved as-is

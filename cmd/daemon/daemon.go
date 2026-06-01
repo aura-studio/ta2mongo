@@ -15,11 +15,11 @@ import (
 	"github.com/spf13/cobra"
 
 	"rocket-nano/tools/tango/config"
-	"rocket-nano/tools/tango/internal/agent"
-	"rocket-nano/tools/tango/internal/cli"
-	svcdaemon "rocket-nano/tools/tango/internal/daemon"
-	"rocket-nano/tools/tango/internal/filter"
-	"rocket-nano/tools/tango/internal/remoteconfig"
+	"rocket-nano/tools/tango/internal/core/cli"
+	"rocket-nano/tools/tango/internal/core/filter"
+	"rocket-nano/tools/tango/internal/core/remoteconfig"
+	"rocket-nano/tools/tango/internal/service/agent"
+	svcdaemon "rocket-nano/tools/tango/internal/service/daemon"
 )
 
 // NewCommand builds the `tango daemon` parent command with its two run modes:
@@ -35,6 +35,10 @@ func NewCommand() *cobra.Command {
 		Use:   "daemon",
 		Short: "Daemon role: standalone (report only) or agent (report + sync + tasks)",
 	}
+	// Viper-native hierarchical overrides shared by both modes: the flag name is
+	// the full config key.
+	cmd.PersistentFlags().String("generic.mongo.uri", "", "MongoDB connection URI (config key generic.mongo.uri)")
+	cmd.PersistentFlags().String("generic.logging.level", "", "log level: debug, info, warn, error (config key generic.logging.level)")
 	cmd.AddCommand(newStandaloneCmd(), newAgentCmd())
 	return cmd
 }
@@ -59,7 +63,7 @@ func newAgentCmd() *cobra.Command {
 			return runDaemon(cmd, config.DaemonModeAgent, path)
 		},
 	}
-	cmd.Flags().String("instanceID", "", "agent instance id (maps to agent.instanceID; required)")
+	cmd.Flags().String("agent.instanceID", "", "agent instance id (config key agent.instanceID; required)")
 	return cmd
 }
 

@@ -1,5 +1,5 @@
 {
-  "common": {
+  "generic": {
     "logging": { "level": "info", "format": "text" },
     "mongo": {
       "uri": "mongodb://localhost:27017/tango",
@@ -18,18 +18,23 @@
     },
     "pipeline": {
       "batchSize": 1000,
+      "batchSizeMin": 0,
+      "batchSizeMax": 0,
       "batchWorkers": 4,
       "flushInterval": "1s",
+      "channelBuffer": 0,
       "deadLetterCap": 128
     },
     "filter": {
-      "include": ["#type == \"track\""],
-      "exclude": ["debug == true"]
-    },
-    "remoteConfig": {
-      "collection": "_tango_config",
-      "documentID": "default",
-      "syncInterval": "1h"
+      "local": {
+        "include": ["#type == \"track\""],
+        "exclude": ["debug == true"]
+      },
+      "remote": {
+        "collection": "_tango_config",
+        "documentID": "default",
+        "syncInterval": "1h"
+      }
     }
   },
   "agent": {

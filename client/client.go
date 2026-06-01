@@ -30,8 +30,8 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"rocket-nano/tools/tango/config"
-	"rocket-nano/tools/tango/internal/ingest"
-	"rocket-nano/tools/tango/internal/store"
+	"rocket-nano/tools/tango/internal/core/store"
+	"rocket-nano/tools/tango/internal/process/ingest"
 )
 
 // Options configures the Client connection and behavior.

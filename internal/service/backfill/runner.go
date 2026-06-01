@@ -14,10 +14,10 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"rocket-nano/tools/tango/config"
-	"rocket-nano/tools/tango/internal/filter"
-	"rocket-nano/tools/tango/internal/pipeline"
-	"rocket-nano/tools/tango/internal/store"
-	"rocket-nano/tools/tango/internal/talog"
+	"rocket-nano/tools/tango/internal/core/filter"
+	"rocket-nano/tools/tango/internal/core/store"
+	"rocket-nano/tools/tango/internal/core/talog"
+	"rocket-nano/tools/tango/internal/process/pipeline"
 )
 
 // Stats records counters for the backfill run. Mirrors pipeline.StatsCollector

@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/spf13/pflag"
 )
 
 func writeFile(t *testing.T, name, content string) string {
@@ -17,14 +19,15 @@ func writeFile(t *testing.T, name, content string) string {
 
 func TestLoadDaemon_AgentMode(t *testing.T) {
 	yaml := `
-common:
+generic:
   mongo:
     uri: "mongodb://localhost/tango"
 report:
   source:
     logPattern: ["/tmp/.*\\.log"]
   filter:
-    include: ['#type == "track"']
+    local:
+      include: ['#type == "track"']
 agent:
   instanceID: "node-1"
   leaseDuration: "2m"
@@ -53,7 +56,7 @@ agent:
 
 func TestLoadDaemon_StandaloneMode(t *testing.T) {
 	yaml := `
-common:
+generic:
   mongo:
     uri: "mongodb://localhost/tango"
 report:
@@ -72,7 +75,7 @@ report:
 
 func TestLoadDaemon_AgentModeRequiresInstanceID(t *testing.T) {
 	yaml := `
-common:
+generic:
   mongo:
     uri: "mongodb://localhost/tango"
 report:
@@ -86,7 +89,7 @@ report:
 
 func TestLoadDaemon_RequiresLogPattern(t *testing.T) {
 	yaml := `
-common:
+generic:
   mongo:
     uri: "mongodb://localhost/tango"
 `
@@ -98,6 +101,40 @@ common:
 func TestLoadDaemon_UnknownMode(t *testing.T) {
 	if _, _, err := LoadDaemon("", nil, "bogus"); err == nil {
 		t.Fatal("expected error: unknown daemon mode")
+	}
+}
+
+// TestLoadDaemon_HierarchicalFlags verifies viper-native flag binding: a flag
+// named after the full config key sets that key directly (no alias table), and
+// the --config flag is not treated as a config key.
+func TestLoadDaemon_HierarchicalFlags(t *testing.T) {
+	fs := pflag.NewFlagSet("daemon", pflag.ContinueOnError)
+	fs.String("config", "", "")
+	fs.String("generic.mongo.uri", "", "")
+	fs.String("generic.logging.level", "", "")
+	fs.String("agent.instanceID", "", "")
+	if err := fs.Parse([]string{
+		"--config", "/ignored",
+		"--generic.mongo.uri", "mongodb://flag/db",
+		"--generic.logging.level", "debug",
+		"--agent.instanceID", "node-flag",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// report.source.logPattern can't come from a flag, so supply it via a file.
+	path := writeFile(t, "daemon.yaml", "report:\n  source:\n    logPattern: [\"/tmp/x.log\"]\n")
+	_, rt, err := LoadDaemon(path, fs, DaemonModeAgent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.Mongo.URI != "mongodb://flag/db" {
+		t.Errorf("generic.mongo.uri flag = %q", rt.Mongo.URI)
+	}
+	if rt.Logging.Level != "debug" {
+		t.Errorf("generic.logging.level flag = %q", rt.Logging.Level)
+	}
+	if rt.InstanceID != "node-flag" {
+		t.Errorf("agent.instanceID flag = %q", rt.InstanceID)
 	}
 }
 
@@ -134,12 +171,14 @@ func TestLoadClient_JSON(t *testing.T) {
 // validate under their respective run mode (full, minimal, and JSON variants).
 func TestExampleDaemonConfigsLoad(t *testing.T) {
 	cases := []struct{ path, mode string }{
-		{"../examples/config/standalone/standalone.yaml", DaemonModeStandalone},
 		{"../examples/config/standalone/standalone.min.yaml", DaemonModeStandalone},
-		{"../examples/config/standalone/standalone.json", DaemonModeStandalone},
-		{"../examples/config/agent/agent.yaml", DaemonModeAgent},
+		{"../examples/config/standalone/standalone.max.yaml", DaemonModeStandalone},
+		{"../examples/config/standalone/standalone.min.json", DaemonModeStandalone},
+		{"../examples/config/standalone/standalone.max.json", DaemonModeStandalone},
 		{"../examples/config/agent/agent.min.yaml", DaemonModeAgent},
-		{"../examples/config/agent/agent.json", DaemonModeAgent},
+		{"../examples/config/agent/agent.max.yaml", DaemonModeAgent},
+		{"../examples/config/agent/agent.min.json", DaemonModeAgent},
+		{"../examples/config/agent/agent.max.json", DaemonModeAgent},
 	}
 	for _, c := range cases {
 		t.Run(c.path, func(t *testing.T) {

@@ -1,7 +1,7 @@
 # agent.min.yaml — `tango daemon agent` 最精简配置：只含 required 字段。
-# 其余字段（含 report.remoteConfig 与 agent 各项）全部走默认值，详见同目录 agent.yaml。
-# instanceID 也可用 --instanceID / TANGO_AGENT_INSTANCEID 提供而省去此处。
-common:
+# 其余字段（含 report.filter.remote 与 agent 各项）全部走默认值，详见同目录 agent.max.yaml。
+# instanceID 也可用 --agent.instanceID / TANGO_AGENT_INSTANCEID 提供而省去此处。
+generic:
   mongo:
     uri: mongodb://localhost:27017/tango   # [required]
 report:

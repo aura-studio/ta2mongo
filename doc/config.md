@@ -20,7 +20,7 @@
 1. 内置默认值
 2. 配置文件（YAML/JSON，按扩展名识别）
 3. `TANGO_*` 环境变量
-4. CLI flag（`--config` / `--mongoURI` / `--logLevel` / `--instanceID`）
+4. CLI flag（完整层级名，如 `--generic.mongo.uri` / `--agent.instanceID` / client `--mongo.uri`；`--config` 是文件路径）
 5. 远程配置文档（仅 agent 模式、仅上报 `filter` 热生效；report-sync 任务写入该文档）
 
 ### 环境变量映射
@@ -30,8 +30,8 @@
 
 | 配置键 | 环境变量 |
 |--------|----------|
-| daemon `common.mongo.uri` | `TANGO_COMMON_MONGO_URI` |
-| daemon `common.logging.level` | `TANGO_COMMON_LOGGING_LEVEL` |
+| daemon `generic.mongo.uri` | `TANGO_GENERIC_MONGO_URI` |
+| daemon `generic.logging.level` | `TANGO_GENERIC_LOGGING_LEVEL` |
 | daemon `report.source.tailMode` | `TANGO_REPORT_SOURCE_TAILMODE` |
 | daemon `agent.instanceID` | `TANGO_AGENT_INSTANCEID` |
 | client `mongo.uri` | `TANGO_MONGO_URI` |
@@ -40,20 +40,20 @@
 
 ## daemon 配置（DaemonConfig）
 
-三部分：`common` / `report` / `agent`。运行模式由子命令决定,不是配置开关——因此
-**没有 `enabled` 字段**。standalone 只用 `common` + `report`（忽略 `agent` 与
-`report.remoteConfig`）；agent 额外启用 `report.remoteConfig` 配置同步与 `agent` 任务派发。
+三部分：`generic` / `report` / `agent`。运行模式由子命令决定,不是配置开关——因此
+**没有 `enabled` 字段**。standalone 只用 `generic` + `report`（忽略 `agent` 与
+`report.filter.remote`）；agent 额外启用 `report.filter.remote` 配置同步与 `agent` 任务派发。
 
-### common（两种模式都用）
+### generic（两种模式都用）
 
 | 键 | required/optional | 默认 | 说明 |
 |----|----|----|----|
-| `common.logging.level` | optional | `info` | `debug`/`info`/`warn`/`error` |
-| `common.logging.format` | optional | `text` | `text`/`json` |
-| `common.mongo.uri` | **required** | — | MongoDB 连接串；库名取自 URI 路径 |
-| `common.mongo.maxElapsedTime` | optional | `10s` | 单次 bulk-write 退避重试总时长上限 |
-| `common.mongo.connectTimeout` | optional | `10s` | 初次连接握手超时 |
-| `common.mongo.serverSelectionTimeout` | optional | `30s` | 选择可用节点超时 |
+| `generic.logging.level` | optional | `info` | `debug`/`info`/`warn`/`error` |
+| `generic.logging.format` | optional | `text` | `text`/`json` |
+| `generic.mongo.uri` | **required** | — | MongoDB 连接串；库名取自 URI 路径 |
+| `generic.mongo.maxElapsedTime` | optional | `10s` | 单次 bulk-write 退避重试总时长上限 |
+| `generic.mongo.connectTimeout` | optional | `10s` | 初次连接握手超时 |
+| `generic.mongo.serverSelectionTimeout` | optional | `30s` | 选择可用节点超时 |
 
 ### report（两种模式都用）
 
@@ -71,25 +71,25 @@
 | `report.pipeline.flushInterval` | optional | `1s` | 未满批次刷新间隔 |
 | `report.pipeline.channelBuffer` | optional | `0`(自动 = batchSize*2) | 每 worker 通道缓冲 |
 | `report.pipeline.deadLetterCap` | optional | `128` | 每 worker 死信批容量 |
-| `report.filter.include` | optional | `[]`(全放行) | expr 表达式，OR 语义命中其一即保留 |
-| `report.filter.exclude` | optional | `[]` | 命中其一即丢弃（在 include 之后） |
+| `report.filter.local.include` | optional | `[]`(全放行) | expr 表达式，OR 语义命中其一即保留 |
+| `report.filter.local.exclude` | optional | `[]` | 命中其一即丢弃（在 include 之后） |
 
-### report.remoteConfig（仅 agent 模式生效）
+### report.filter.remote（仅 agent 模式生效）
 
 | 键 | required/optional | 默认 | 说明 |
 |----|----|----|----|
-| `report.remoteConfig.collection` | optional | `_tango_config` | 配置文档所在集合 |
-| `report.remoteConfig.documentID` | optional | `default` | 配置文档 `_id` |
-| `report.remoteConfig.syncInterval` | optional | `1h` | 重新拉取并热重载的间隔 |
+| `report.filter.remote.collection` | optional | `_tango_config` | 配置文档所在集合 |
+| `report.filter.remote.documentID` | optional | `default` | 配置文档 `_id` |
+| `report.filter.remote.syncInterval` | optional | `1h` | 重新拉取并热重载的间隔 |
 
 > 是否启用同步由模式决定（agent 开、standalone 关），无 `enabled` 字段。连接类字段
-> （`common.mongo.uri` 等）永不可被远端覆盖；只有上报 `filter` 支持运行时热生效。
+> （`generic.mongo.uri` 等）永不可被远端覆盖；只有上报 `filter` 支持运行时热生效。
 
 ### agent（仅 agent 模式生效）
 
 | 键 | required/optional | 默认 | 说明 |
 |----|----|----|----|
-| `agent.instanceID` | **required**(agent 模式) | — | 实例唯一标识；也可用 `--instanceID` / `TANGO_AGENT_INSTANCEID` |
+| `agent.instanceID` | **required**(agent 模式) | — | 实例唯一标识；也可用 `--agent.instanceID` / `TANGO_AGENT_INSTANCEID` |
 | `agent.tasksCollection` | optional | `_tango_tasks` | 任务队列集合 |
 | `agent.instancesCollection` | optional | `_tango_instances` | 实例心跳集合（TTL 过期） |
 | `agent.pollInterval` | optional | `10s` | 轮询认领任务间隔 |
@@ -97,9 +97,9 @@
 | `agent.heartbeatInterval` | optional | `30s` | 心跳刷新间隔 |
 | `agent.instanceTTL` | optional | `90s` | 心跳超过此时长视为离线 |
 
-完整样例：[standalone.yaml](../examples/config/standalone/standalone.yaml)（全量+注释）、
-[standalone.min.yaml](../examples/config/standalone/standalone.min.yaml)（仅 required）；
-agent 同理见 [examples/config/agent](../examples/config/agent)。
+完整样例：[standalone.max.yaml](../examples/config/standalone/standalone.max.yaml)（全量+注释）、
+[standalone.min.yaml](../examples/config/standalone/standalone.min.yaml)（仅 required）；yaml/json
+各有 max/min 两份，agent 同理见 [examples/config/agent](../examples/config/agent)。
 
 ---
 
@@ -147,7 +147,7 @@ client 用扁平的 `mongo`（连接串 `TANGO_MONGO_URI`），按五项功能�
 
 | | 上报 filter | backfill filter |
 |---|---|---|
-| 位置 | daemon `report.filter` / client `stringUpload.filter`、`fileUpload.filter` | `backfillFilter` |
+| 位置 | daemon `report.filter.local` / client `stringUpload.filter`、`fileUpload.filter` | `backfillFilter` |
 | 维度 | `#type` / `#event_name` / `properties.*` | **表名(event/user)** + 事件/属性（**不含 #type**） |
 | 表达式 | `include` / `exclude`（expr-lang） | `include` / `exclude` + `events`(语法糖 → `#event_name in [...]`) |
 

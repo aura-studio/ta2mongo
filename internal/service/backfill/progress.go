@@ -21,20 +21,20 @@ import (
 //     metadata.
 //   - Row throughput is computed from the lines-ingested counter.
 type ProgressBar struct {
-	out        io.Writer
-	isTTY      bool
-	startTime  time.Time
-	lastTick   time.Time
-	lastLines  int64
+	out       io.Writer
+	isTTY     bool
+	startTime time.Time
+	lastTick  time.Time
+	lastLines int64
 
-	totalChunks    int32
-	doneChunks     int32
-	currentChunk   atomic.Value // string
-	currentPage    int32
-	currentPages   int32
-	failedChunks   int32
-	totalLines     *atomic.Int64 // pointer to Stats.TotalLines
-	mu             sync.Mutex
+	totalChunks  int32
+	doneChunks   int32
+	currentChunk atomic.Value // string
+	currentPage  int32
+	currentPages int32
+	failedChunks int32
+	totalLines   *atomic.Int64 // pointer to Stats.TotalLines
+	mu           sync.Mutex
 }
 
 // NewProgressBar wires the bar to the given Stats counter for row throughput.

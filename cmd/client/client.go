@@ -15,7 +15,7 @@ import (
 
 	sdk "rocket-nano/tools/tango/client"
 	"rocket-nano/tools/tango/config"
-	"rocket-nano/tools/tango/internal/cli"
+	"rocket-nano/tools/tango/internal/core/cli"
 )
 
 // NewCommand builds the `tango client` parent command and its subcommands.
@@ -24,6 +24,9 @@ func NewCommand() *cobra.Command {
 		Use:   "client",
 		Short: "Client role: upload, backfill, sql, and task publishing",
 	}
+	// Viper-native hierarchical overrides: the flag name is the full config key.
+	cmd.PersistentFlags().String("mongo.uri", "", "MongoDB connection URI (config key mongo.uri)")
+	cmd.PersistentFlags().String("logging.level", "", "log level: debug, info, warn, error (config key logging.level)")
 	cmd.AddCommand(newIngestCmd(), newUploadCmd(), newBackfillCmd(), newSQLCmd(), newPublishCmd(), newServeCmd())
 	return cmd
 }

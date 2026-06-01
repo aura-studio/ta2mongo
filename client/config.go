@@ -11,7 +11,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"rocket-nano/tools/tango/config"
-	"rocket-nano/tools/tango/internal/filter"
+	"rocket-nano/tools/tango/internal/core/filter"
 )
 
 // PublishConfig writes (upserts) the remote-config override document that

@@ -3,14 +3,14 @@
 #
 # 用法：
 #   ./start.sh
-#   TANGO_COMMON_MONGO_URI=mongodb://user:pass@host/db ./start.sh
+#   TANGO_GENERIC_MONGO_URI=mongodb://user:pass@host/db ./start.sh
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-CONFIG="$SCRIPT_DIR/standalone.yaml"
+CONFIG="$SCRIPT_DIR/standalone.max.yaml"
 
-: "${TANGO_COMMON_MONGO_URI:=}"
+: "${TANGO_GENERIC_MONGO_URI:=}"
 
 cd "$REPO_ROOT"
 exec go run . daemon standalone --config "$CONFIG" "$@"

@@ -1,12 +1,15 @@
 # tango 命令行使用说明
 
-tango 现为**单一二进制**（根目录 `main.go` 装配 `cmd/daemon`、`cmd/client` 两个子程序包），通过顶层子命令选择角色与模式：
+tango 现为**单一二进制**（根目录 `main.go` 装配子程序包），通过顶层子命令选择角色与模式：
 
 ```
 tango daemon standalone [flags]    # daemon 角色 · standalone 模式
 tango daemon agent      [flags]    # daemon 角色 · agent 模式
-tango client <subcommand> [flags]  # client 角色
 ```
+
+> **v1.0.0：仅暴露 daemon 入口。** client 角色（上报/回填/SQL/任务发布 + HTTP 服务）已在
+> `cmd/client` 实现，但入口在 v1.0.0 未接线；下文「client 角色」一节是后续启用后的用法
+> （在 `main.go` 加回 `clientcmd.NewCommand()` 即可开启）。
 
 ## 通用
 
@@ -14,8 +17,8 @@ tango client <subcommand> [flags]  # client 角色
   - `tango daemon standalone` → `standalone.{yaml,yml,json}`
   - `tango daemon agent` → `agent.{yaml,yml,json}`
   - `tango client ...` → `client.{yaml,yml,json}`
-- `--mongoURI`、`--logLevel`：常用覆盖项（顶层持久 flag，所有子命令共用）。
-- 所有键均可用 `TANGO_*` 环境变量覆盖（嵌套键以 `.` → `_` 映射、转大写）。daemon 的连接串是 `TANGO_COMMON_MONGO_URI`（配置在 `common.mongo.uri`），client 是 `TANGO_MONGO_URI`；实例 ID 为 `TANGO_AGENT_INSTANCEID`。
+- **命令行用「完整层级名」flag 覆盖配置**（viper 原生层级，不再有 `--mongoURI` 这类短别名）：flag 名即配置键。daemon：`--generic.mongo.uri`、`--generic.logging.level`、`--agent.instanceID`；client：`--mongo.uri`、`--logging.level`。`--config` 是文件路径、非配置键。
+- 所有键均可用 `TANGO_*` 环境变量覆盖（viper 原始层级：嵌套键 `.` → `_`、整体转大写）。daemon 的连接串是 `TANGO_GENERIC_MONGO_URI`（配置键 `generic.mongo.uri`），client 是 `TANGO_MONGO_URI`；实例 ID 为 `TANGO_AGENT_INSTANCEID`。
 
 ---
 
@@ -25,15 +28,15 @@ daemon 有两种运行模式,由**子命令**选择(不是配置开关):
 
 ```bash
 tango daemon standalone                  # 模式 1（默认读同级 standalone.{yaml,yml,json}）
-tango daemon agent --instanceID node-1   # 模式 2（默认读同级 agent.{yaml,yml,json}）
+tango daemon agent --agent.instanceID node-1   # 模式 2（默认读同级 agent.{yaml,yml,json}）
 ```
 
-配置分三部分：**common**（logging + mongo）、**report**（上报管线，含 `source` / `pipeline` / `filter` / `remoteConfig`）、**agent**（任务 agent 设置）。两种模式**都 tail 日志做上报**,故 `report.source.logPattern` 始终必填。
+配置分三部分：**generic**（logging + mongo）、**report**（上报管线，含 `source` / `pipeline` / `filter` / `filter.remote`）、**agent**（任务 agent 设置）。两种模式**都 tail 日志做上报**,故 `report.source.logPattern` 始终必填。
 
 | 模式 | 子命令 | 行为 |
 |------|--------|------|
-| **standalone** | `tango daemon standalone` | 纯上报、完全本地自治：追尾 `report.source.logPattern` 的日志,应用 `report.filter`,写入 MongoDB。不拉远端配置、不领任务（`agent` 段与 `report.remoteConfig` 被忽略）。 |
-| **agent** | `tango daemon agent` | 在上报之上自动开启:① 配置同步——定期拉 `report.remoteConfig` 文档热重载 filter;② 任务派发——注册心跳、领取并执行 `report-sync` / `backfill` / `sql` 任务。`--instanceID`（等价 `agent.instanceID`）**必填**。 |
+| **standalone** | `tango daemon standalone` | 纯上报、完全本地自治：追尾 `report.source.logPattern` 的日志,应用 `report.filter.local`,写入 MongoDB。不拉远端配置、不领任务（`agent` 段与 `report.filter.remote` 被忽略）。 |
+| **agent** | `tango daemon agent` | 在上报之上自动开启:① 配置同步——定期拉 `report.filter.remote` 文档热重载 filter;② 任务派发——注册心跳、领取并执行 `report-sync` / `backfill` / `sql` 任务。`--agent.instanceID`（即配置键 agent.instanceID）**必填**。 |
 
 ---
 

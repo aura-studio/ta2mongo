@@ -8,12 +8,12 @@
 
 | 角色 | 子命令 | 默认配置文件 | 职责 |
 |------|--------|----------|------|
-| **Daemon · standalone** | `tango daemon standalone` | `standalone.{yaml,yml,json}` | 纯上报、本地自治。配置只用 common + report。 |
-| **Daemon · agent** | `tango daemon agent` | `agent.{yaml,yml,json}` | 上报 + 配置同步 + 任务派发。配置用 common + report(+remoteConfig) + agent。 |
+| **Daemon · standalone** | `tango daemon standalone` | `standalone.{yaml,yml,json}` | 纯上报、本地自治。配置只用 generic + report。 |
+| **Daemon · agent** | `tango daemon agent` | `agent.{yaml,yml,json}` | 上报 + 配置同步 + 任务派发。配置用 generic + report(+remoteConfig) + agent。 |
 | **Client** | `tango client <subcmd>` | `client.{yaml,yml,json}` | 操作 / SDK：五项分区功能，三种使用方式（CLI / HTTP REST / Go 库）。 |
 
-> daemon 配置统一分 **common / report / agent** 三部分,运行模式由**子命令**选择(非配置开关)。
-> 配置文件 YAML、JSON 均支持（按扩展名自动识别）；所有键可用 `TANGO_*` 环境变量覆盖，常用项也有 CLI flag（`--mongoURI` / `--logLevel` / `--instanceID`）。`--config` 留空时各子命令在**二进制同级目录**查找各自的默认文件（standalone/agent/client），找不到则静默回退到默认值 + 环境变量 + flag。
+> daemon 配置统一分 **generic / report / agent** 三部分,运行模式由**子命令**选择(非配置开关)。
+> 配置文件 YAML、JSON 均支持（按扩展名自动识别）；所有键可用 `TANGO_*` 环境变量覆盖，命令行用完整层级名 flag 覆盖（如 `--generic.mongo.uri`、`--agent.instanceID`）。`--config` 留空时各子命令在**二进制同级目录**查找各自的默认文件（standalone/agent/client），找不到则静默回退到默认值 + 环境变量 + flag。
 
 ---
 
@@ -21,27 +21,28 @@
 
 ```
 .
-├── main.go          # 单一入口：装配 cmd/daemon + cmd/client 子命令并执行
+├── main.go          # 单一入口：装配子命令并执行（v1.0.0 只接线 cmd/daemon）
 ├── cmd/
 │   ├── daemon/      # `tango daemon` 子命令树（standalone / agent 两种模式）
-│   └── client/      # `tango client` 子命令树（CLI 子命令 + serve HTTP）
-├── config/          # 共享子结构 + DaemonConfig(daemon.go) / ClientConfig(client.go) + loader.go
-├── client/          # 对外 Go 库（embeddable SDK，五项功能的统一实现）
+│   └── client/      # `tango client` 子命令树（v1.0.0 未接线，保留以备后续）
+├── config/          # DaemonConfig(daemon.go) / ClientConfig(client.go) + loader.go
+├── client/          # 对外 Go 库（embeddable SDK）
 ├── doc/ examples/
-└── internal/        # 共享的内部实现
-    ├── cli/                       # cmd/* 共享：配置路径解析 + logger
-    ├── daemon/ once/ ingest/      # 处理管线
-    ├── backfill/                  # TA OpenAPI 历史回填
-    ├── agent/ taskqueue/          # 任务 agent + MongoDB 任务队列
-    ├── filter/ remoteconfig/      # 过滤 + 远端配置
-    └── store/ talog/ tailer/ pipeline/ dynamicbatch/
+└── internal/        # 按单向依赖分三层（service → process → core）
+    ├── core/        # 无内部依赖的基础件：
+    │                #   cli remoteconfig filter store talog tailer dynamicbatch taskqueue
+    ├── process/     # 仅依赖 core 的处理层：ingest pipeline
+    └── service/     # 依赖 process+core 的运行时：daemon backfill agent
 ```
+
+> **internal 分层规则**：依赖只能从上往下（service → process → core），不得反向或成环。
+> 新增包按其依赖归入对应层；同层内（如 service 内 agent → backfill）也保持单向无环。
 
 ---
 
 ## 3. Daemon 角色（`tango daemon standalone` / `tango daemon agent`）
 
-daemon 配置分三部分：**common**（`logging` + `mongo`，进程级共享）、**report**（上报管线，含 `source` / `pipeline` / `filter` / `remoteConfig`）、**agent**（任务 agent 设置）。**运行模式由子命令选择**,不是配置开关:
+daemon 配置分三部分：**generic**（`logging` + `mongo`，进程级共享）、**report**（上报管线，含 `source` / `pipeline` / `filter` / `filter.remote`）、**agent**（任务 agent 设置）。**运行模式由子命令选择**,不是配置开关:
 
 | 模式 | 子命令 | 配置同步 | 任务派发 | instanceID |
 |------|--------|:---:|:---:|:---:|
@@ -58,8 +59,8 @@ daemon 配置分三部分：**common**（`logging` + `mongo`，进程级共享�
 Tailer ──lineCh──▶ Dispatcher(按用户亲和性路由) ──▶ Worker[i](Parse→上报Filter→Identity→Batch) ──▶ MongoDB BulkWrite
 ```
 
-- **上报 filter**（`report.filter`）：对每条记录生效的 expr 表达式（针对 `#type` / `#event_name` / `properties.*`）。它与 backfill filter 是**两个独立概念**。
-- 远端配置（`report.remoteConfig`）可热更新上报 filter；report-sync 任务即写入该文档。**仅 agent 模式生效**;standalone 保持本地 filter 不变。
+- **上报 filter**（`report.filter.local`）：对每条记录生效的 expr 表达式（针对 `#type` / `#event_name` / `properties.*`）。它与 backfill filter 是**两个独立概念**。
+- 远端配置（`report.filter.remote`）可热更新上报 filter；report-sync 任务即写入该文档。**仅 agent 模式生效**;standalone 保持本地 filter 不变。
 
 ### 3.2 agent 模式额外能力
 
@@ -79,7 +80,7 @@ Tailer ──lineCh──▶ Dispatcher(按用户亲和性路由) ──▶ Work
 
 ## 4. 两种 filter
 
-| | 上报 filter（`report.filter` / runtime `Filter`） | backfill filter（`backfillFilter`） |
+| | 上报 filter（`report.filter.local` / runtime `Filter`） | backfill filter（`backfillFilter`） |
 |---|---|---|
 | 使用方 | daemon 上报、client 字符串/文件上报 | backfill 任务、client backfill / sql |
 | 维度 | `#type` / `#event_name` / 属性 | **表名(event/user)** + 事件/属性（**不含 #type**） |

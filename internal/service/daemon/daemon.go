@@ -14,12 +14,12 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"rocket-nano/tools/tango/config"
-	"rocket-nano/tools/tango/internal/filter"
-	"rocket-nano/tools/tango/internal/pipeline"
-	"rocket-nano/tools/tango/internal/remoteconfig"
-	"rocket-nano/tools/tango/internal/store"
-	"rocket-nano/tools/tango/internal/tailer"
-	"rocket-nano/tools/tango/internal/talog"
+	"rocket-nano/tools/tango/internal/core/filter"
+	"rocket-nano/tools/tango/internal/core/remoteconfig"
+	"rocket-nano/tools/tango/internal/core/store"
+	"rocket-nano/tools/tango/internal/core/tailer"
+	"rocket-nano/tools/tango/internal/core/talog"
+	"rocket-nano/tools/tango/internal/process/pipeline"
 )
 
 // statsReportInterval is how often the daemon logs processing statistics.
@@ -141,7 +141,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 
 	d.logger.WithFields(logrus.Fields{
-		"log_patterns":    d.cfg.Source.LogPattern,
+		"log_patterns":   d.cfg.Source.LogPattern,
 		"workers":        d.cfg.Pipeline.BatchWorkers,
 		"batch_size":     d.cfg.Pipeline.BatchSize,
 		"flush_interval": d.cfg.Pipeline.FlushInterval,

@@ -17,9 +17,9 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"rocket-nano/tools/tango/config"
-	"rocket-nano/tools/tango/internal/backfill"
-	"rocket-nano/tools/tango/internal/filter"
-	"rocket-nano/tools/tango/internal/taskqueue"
+	"rocket-nano/tools/tango/internal/core/filter"
+	"rocket-nano/tools/tango/internal/core/taskqueue"
+	"rocket-nano/tools/tango/internal/service/backfill"
 )
 
 // Agent is the task-worker runtime. It is a feature of the daemon: when the

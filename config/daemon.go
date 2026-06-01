@@ -22,41 +22,50 @@ const (
 	DaemonModeAgent = "agent"
 )
 
-// DaemonConfig is the schema of the daemon config file (daemon.yaml /
-// daemon.json). It is organised into three parts:
+// DaemonConfig is the schema of the daemon config file. It is organised into
+// three parts:
 //
-//   - common: process-wide settings shared by both modes (logging + the
+//   - generic: process-wide settings shared by both modes (logging + the
 //     MongoDB connection).
-//   - report: the reporting pipeline — tail logs → parse → report filter →
-//     write to Mongo. Used by both modes. The remoteConfig sub-block (consulted
-//     only in agent mode) hot-reloads the filter from a control plane.
-//   - agent:  task-agent settings (heartbeat + claim/execute). Used only in
+//   - report:  the reporting pipeline — tail logs → parse → report filter →
+//     write to Mongo. Used by both modes. report.filter has two sources: local
+//     (this file) and remote (a MongoDB document, consulted only in agent mode,
+//     that hot-reloads the filter from a control plane).
+//   - agent:   task-agent settings (heartbeat + claim/execute). Used only in
 //     agent mode. instanceID lives here because it is only meaningful then.
 //
 // There is no enabled switch: the active mode is chosen by the subcommand, not
 // the file.
 type DaemonConfig struct {
-	Common CommonConfig       `mapstructure:"common"`
-	Report DaemonReportConfig `mapstructure:"report"`
-	Agent  DaemonAgentConfig  `mapstructure:"agent"`
+	Generic GenericConfig      `mapstructure:"generic"`
+	Report  DaemonReportConfig `mapstructure:"report"`
+	Agent   DaemonAgentConfig  `mapstructure:"agent"`
 }
 
-// CommonConfig holds the process-wide settings shared by both modes: log output
+// GenericConfig holds the process-wide settings shared by both modes: log output
 // and the MongoDB connection (both modes write through the same connection).
-type CommonConfig struct {
+type GenericConfig struct {
 	Logging LoggingConfig `mapstructure:"logging"`
 	Mongo   MongoConfig   `mapstructure:"mongo"`
 }
 
 // DaemonReportConfig is the reporting pipeline block, used by both modes. The
 // daemon tails logPattern files, applies the report filter, and writes to
-// Mongo. remoteConfig is consulted only in agent mode (standalone keeps the
-// local filter verbatim).
+// Mongo.
 type DaemonReportConfig struct {
-	Source       SourceConfig   `mapstructure:"source"`
-	Pipeline     PipelineConfig `mapstructure:"pipeline"`
-	Filter       FilterConfig   `mapstructure:"filter"`
-	RemoteConfig RemoteConfig   `mapstructure:"remoteConfig"`
+	Source   SourceConfig       `mapstructure:"source"`
+	Pipeline PipelineConfig     `mapstructure:"pipeline"`
+	Filter   DaemonFilterConfig `mapstructure:"filter"`
+}
+
+// DaemonFilterConfig groups the two filter sources under report.filter:
+//   - local:  the include/exclude rules from this config file.
+//   - remote: the MongoDB control-plane document that, in agent mode, overrides
+//     and hot-reloads the local rules. Consulted only in agent mode; standalone
+//     keeps the local filter verbatim.
+type DaemonFilterConfig struct {
+	Local  FilterConfig `mapstructure:"local"`
+	Remote RemoteConfig `mapstructure:"remote"`
 }
 
 // DaemonAgentConfig is the task-agent block, used only in agent mode.
@@ -80,12 +89,12 @@ func (d DaemonConfig) ToRuntime() Config {
 	return Config{
 		Mode:         ModeDaemon,
 		InstanceID:   d.Agent.InstanceID,
-		Logging:      d.Common.Logging,
-		Mongo:        d.Common.Mongo,
+		Logging:      d.Generic.Logging,
+		Mongo:        d.Generic.Mongo,
 		Source:       d.Report.Source,
 		Pipeline:     d.Report.Pipeline,
-		Filter:       d.Report.Filter,
-		RemoteConfig: d.Report.RemoteConfig,
+		Filter:       d.Report.Filter.Local,
+		RemoteConfig: d.Report.Filter.Remote,
 		Agent: AgentConfig{
 			TasksCollection:     d.Agent.TasksCollection,
 			InstancesCollection: d.Agent.InstancesCollection,
@@ -115,7 +124,7 @@ func LoadDaemon(path string, flags *pflag.FlagSet, mode string) (DaemonConfig, C
 	if err := readConfigFile(v, path); err != nil {
 		return DaemonConfig{}, Config{}, err
 	}
-	if err := bindFlagsTo(v, flags, daemonFlagKeys); err != nil {
+	if err := bindFlagsTo(v, flags); err != nil {
 		return DaemonConfig{}, Config{}, err
 	}
 
@@ -163,15 +172,15 @@ func LoadDaemon(path string, flags *pflag.FlagSet, mode string) (DaemonConfig, C
 // setDaemonDefaults registers viper defaults for the daemon schema so that
 // AutomaticEnv binding works for every key and unset values are sane. Env vars
 // follow the nested key with TANGO_ prefix and "." → "_" (e.g.
-// common.mongo.uri → TANGO_COMMON_MONGO_URI, agent.instanceID →
+// generic.mongo.uri → TANGO_GENERIC_MONGO_URI, agent.instanceID →
 // TANGO_AGENT_INSTANCEID).
 func setDaemonDefaults(v *viper.Viper) {
-	v.SetDefault("common.logging.level", "info")
-	v.SetDefault("common.logging.format", "text")
-	v.SetDefault("common.mongo.uri", "")
-	v.SetDefault("common.mongo.maxElapsedTime", "10s")
-	v.SetDefault("common.mongo.connectTimeout", "10s")
-	v.SetDefault("common.mongo.serverSelectionTimeout", "30s")
+	v.SetDefault("generic.logging.level", "info")
+	v.SetDefault("generic.logging.format", "text")
+	v.SetDefault("generic.mongo.uri", "")
+	v.SetDefault("generic.mongo.maxElapsedTime", "10s")
+	v.SetDefault("generic.mongo.connectTimeout", "10s")
+	v.SetDefault("generic.mongo.serverSelectionTimeout", "30s")
 	v.SetDefault("report.source.logPattern", []string{})
 	v.SetDefault("report.source.tailMode", TailModeHybrid)
 	v.SetDefault("report.source.rescanInterval", "30s")
@@ -181,14 +190,10 @@ func setDaemonDefaults(v *viper.Viper) {
 	v.SetDefault("report.pipeline.batchWorkers", 2)
 	v.SetDefault("report.pipeline.flushInterval", "1s")
 	v.SetDefault("report.pipeline.deadLetterCap", 128)
-	v.SetDefault("report.filter.include", []string{})
-	v.SetDefault("report.filter.exclude", []string{})
+	v.SetDefault("report.filter.local.include", []string{})
+	v.SetDefault("report.filter.local.exclude", []string{})
+	v.SetDefault("report.filter.remote.collection", DefaultRemoteConfigCollection)
+	v.SetDefault("report.filter.remote.documentID", DefaultRemoteConfigDocumentID)
+	v.SetDefault("report.filter.remote.syncInterval", DefaultRemoteConfigInterval)
 	v.SetDefault("agent.instanceID", "")
-}
-
-// daemonFlagKeys maps the daemon binary's CLI flags to nested config keys.
-var daemonFlagKeys = FlagKeyMap{
-	"mongoURI":   "common.mongo.uri",
-	"logLevel":   "common.logging.level",
-	"instanceID": "agent.instanceID",
 }

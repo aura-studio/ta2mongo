@@ -1,16 +1,18 @@
-// Command tango is the single tango binary. Its role is selected by the
-// top-level subcommand, each implemented in its own cmd/* package:
+// Command tango is the single tango binary. In v1.0.0 only the daemon role is
+// exposed; its mode is selected by the subcommand:
 //
 //   - tango daemon standalone — daemon role, standalone mode: tail TA logs →
 //     report filter → MongoDB (local filter, no remote config, no tasks).
 //   - tango daemon agent      — daemon role, agent mode: report + remote-config
 //     sync + claim/execute tasks (report-sync / backfill / sql).
-//   - tango client <subcmd>   — client role: string upload, file upload,
-//     backfill, ad-hoc SQL, task publishing — as CLI subcommands and an
-//     HTTP/REST server (`tango client serve`).
 //
-// This root only wires the shared persistent flags and assembles the
-// subcommand packages; the behaviour lives in cmd/daemon and cmd/client.
+// The client role (string/file upload, backfill, ad-hoc SQL, task publishing,
+// and the HTTP/REST server) is implemented in cmd/client but its entry point is
+// intentionally NOT wired up for the v1.0.0 release — re-add
+// clientcmd.NewCommand() below to enable it.
+//
+// This root only wires the shared --config flag and assembles the subcommand
+// packages; the behaviour lives in cmd/daemon (and cmd/client when enabled).
 package main
 
 import (
@@ -18,7 +20,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	clientcmd "rocket-nano/tools/tango/cmd/client"
 	daemoncmd "rocket-nano/tools/tango/cmd/daemon"
 )
 
@@ -33,14 +34,18 @@ func newRoot() *cobra.Command {
 		Use:   "tango",
 		Short: "Tango: daemon and client roles in one binary (select via the daemon/client subcommand)",
 	}
-	// Shared connection/logging overrides, inherited by every subcommand. When
-	// --config is empty each subcommand auto-detects its own default config file
-	// next to the binary (standalone.yaml / agent.yaml / client.yaml).
+	// --config selects the config file (a file path, not a config key). When
+	// empty each subcommand auto-detects its own default next to the binary
+	// (standalone.yaml / agent.yaml / client.yaml).
+	//
+	// Every other override is a viper-native hierarchical flag named exactly
+	// after its config key (e.g. --generic.mongo.uri, --agent.instanceID,
+	// --mongo.uri), declared on the owning subcommand — see cmd/daemon and
+	// cmd/client.
 	root.PersistentFlags().String("config", "",
 		"path to config file (.yaml/.yml/.json); default: <mode>.{yaml,yml,json} next to the binary; skipped if absent")
-	root.PersistentFlags().String("mongoURI", "", "MongoDB connection URI (maps to mongo.uri)")
-	root.PersistentFlags().String("logLevel", "", "log level: debug, info, warn, error")
 
-	root.AddCommand(daemoncmd.NewCommand(), clientcmd.NewCommand())
+	// v1.0.0: daemon only. To enable the client role, add clientcmd.NewCommand().
+	root.AddCommand(daemoncmd.NewCommand())
 	return root
 }

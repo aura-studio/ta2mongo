@@ -26,7 +26,7 @@ import (
 //     local filter) become double-quoted column references: "#type", "level".
 //   - Binary operators: ==, !=, <, <=, >, >=, &&/and, ||/or, in.
 //   - Unary operators:  !/not.
-//   - Literals: int, float, bool, string (single-quoted with '' escape), nil.
+//   - Literals: int, float, bool, string (single-quoted with ” escape), nil.
 //   - Array literals (only as the right-hand side of "in").
 //
 // Unsupported nodes (function calls, ternary, member access other than the

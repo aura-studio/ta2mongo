@@ -28,7 +28,7 @@ import (
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 
-	"rocket-nano/tools/tango/internal/filter"
+	"rocket-nano/tools/tango/internal/core/filter"
 )
 
 // Mode constants for the run mode configuration.
@@ -470,11 +470,11 @@ func (c Config) BatchChannelSize() int {
 // Load builds a Config from defaults → YAML file → env vars → CLI flags.
 //
 // Priority (lowest to highest):
-//   1. Built-in defaults
-//   2. YAML config file (optional)
-//   3. Remote config (applied by caller, only filter fields)
-//   4. Environment variables (TANGO_*)
-//   5. CLI flags
+//  1. Built-in defaults
+//  2. YAML config file (optional)
+//  3. Remote config (applied by caller, only filter fields)
+//  4. Environment variables (TANGO_*)
+//  5. CLI flags
 //
 // If path is empty or the file does not exist, file loading is skipped silently.
 func Load(path string, flags *pflag.FlagSet) (Config, error) {
@@ -871,7 +871,7 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("config: agent mode requires TANGO_INSTANCE_ID to be set")
 	}
 	if c.Mongo.URI == "" {
-		return fmt.Errorf("config: mongo.uri is required (set via --mongoURI, TANGO_MONGO_URI, or config file)")
+		return fmt.Errorf("config: mongo.uri is required (daemon: generic.mongo.uri; client: mongo.uri — set in the config file, via env, or via flag)")
 	}
 	switch c.Source.TailMode {
 	case TailModeHybrid, TailModePoll, TailModeEvent:

@@ -43,22 +43,21 @@ func readConfigFile(v *viper.Viper, path string) error {
 	return nil
 }
 
-// bindFlagsTo binds only the flags present in the set to their mapped config
-// keys. Unset flags fall back to file/env/default.
-func bindFlagsTo(v *viper.Viper, flags *pflag.FlagSet, keys FlagKeyMap) error {
+// bindFlagsTo binds the flags that were explicitly set on the CLI to the viper
+// key of the SAME name, using viper's native hierarchical model: a flag named
+// "generic.mongo.uri" sets the "generic.mongo.uri" key directly — no alias
+// table. The special --config flag is a file path, not a config key, so it is
+// skipped. Unset flags fall back to file/env/default.
+func bindFlagsTo(v *viper.Viper, flags *pflag.FlagSet) error {
 	if flags == nil {
 		return nil
 	}
 	var bindErr error
 	flags.Visit(func(f *pflag.Flag) {
-		if bindErr != nil {
+		if bindErr != nil || f.Name == "config" {
 			return
 		}
-		key := f.Name
-		if mapped, ok := keys[f.Name]; ok {
-			key = mapped
-		}
-		if err := v.BindPFlag(key, f); err != nil {
+		if err := v.BindPFlag(f.Name, f); err != nil {
 			bindErr = fmt.Errorf("bind flag %q: %w", f.Name, err)
 		}
 	})

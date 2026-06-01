@@ -81,7 +81,7 @@ func LoadClient(path string, flags *pflag.FlagSet) (ClientConfig, error) {
 	if err := readConfigFile(v, path); err != nil {
 		return ClientConfig{}, err
 	}
-	if err := bindFlagsTo(v, flags, clientFlagKeys); err != nil {
+	if err := bindFlagsTo(v, flags); err != nil {
 		return ClientConfig{}, err
 	}
 	var cc ClientConfig
@@ -162,9 +162,4 @@ func setClientDefaults(v *viper.Viper) {
 	v.SetDefault("fileUpload.maxLineBytes", 10*1024*1024)
 	v.SetDefault("backfillFilter.table", BackfillTableEvent)
 	v.SetDefault("server.addr", DefaultServerAddr)
-}
-
-var clientFlagKeys = FlagKeyMap{
-	"mongoURI": "mongo.uri",
-	"logLevel": "logging.level",
 }

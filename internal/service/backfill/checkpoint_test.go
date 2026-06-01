@@ -52,7 +52,7 @@ func TestSQLSignature_Stable(t *testing.T) {
 func TestSQLSignature_DifferentOnChange(t *testing.T) {
 	base := SQLSignature("event", 102, `"#type" = 'track'`, "", "")
 	cases := map[string]string{
-		"table":       SQLSignature("user", 102, `"#type" = 'track'`, "", ""),
+		"table":      SQLSignature("user", 102, `"#type" = 'track'`, "", ""),
 		"project":    SQLSignature("event", 999, `"#type" = 'track'`, "", ""),
 		"filter":     SQLSignature("event", 102, `"#type" = 'user_set'`, "", ""),
 		"event_time": SQLSignature("event", 102, `"#type" = 'track'`, "2026-01-01 00:00:00", ""),

@@ -20,10 +20,10 @@ func TestEncodeRowAsJSONLine_PromotesSystemFields(t *testing.T) {
 	}
 
 	checks := map[string]interface{}{
-		"#type":        "track",
-		"#event_name":  "login",
-		"#account_id":  "acc-1",
-		"#time":        "2026-05-01 10:00:00",
+		"#type":       "track",
+		"#event_name": "login",
+		"#account_id": "acc-1",
+		"#time":       "2026-05-01 10:00:00",
 	}
 	for k, want := range checks {
 		if got := obj[k]; got != want {
