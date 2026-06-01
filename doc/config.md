@@ -1,12 +1,13 @@
 # tango 配置
 
-> **重构后：两份配置文件。**
-> - `daemon.{yaml,json}` → `tangod`（上报 + 可选 agent）。详见 [examples/config/daemon](../examples/config/daemon)。
-> - `client.{yaml,json}` → `tango`（五项分区功能）。详见 [examples/config/client](../examples/config/client)。
+> **单一二进制，两份配置文件**（角色由 `daemon` / `client` 子命令选择）。
+> - `daemon.{yaml,json}` → `tango daemon standalone` / `tango daemon agent`（模式由子命令选）。详见 [examples/config/daemon](../examples/config/daemon)。
+> - `client.{yaml,json}` → `tango client <subcmd>`（五项分区功能）。详见 [examples/config/client](../examples/config/client)。
 >
 > YAML、JSON 均支持（按扩展名识别）。要点：
-> - **两种 filter**：上报 filter 在 daemon 的 `reportFilter` / client 的 `stringUpload.filter`、`fileUpload.filter`；backfill filter 在 `backfillFilter`（含 `table`，**backfill 段不再有独立 table 字段**，且**不过滤 #type**）。
-> - **instanceID 仅在 agent 下**：`agent.instanceID`（开启 `agent.enabled` 时必填）。
+> - **daemon 配置三部分**：`common`（logging + mongo）、`report`（含 `source` / `pipeline` / `filter` / `remoteConfig`）、`agent`（任务 agent 设置）。**模式由子命令选**:standalone 只用 common+report 纯上报;agent 额外开启 remoteConfig 配置同步与任务派发。
+> - **两种 filter**：上报 filter 在 daemon 的 `report.filter` / client 的 `stringUpload.filter`、`fileUpload.filter`；backfill filter 在 `backfillFilter`（含 `table`，**backfill 段不再有独立 table 字段**，且**不过滤 #type**）。
+> - **instanceID 仅在 agent 模式**：`agent.instanceID`（`tango daemon agent` 必填）。
 > - client 五项功能分区：`stringUpload` / `fileUpload` / `backfill`(+`backfillFilter`) / `sql` / `publish`，外加 `server`(HTTP)。
 >
 > 下文的 per-key 默认值表是底层 runtime 字段参考，仍然适用于对应的配置段。
@@ -124,7 +125,7 @@
 
 ### 文件路径
 
-默认读取当前目录下的 `tango.yaml`。通过 `--config` flag 可指定其他路径：
+默认在**二进制同级目录**查找 `tango.{yaml,yml,json}`（按此顺序取首个存在者）。通过 `--config` flag 可指定其他路径：
 
 ```bash
 tango daemon --config /etc/tango/production.yaml

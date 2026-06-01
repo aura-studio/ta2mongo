@@ -15,46 +15,89 @@ func writeFile(t *testing.T, name, content string) string {
 	return p
 }
 
-func TestLoadDaemon_YAML(t *testing.T) {
+func TestLoadDaemon_AgentMode(t *testing.T) {
 	yaml := `
-mongo:
-  uri: "mongodb://localhost/tango"
-source:
-  logPattern: ["/tmp/.*\\.log"]
-reportFilter:
-  include: ['#type == "track"']
+common:
+  mongo:
+    uri: "mongodb://localhost/tango"
+report:
+  source:
+    logPattern: ["/tmp/.*\\.log"]
+  filter:
+    include: ['#type == "track"']
 agent:
-  enabled: true
   instanceID: "node-1"
   leaseDuration: "2m"
 `
-	dc, rt, err := LoadDaemon(writeFile(t, "daemon.yaml", yaml), nil)
+	dc, rt, err := LoadDaemon(writeFile(t, "daemon.yaml", yaml), nil, DaemonModeAgent)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !dc.Agent.Enabled || dc.Agent.InstanceID != "node-1" {
+	if dc.Agent.InstanceID != "node-1" {
 		t.Errorf("agent block = %+v", dc.Agent)
 	}
 	if rt.InstanceID != "node-1" {
 		t.Errorf("runtime InstanceID = %q", rt.InstanceID)
 	}
+	// Agent mode turns on the control-plane switches.
+	if !rt.Agent.Enabled || !rt.RemoteConfig.Enabled {
+		t.Errorf("agent mode switches: agent=%v remoteConfig=%v", rt.Agent.Enabled, rt.RemoteConfig.Enabled)
+	}
 	if len(rt.Filter.Include) != 1 || rt.Filter.Include[0] != `#type == "track"` {
-		t.Errorf("reportFilter -> runtime Filter = %v", rt.Filter.Include)
+		t.Errorf("report.filter -> runtime Filter = %v", rt.Filter.Include)
 	}
 	if rt.Agent.LeaseDuration.String() != "2m0s" {
 		t.Errorf("leaseDuration = %v", rt.Agent.LeaseDuration)
 	}
 }
 
-func TestLoadDaemon_AgentEnabledRequiresInstanceID(t *testing.T) {
+func TestLoadDaemon_StandaloneMode(t *testing.T) {
 	yaml := `
-mongo:
-  uri: "mongodb://localhost/tango"
-agent:
-  enabled: true
+common:
+  mongo:
+    uri: "mongodb://localhost/tango"
+report:
+  source:
+    logPattern: ["/tmp/.*\\.log"]
 `
-	if _, _, err := LoadDaemon(writeFile(t, "daemon.yaml", yaml), nil); err == nil {
-		t.Fatal("expected error: agent.enabled without instanceID")
+	_, rt, err := LoadDaemon(writeFile(t, "daemon.yaml", yaml), nil, DaemonModeStandalone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Standalone leaves the control plane off, regardless of file contents.
+	if rt.Agent.Enabled || rt.RemoteConfig.Enabled {
+		t.Errorf("standalone switches: agent=%v remoteConfig=%v", rt.Agent.Enabled, rt.RemoteConfig.Enabled)
+	}
+}
+
+func TestLoadDaemon_AgentModeRequiresInstanceID(t *testing.T) {
+	yaml := `
+common:
+  mongo:
+    uri: "mongodb://localhost/tango"
+report:
+  source:
+    logPattern: ["/tmp/.*\\.log"]
+`
+	if _, _, err := LoadDaemon(writeFile(t, "daemon.yaml", yaml), nil, DaemonModeAgent); err == nil {
+		t.Fatal("expected error: agent mode without instanceID")
+	}
+}
+
+func TestLoadDaemon_RequiresLogPattern(t *testing.T) {
+	yaml := `
+common:
+  mongo:
+    uri: "mongodb://localhost/tango"
+`
+	if _, _, err := LoadDaemon(writeFile(t, "daemon.yaml", yaml), nil, DaemonModeStandalone); err == nil {
+		t.Fatal("expected error: standalone without logPattern")
+	}
+}
+
+func TestLoadDaemon_UnknownMode(t *testing.T) {
+	if _, _, err := LoadDaemon("", nil, "bogus"); err == nil {
+		t.Fatal("expected error: unknown daemon mode")
 	}
 }
 
@@ -88,14 +131,16 @@ func TestLoadClient_JSON(t *testing.T) {
 }
 
 // TestExampleDaemonConfigsLoad ensures the shipped daemon examples parse and
-// validate under the daemon schema (both YAML and JSON).
+// validate under the daemon schema (both YAML and JSON) in both run modes.
 func TestExampleDaemonConfigsLoad(t *testing.T) {
 	for _, p := range []string{"../examples/config/daemon/daemon.yaml", "../examples/config/daemon/daemon.json"} {
-		t.Run(p, func(t *testing.T) {
-			if _, _, err := LoadDaemon(p, nil); err != nil {
-				t.Fatalf("LoadDaemon(%s): %v", p, err)
-			}
-		})
+		for _, mode := range []string{DaemonModeStandalone, DaemonModeAgent} {
+			t.Run(p+"/"+mode, func(t *testing.T) {
+				if _, _, err := LoadDaemon(p, nil, mode); err != nil {
+					t.Fatalf("LoadDaemon(%s, %s): %v", p, mode, err)
+				}
+			})
+		}
 	}
 }
 

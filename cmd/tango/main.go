@@ -1,8 +1,15 @@
-// Command tango is the tango client: a single binary exposing the five client
-// functions — string upload, file upload (with resume), backfill, ad-hoc SQL,
-// and task publishing — across three faces: one-shot CLI subcommands, an
-// HTTP/REST server (`tango serve`), and (via the importable client package) an
-// embeddable Go library.
+// Command tango is the single tango binary. Its role is selected by the
+// top-level mode subcommand:
+//
+//   - tango daemon            — daemon role: tail TA logs → reporting filter →
+//     MongoDB, optionally hosting the task agent.
+//   - tango client <subcmd>   — client role: the five client functions (string
+//     upload, file upload with resume, backfill,
+//     ad-hoc SQL, task publishing) across one-shot CLI
+//     subcommands and an HTTP/REST server
+//     (`tango client serve`). The same functions are
+//     also available as an embeddable Go library via
+//     the importable client package.
 package main
 
 import (
@@ -10,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/sirupsen/logrus"
@@ -30,24 +38,65 @@ func main() {
 func newRoot() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "tango",
-		Short: "Tango client: upload, backfill, sql, and task publishing",
+		Short: "Tango: daemon and client roles in one binary (select via the daemon/client subcommand)",
 	}
-	root.PersistentFlags().StringVar(&configFile, "config", "client.yaml",
-		"path to client config file (.yaml/.yml/.json; skipped if absent)")
+	// Shared connection/logging overrides. When --config is empty we auto-detect
+	// tango.{yaml,yml,json} next to the binary (see defaultConfigPath).
+	root.PersistentFlags().StringVar(&configFile, "config", "",
+		"path to config file (.yaml/.yml/.json); default: tango.{yaml,yml,json} next to the binary; skipped if absent")
 	root.PersistentFlags().String("mongoURI", "", "MongoDB connection URI (maps to mongo.uri)")
 	root.PersistentFlags().String("logLevel", "", "log level: debug, info, warn, error")
 
-	root.AddCommand(newIngestCmd(), newUploadCmd(), newBackfillCmd(), newSQLCmd(), newPublishCmd(), newServeCmd())
+	root.AddCommand(newDaemonCmd(), newClientCmd())
 	return root
+}
+
+// newClientCmd groups the client-role subcommands under `tango client`.
+func newClientCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "client",
+		Short: "Client role: upload, backfill, sql, and task publishing",
+	}
+	cmd.AddCommand(newIngestCmd(), newUploadCmd(), newBackfillCmd(), newSQLCmd(), newPublishCmd(), newServeCmd())
+	return cmd
 }
 
 // loadClientConfig loads the client config (file + env + flags).
 func loadClientConfig(cmd *cobra.Command) (config.ClientConfig, *logrus.Logger, error) {
-	cc, err := config.LoadClient(configFile, cmd.Flags())
+	cc, err := config.LoadClient(clientConfigPath(), cmd.Flags())
 	if err != nil {
 		return config.ClientConfig{}, nil, err
 	}
 	return cc, newLogger(cc.Logging.Level), nil
+}
+
+// clientConfigPath resolves the client config file: the shared --config flag if
+// set, otherwise the auto-detected default next to the binary.
+func clientConfigPath() string {
+	if configFile != "" {
+		return configFile
+	}
+	return defaultConfigPath()
+}
+
+// defaultConfigPath returns the config file to use when --config is omitted: the
+// first of tango.{yaml,yml,json} that exists in the binary's own directory. It
+// returns "" when none is found (the loaders then skip silently and fall back to
+// defaults + env + flags). The directory is the executable's, not the current
+// working directory, so the daemon finds its config regardless of where it is
+// launched from.
+func defaultConfigPath() string {
+	dir := "."
+	if exe, err := os.Executable(); err == nil {
+		dir = filepath.Dir(exe)
+	}
+	for _, name := range []string{"tango.yaml", "tango.yml", "tango.json"} {
+		p := filepath.Join(dir, name)
+		if info, err := os.Stat(p); err == nil && !info.IsDir() {
+			return p
+		}
+	}
+	return ""
 }
 
 // buildClient constructs a connected client from the config, layering the given

@@ -4,14 +4,14 @@
 
 `tango`：将 ThinkingData 日志（JSON 行）采集并写入 MongoDB 的 `user` / `event` / `dead_letter` 集合。
 
-经过重构，tango 围绕**两种角色**组织，每种角色有**独立的程序入口、独立的配置文件**，共享 `internal/` 与 `config/`：
+经过重构，tango 是**单一二进制**（`cmd/tango`），围绕**两种角色**组织，由顶层 `daemon` / `client` 子命令选择；每种角色有**独立的配置文件**，共享 `internal/` 与 `config/`：
 
-| 角色 | 二进制 | 配置文件 | 职责 |
+| 角色 | 子命令 | 配置文件 | 职责 |
 |------|--------|----------|------|
-| **Daemon** | `cmd/tangod` | `daemon.{yaml,json}` | 上报：追尾日志 → 解析 → **上报 filter** → 写入 MongoDB。**agent 是 daemon 的一个可开关功能**（`agent.enabled`）。 |
-| **Client** | `cmd/tango` | `client.{yaml,json}` | 操作 / SDK：五项分区功能，三种使用方式（CLI / HTTP REST / Go 库）。 |
+| **Daemon** | `tango daemon standalone` / `tango daemon agent` | `daemon.{yaml,json}` | 配置分 **common / report / agent** 三部分；运行模式由**子命令**选择:standalone（纯上报、本地自治）与 agent（上报 + 配置同步 + 任务派发）。 |
+| **Client** | `tango client <subcmd>` | `client.{yaml,json}` | 操作 / SDK：五项分区功能，三种使用方式（CLI / HTTP REST / Go 库）。 |
 
-> 配置文件 YAML、JSON 均支持（按扩展名自动识别）；所有键可用 `TANGO_*` 环境变量覆盖，常用项也有 CLI flag（`--mongoURI` / `--logLevel` / `--instanceID`）。
+> 配置文件 YAML、JSON 均支持（按扩展名自动识别）；所有键可用 `TANGO_*` 环境变量覆盖，常用项也有 CLI flag（`--mongoURI` / `--logLevel` / `--instanceID`）。`--config` 留空时自动在**二进制同级目录**查找 `tango.{yaml,yml,json}`（按此顺序取首个存在者），找不到则静默回退到默认值 + 环境变量 + flag。
 
 ---
 
@@ -20,8 +20,7 @@
 ```
 .
 ├── cmd/
-│   ├── tangod/      # daemon 入口（上报 + 可选 agent）
-│   └── tango/       # client 入口（CLI 子命令 + serve HTTP）
+│   └── tango/       # 单一入口：daemon 子命令（上报 + 可选 agent）+ client 子命令（CLI + serve HTTP）
 ├── config/          # 共享子结构 + DaemonConfig(daemon.go) / ClientConfig(client.go) + loader.go
 ├── client/          # 对外 Go 库（embeddable SDK，五项功能的统一实现）
 ├── doc/ examples/
@@ -35,9 +34,18 @@
 
 ---
 
-## 3. Daemon 角色（`tangod`）
+## 3. Daemon 角色（`tango daemon standalone` / `tango daemon agent`）
 
-### 3.1 上报功能（reporting）
+daemon 配置分三部分：**common**（`logging` + `mongo`，进程级共享）、**report**（上报管线，含 `source` / `pipeline` / `filter` / `remoteConfig`）、**agent**（任务 agent 设置）。**运行模式由子命令选择**,不是配置开关:
+
+| 模式 | 子命令 | 配置同步 | 任务派发 | instanceID |
+|------|--------|:---:|:---:|:---:|
+| standalone | `tango daemon standalone` | ❌ | ❌ | 不需要 |
+| agent | `tango daemon agent` | ✅ | ✅ | 必填 |
+
+两种模式**都做上报**,故 `report.source.logPattern` 始终必填。
+
+### 3.1 report 功能（reporting，两种模式共用）
 
 数据流（与原 daemon 一致）：
 
@@ -45,12 +53,12 @@
 Tailer ──lineCh──▶ Dispatcher(按用户亲和性路由) ──▶ Worker[i](Parse→上报Filter→Identity→Batch) ──▶ MongoDB BulkWrite
 ```
 
-- **上报 filter**（`reportFilter`）：对每条记录生效的 expr 表达式（针对 `#type` / `#event_name` / `properties.*`）。它与 backfill filter 是**两个独立概念**。
-- 远端配置（`remoteConfig`）可热更新上报 filter；report-sync 任务即写入该文档。
+- **上报 filter**（`report.filter`）：对每条记录生效的 expr 表达式（针对 `#type` / `#event_name` / `properties.*`）。它与 backfill filter 是**两个独立概念**。
+- 远端配置（`report.remoteConfig`）可热更新上报 filter；report-sync 任务即写入该文档。**仅 agent 模式生效**;standalone 保持本地 filter 不变。
 
-### 3.2 agent 功能（daemon 的开关项）
+### 3.2 agent 模式额外能力
 
-`agent.enabled: true` 时，daemon 进程内额外运行 agent：注册心跳、领取并执行已发布的任务、汇报结果，并与上报管线**共享同一个 live filter holder**，使 report-sync 任务可直接热替换上报 filter。
+`tango daemon agent` 在上报之上额外:① 启动配置同步循环热重载 filter;② 运行 agent——注册心跳、领取并执行已发布的任务、汇报结果。agent 与上报管线**共享同一个 live filter holder**,使 report-sync 任务可直接热替换上报 filter。`agent.instanceID` 必填。
 
 `instanceID` **仅在 agent 配置下**（`agent.instanceID`），开启 agent 时必填；其它情况无意义。
 
@@ -66,7 +74,7 @@ Tailer ──lineCh──▶ Dispatcher(按用户亲和性路由) ──▶ Work
 
 ## 4. 两种 filter
 
-| | 上报 filter（`reportFilter` / runtime `Filter`） | backfill filter（`backfillFilter`） |
+| | 上报 filter（`report.filter` / runtime `Filter`） | backfill filter（`backfillFilter`） |
 |---|---|---|
 | 使用方 | daemon 上报、client 字符串/文件上报 | backfill 任务、client backfill / sql |
 | 维度 | `#type` / `#event_name` / 属性 | **表名(event/user)** + 事件/属性（**不含 #type**） |
@@ -91,8 +99,8 @@ Tailer ──lineCh──▶ Dispatcher(按用户亲和性路由) ──▶ Work
 
 三种使用方式（faces）：
 
-- **CLI**：`tango ingest|upload|backfill|sql|publish <report-sync|backfill|sql>`。
-- **HTTP/REST**：`tango serve`，暴露 `POST /ingest /upload /backfill /sql /publish/{report-sync,backfill,sql}`。
+- **CLI**：`tango client ingest|upload|backfill|sql|publish <report-sync|backfill|sql>`。
+- **HTTP/REST**：`tango client serve`，暴露 `POST /ingest /upload /backfill /sql /publish/{report-sync,backfill,sql}`。
 - **Go 库**：直接 `import rocket-nano/tools/tango/client`。
 
 ---

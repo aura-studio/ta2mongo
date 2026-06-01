@@ -1,19 +1,22 @@
 {
-  "logging": { "level": "info", "format": "text" },
-  "mongo": { "uri": "mongodb://localhost:27017/tango", "maxElapsedTime": "10s" },
-  "reportFilter": {
-    "include": ["#type == \"track\"", "#type == \"user_set\""],
-    "exclude": ["debug == true"]
+  "common": {
+    "logging": { "level": "info", "format": "text" },
+    "mongo": { "uri": "mongodb://localhost:27017/tango", "maxElapsedTime": "10s" }
   },
-  "source": {
-    "logPattern": ["/var/log/ta/.*\\.log"],
-    "tailMode": "hybrid",
-    "rescanInterval": "30s"
+  "report": {
+    "source": {
+      "logPattern": ["/var/log/ta/.*\\.log"],
+      "tailMode": "hybrid",
+      "rescanInterval": "30s"
+    },
+    "pipeline": { "batchSize": 1000, "batchWorkers": 4, "flushInterval": "1s" },
+    "filter": {
+      "include": ["#type == \"track\"", "#type == \"user_set\""],
+      "exclude": ["debug == true"]
+    },
+    "remoteConfig": { "collection": "_tango_config", "documentID": "default", "syncInterval": "1h" }
   },
-  "pipeline": { "batchSize": 1000, "batchWorkers": 4, "flushInterval": "1s" },
-  "remoteConfig": { "enabled": false, "syncInterval": "1h" },
   "agent": {
-    "enabled": true,
     "instanceID": "daemon-node-1",
     "pollInterval": "10s",
     "leaseDuration": "5m",

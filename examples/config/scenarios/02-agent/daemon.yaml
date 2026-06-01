@@ -1,0 +1,56 @@
+# 场景 2：agent 模式 —— 上报 + MongoDB 配置同步 + 两种任务派发
+#
+# 启动：./start.sh   或   tango daemon agent --config daemon.yaml --instanceID node-1
+#
+# 行为：在 standalone 上报的基础上，额外：
+#   - 配置同步：定期从 _tango_config 集合拉取配置文档，热重载上报 filter（无需重启）；
+#   - 任务派发：注册心跳到实例表、轮询任务队列、原子领取并执行任务。两种数据类任务：
+#       · backfill：从 ThinkingData OpenAPI 拉历史数据，agent 按 payload 的
+#                   table/projectID/range/filter 自动拼 SQL，走与实时上报相同的管道写库；
+#       · sql：     执行 payload 里显式给定的 SQL 语句，结果行同样流式导入。
+#     （第三种 report-sync 任务属于“推送配置”，领取后即热替换 live filter 并持久化。）
+#
+# agent 模式下 remoteConfig 同步与 agent 任务派发自动开启（由子命令决定，无需在文件里设开关）。
+# agent.instanceID 必填，也可用 --instanceID 或 TANGO_AGENT_INSTANCEID 覆盖。
+# 任务发布方使用 tango client publish ... 发布任务到队列，详见 examples/config/client。
+
+common:
+  logging:
+    level: info
+    format: text
+  mongo:
+    uri: mongodb://localhost:27017/tango
+    maxElapsedTime: 10s
+
+report:
+  source:
+    logPattern:
+      - '/var/log/ta/.*\.log'
+    tailMode: hybrid
+    rescanInterval: 30s
+  pipeline:
+    batchSize: 1000
+    batchWorkers: 4
+    flushInterval: 1s
+  # 本地 filter 是“兜底初值”：远端配置文档拉取成功后会覆盖它（热重载）。
+  filter:
+    include:
+      - '#type == "track"'
+    exclude:
+      - 'debug == true'
+  # 配置同步参数（agent 模式生效）。连接类字段（common.mongo.uri 等）永不可被远端覆盖。
+  remoteConfig:
+    collection: _tango_config   # 默认即此值
+    documentID: default         # 默认即此值
+    syncInterval: 1h            # 重新拉取并热重载的间隔
+
+# agent 任务派发设置。
+agent:
+  # instanceID 必填且需在数据库命名空间内唯一。建议用主机名/容器名。
+  instanceID: node-1
+  tasksCollection: _tango_tasks         # 任务队列集合（默认值）
+  instancesCollection: _tango_instances # 实例心跳集合（默认值，TTL 过期）
+  pollInterval: 10s                     # 轮询可领取任务的间隔
+  leaseDuration: 5m                     # 领取后的租约时长，过期可被其他 agent 重领
+  heartbeatInterval: 30s                # 心跳刷新间隔
+  instanceTTL: 90s                      # 心跳超过此时长即视为离线
