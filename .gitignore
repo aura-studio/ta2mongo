@@ -1,0 +1,45 @@
+# Compiled binary (root `go build .` produces ./tango)
+/tango
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binaries and coverage output
+*.test
+*.out
+coverage.*
+profile.cov
+
+# Go workspace files (local-only)
+go.work
+go.work.sum
+
+# Vendored deps are not committed (module mode)
+/vendor/
+
+# Local runtime config dropped next to the binary at repo root.
+# Shipped samples live under examples/config/ and are NOT ignored.
+/standalone.yaml
+/standalone.yml
+/standalone.json
+/agent.yaml
+/agent.yml
+/agent.json
+/client.yaml
+/client.yml
+/client.json
+/tango.yaml
+/tango.yml
+/tango.json
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*~
+
+# OS noise
+.DS_Store
+Thumbs.db
