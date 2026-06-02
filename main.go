@@ -20,6 +20,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	clientcmd "rocket-nano/tools/tango/cmd/client"
 	daemoncmd "rocket-nano/tools/tango/cmd/daemon"
 )
 
@@ -45,7 +46,6 @@ func newRoot() *cobra.Command {
 	root.PersistentFlags().String("config", "",
 		"path to config file (.yaml/.yml/.json); default: <mode>.{yaml,yml,json} next to the binary; skipped if absent")
 
-	// v1.0.0: daemon only. To enable the client role, add clientcmd.NewCommand().
-	root.AddCommand(daemoncmd.NewCommand())
+	root.AddCommand(daemoncmd.NewCommand(), clientcmd.NewCommand())
 	return root
 }
