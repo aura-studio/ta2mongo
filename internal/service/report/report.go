@@ -109,14 +109,6 @@ func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Servic
 	return &Service{cfg: cfg, logger: logger, store: st, parser: p, filter: filter.NewHolder(flt), client: client}, nil
 }
 
-// Filter exposes the daemon's filter holder so the remote-config sync loop can
-// hot-swap the active filter at runtime.
-func (d *Service) Filter() *filter.Holder { return d.filter }
-
-// MongoClient exposes the underlying client so callers can reuse the
-// connection (e.g. the remote-config fetcher) without opening a second one.
-func (d *Service) MongoClient() *mongo.Client { return d.client }
-
 // Shutdown disconnects the MongoDB client. It must be called after Run returns
 // to ensure all final flushes complete before the connection is closed.
 func (d *Service) Shutdown() error {

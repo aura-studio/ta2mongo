@@ -33,18 +33,10 @@ type Service struct {
 	queue    *taskqueue.Queue
 	registry *taskqueue.Registry
 	hostname string
-
-	// reportFilter, when set by the hosting daemon, is the live reporting
-	// filter that a report-sync task hot-swaps in place. Nil for a standalone
-	// agent (report-sync then only persists the override document).
-	reportFilter *filter.Holder
 }
 
-// AttachReportingFilter lets the hosting daemon share its live reporting filter
-// holder so a report-sync task can hot-swap it without a restart.
-func (a *Service) AttachReportingFilter(h *filter.Holder) { a.reportFilter = h }
-
-// New connects to MongoDB and constructs an Agent. Caller must call Shutdown.
+// New connects to MongoDB and constructs a worker Service. Caller must call
+// Shutdown.
 func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Service, error) {
 	if cfg.InstanceID == "" {
 		return nil, fmt.Errorf("worker: TANGO_INSTANCE_ID is required")
@@ -268,22 +260,21 @@ func (a *Service) execute(ctx context.Context, task *taskqueue.Task) (map[string
 	}
 }
 
-// executeReportSync applies a new reporting (upload) filter: it compiles the
-// payload's include/exclude expressions, hot-swaps the daemon's live filter
-// (when attached), and persists the override document so that restarts and
-// other daemons on the same database converge on the same filter.
+// executeReportSync publishes a new reporting (upload) filter to the control
+// plane: it compiles the payload's include/exclude expressions to validate
+// them, then writes the remote-config override document. It does NOT apply the
+// filter in-process — report services watch the remote-config document and
+// hot-reload their own filter.Holder on their next sync tick. The task's
+// completion therefore means "written to remote config", not "applied by every
+// report service" (see the plan's report-sync semantics note).
 func (a *Service) executeReportSync(ctx context.Context, task *taskqueue.Task) (map[string]any, error) {
 	include, exclude := reportSyncFilters(task.Payload)
-	flt, err := filter.New(include, exclude)
-	if err != nil {
+	if _, err := filter.New(include, exclude); err != nil {
 		return nil, fmt.Errorf("worker: report-sync filter does not compile: %w", err)
 	}
-	if a.reportFilter != nil {
-		a.reportFilter.Store(flt)
-	}
-	// Persist to the remote-config override document so the change survives a
-	// restart and reaches other daemons via their sync loop.
-	_, err = a.db.Collection(a.cfg.RemoteConfig.Collection).UpdateOne(ctx,
+	// Persist to the remote-config override document so report services converge
+	// on the same filter via their sync loop, surviving restarts.
+	_, err := a.db.Collection(a.cfg.RemoteConfig.Collection).UpdateOne(ctx,
 		bson.M{"_id": a.cfg.RemoteConfig.DocumentID},
 		bson.M{"$set": bson.M{"filter": bson.M{"include": include, "exclude": exclude}}},
 		options.Update().SetUpsert(true),
@@ -292,7 +283,9 @@ func (a *Service) executeReportSync(ctx context.Context, task *taskqueue.Task) (
 		return nil, fmt.Errorf("worker: persist report-sync filter: %w", err)
 	}
 	return map[string]any{
-		"applied_live":   a.reportFilter != nil,
+		"persisted":      true,
+		"collection":     a.cfg.RemoteConfig.Collection,
+		"documentID":     a.cfg.RemoteConfig.DocumentID,
 		"filter_include": include,
 		"filter_exclude": exclude,
 	}, nil

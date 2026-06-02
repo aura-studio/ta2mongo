@@ -14,7 +14,6 @@ import (
 
 	"rocket-nano/tools/tango/config"
 	"rocket-nano/tools/tango/internal/core/cli"
-	"rocket-nano/tools/tango/internal/core/filter"
 	"rocket-nano/tools/tango/internal/core/remoteconfig"
 	"rocket-nano/tools/tango/internal/service/report"
 	"rocket-nano/tools/tango/internal/service/worker"
@@ -122,7 +121,7 @@ func runReport(ctx context.Context, rt config.Config, logger *logrus.Logger, age
 	}
 
 	if agentOn {
-		stop, err := startWorker(ctx, rt, logger, svc.Filter())
+		stop, err := startWorker(ctx, rt, logger)
 		if err != nil {
 			return err
 		}
@@ -136,13 +135,17 @@ func runReport(ctx context.Context, rt config.Config, logger *logrus.Logger, age
 // pipeline, returning a cleanup func that shuts it down. The worker runs in its
 // own goroutine; report.Run blocks the main goroutine until ctx is cancelled,
 // at which point the worker's Run also returns.
-func startWorker(ctx context.Context, rt config.Config, logger *logrus.Logger, flt *filter.Holder) (func(), error) {
+//
+// The worker and report service are fully decoupled: a report-sync task only
+// writes the remote-config document, and the co-located report service picks it
+// up through its own remote-config sync loop (enabled in agent/managed mode) —
+// there is no shared in-process filter holder.
+func startWorker(ctx context.Context, rt config.Config, logger *logrus.Logger) (func(), error) {
 	w, err := worker.New(ctx, rt, logger)
 	if err != nil {
 		logger.WithError(err).Error("tango daemon: worker init failed")
 		return nil, err
 	}
-	w.AttachReportingFilter(flt)
 	if err := w.EnsureIndexes(ctx); err != nil {
 		_ = w.Shutdown()
 		logger.WithError(err).Error("tango daemon: worker ensure indexes failed")
