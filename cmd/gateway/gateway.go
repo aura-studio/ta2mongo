@@ -20,19 +20,17 @@ func NewCommand() *cobra.Command {
 	cmd.PersistentFlags().String("runtime.mongo.uri", "", "MongoDB connection URI (config key runtime.mongo.uri)")
 	cmd.PersistentFlags().String("runtime.logging.level", "", "log level: debug, info, warn, error (config key runtime.logging.level)")
 	cmd.PersistentFlags().String("gateway.addr", "", "HTTP listen address (config key gateway.addr)")
-	cmd.AddCommand(ServeCommand(shared.GatewayConfig))
+	cmd.AddCommand(newServeCmd())
 	return cmd
 }
 
-// ServeCommand builds the `serve` subcommand bound to the given config loader.
-// The legacy `tango client serve` wrapper reuses it with the legacy loader.
-func ServeCommand(load shared.ClientLoader) *cobra.Command {
+func newServeCmd() *cobra.Command {
 	var addr string
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Run the HTTP/REST server exposing the five client functions",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cc, cli, logger, err := shared.ConnectClient(cmd, load)
+			cc, cli, logger, err := shared.ConnectClient(cmd, shared.GatewayConfig)
 			if err != nil {
 				return err
 			}

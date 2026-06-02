@@ -1,8 +1,7 @@
-// Package shared holds the glue used by the role-oriented command packages
-// (report, worker, gateway, operator, profile) and the legacy daemon/client
-// wrappers: config-file resolution, client construction, and the long-running
-// report/worker service runners. The cmd packages stay thin by delegating
-// argument parsing aside, all wiring lives here.
+// Package shared holds the glue used by the role command packages (report,
+// worker, gateway, operator): config-file resolution, client construction, and
+// the long-running report/worker service runners. The cmd packages stay thin
+// by delegating; argument parsing aside, all wiring lives here.
 package shared
 
 import (
@@ -24,8 +23,7 @@ func ConfigFlag(cmd *cobra.Command) string {
 }
 
 // ClientLoader resolves and loads the ClientConfig a client-driven command runs
-// on. The role commands (operator, gateway) load the unified RoleConfig schema;
-// the legacy client wrapper loads the legacy client schema. Each returns a
+// on (operator vs gateway resolve different role files), returning a
 // ready-to-use ClientConfig and a logger derived from its logging level.
 type ClientLoader func(cmd *cobra.Command) (config.ClientConfig, *logrus.Logger, error)
 

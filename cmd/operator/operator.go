@@ -24,26 +24,16 @@ func NewCommand() *cobra.Command {
 	}
 	cmd.PersistentFlags().String("runtime.mongo.uri", "", "MongoDB connection URI (config key runtime.mongo.uri)")
 	cmd.PersistentFlags().String("runtime.logging.level", "", "log level: debug, info, warn, error (config key runtime.logging.level)")
-	cmd.AddCommand(Subcommands(shared.OperatorConfig)...)
+	cmd.AddCommand(newIngestCmd(), newUploadCmd(), newBackfillCmd(), newSQLCmd(), newPublishCmd())
 	return cmd
 }
 
-// Subcommands returns the one-shot operator subcommands bound to the given
-// config loader. The legacy `tango client` wrapper reuses them with the legacy
-// loader.
-func Subcommands(load shared.ClientLoader) []*cobra.Command {
-	return []*cobra.Command{
-		newIngestCmd(load), newUploadCmd(load), newBackfillCmd(load),
-		newSQLCmd(load), newPublishCmd(load),
-	}
-}
-
-func newIngestCmd(load shared.ClientLoader) *cobra.Command {
+func newIngestCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "ingest [json-line ...]",
 		Short: "String single upload (no retransmission): ingest JSON lines from args/stdin",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cc, logger, err := load(cmd)
+			cc, logger, err := shared.OperatorConfig(cmd)
 			if err != nil {
 				return err
 			}
@@ -87,13 +77,13 @@ func newIngestCmd(load shared.ClientLoader) *cobra.Command {
 	}
 }
 
-func newUploadCmd(load shared.ClientLoader) *cobra.Command {
+func newUploadCmd() *cobra.Command {
 	var patterns []string
 	cmd := &cobra.Command{
 		Use:   "upload",
 		Short: "File single upload (with resume/retransmission)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cc, logger, err := load(cmd)
+			cc, logger, err := shared.OperatorConfig(cmd)
 			if err != nil {
 				return err
 			}
@@ -124,12 +114,12 @@ func newUploadCmd(load shared.ClientLoader) *cobra.Command {
 	return cmd
 }
 
-func newBackfillCmd(load shared.ClientLoader) *cobra.Command {
+func newBackfillCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "backfill",
 		Short: "Backfill execution: pull historical data from the TA OpenAPI",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cc, cli, _, err := shared.ConnectClient(cmd, load)
+			cc, cli, _, err := shared.ConnectClient(cmd, shared.OperatorConfig)
 			if err != nil {
 				return err
 			}
@@ -143,13 +133,13 @@ func newBackfillCmd(load shared.ClientLoader) *cobra.Command {
 	}
 }
 
-func newSQLCmd(load shared.ClientLoader) *cobra.Command {
+func newSQLCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "sql <statement>",
 		Short: "SQL execution: run an ad-hoc TA SQL statement and import the rows",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cc, cli, _, err := shared.ConnectClient(cmd, load)
+			cc, cli, _, err := shared.ConnectClient(cmd, shared.OperatorConfig)
 			if err != nil {
 				return err
 			}
@@ -164,20 +154,20 @@ func newSQLCmd(load shared.ClientLoader) *cobra.Command {
 	}
 }
 
-func newPublishCmd(load shared.ClientLoader) *cobra.Command {
+func newPublishCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "publish", Short: "Publish tasks/filters to the worker task queue"}
-	cmd.AddCommand(newPublishReportSyncCmd(load), newPublishBackfillCmd(load), newPublishSQLCmd(load))
+	cmd.AddCommand(newPublishReportSyncCmd(), newPublishBackfillCmd(), newPublishSQLCmd())
 	return cmd
 }
 
-func newPublishReportSyncCmd(load shared.ClientLoader) *cobra.Command {
+func newPublishReportSyncCmd() *cobra.Command {
 	var include, exclude []string
 	var target string
 	cmd := &cobra.Command{
 		Use:   "report-sync",
 		Short: "Publish a report-sync task: push a new reporting filter to report services",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			_, cli, _, err := shared.ConnectClient(cmd, load)
+			_, cli, _, err := shared.ConnectClient(cmd, shared.OperatorConfig)
 			if err != nil {
 				return err
 			}
@@ -196,13 +186,13 @@ func newPublishReportSyncCmd(load shared.ClientLoader) *cobra.Command {
 	return cmd
 }
 
-func newPublishBackfillCmd(load shared.ClientLoader) *cobra.Command {
+func newPublishBackfillCmd() *cobra.Command {
 	var target string
 	cmd := &cobra.Command{
 		Use:   "backfill",
 		Short: "Publish a backfill task using the config's backfill + backfillFilter",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cc, cli, _, err := shared.ConnectClient(cmd, load)
+			cc, cli, _, err := shared.ConnectClient(cmd, shared.OperatorConfig)
 			if err != nil {
 				return err
 			}
@@ -230,14 +220,14 @@ func newPublishBackfillCmd(load shared.ClientLoader) *cobra.Command {
 	return cmd
 }
 
-func newPublishSQLCmd(load shared.ClientLoader) *cobra.Command {
+func newPublishSQLCmd() *cobra.Command {
 	var target string
 	cmd := &cobra.Command{
 		Use:   "sql <statement>",
 		Short: "Publish an ad-hoc SQL task",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cc, cli, _, err := shared.ConnectClient(cmd, load)
+			cc, cli, _, err := shared.ConnectClient(cmd, shared.OperatorConfig)
 			if err != nil {
 				return err
 			}

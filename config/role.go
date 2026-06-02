@@ -22,8 +22,8 @@ import (
 //   - backfill /
 //     backfillFilter / sql: backfill + ad-hoc SQL (worker + operator + gateway).
 //
-// The legacy daemon (generic/report/agent) and client schemas remain in
-// daemon.go / client.go for the compatibility wrapper commands.
+// It is the only file-facing schema; report/worker project onto the runtime
+// Config, gateway/operator onto ClientConfig (client.go).
 type RoleConfig struct {
 	Runtime        RuntimeConfig        `mapstructure:"runtime"`
 	Report         RoleReportConfig     `mapstructure:"report"`

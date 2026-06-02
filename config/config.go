@@ -18,16 +18,11 @@
 package config
 
 import (
-	"errors"
 	"fmt"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/spf13/pflag"
-	"github.com/spf13/viper"
 
 	"rocket-nano/tools/tango/internal/core/filter"
 )
@@ -110,14 +105,14 @@ type Config struct {
 	// Mongo configures the MongoDB connection and write-retry behaviour.
 	Mongo MongoConfig `mapstructure:"mongo"`
 
-	// Source configures the file-tailing data source (daemon/once modes).
+	// Source configures the file-tailing data source (report service).
 	Source SourceConfig `mapstructure:"source"`
 
 	// Pipeline configures batching and parallel write workers.
 	Pipeline PipelineConfig `mapstructure:"pipeline"`
 
 	// Filter configures the reporting (upload) filter: expr-lang include/exclude
-	// rules applied to every record by the daemon / file-upload / string-upload
+	// rules applied to every record by the report / file-upload / string-upload
 	// paths. This is distinct from BackfillFilter.
 	Filter FilterConfig `mapstructure:"filter"`
 
@@ -130,22 +125,23 @@ type Config struct {
 
 	// Backfill configures the `tango backfill` mode that pulls historical data
 	// from ThinkingData's OpenAPI (async SQL endpoints) and routes the rows
-	// through the same parse → filter → write pipeline as daemon/once. Only
-	// consulted when the backfill subcommand is invoked.
+	// through the same parse → filter → write pipeline as the report service.
+	// Only consulted when the backfill subcommand is invoked.
 	Backfill BackfillConfig `mapstructure:"backfill"`
 
 	// RemoteConfig enables a control-plane override: a single JSON document in
 	// MongoDB whose fields are merged on top of this configuration at startup
-	// (per-field; absent fields keep their local value). In daemon mode the
-	// document is re-fetched every SyncInterval and the filter is hot-reloaded
-	// without a restart, so a data centre can progressively widen which records
-	// are collected. Connection fields (mongo.uri, remoteConfig itself) are
-	// never overridable remotely — they must come from the local file.
+	// (per-field; absent fields keep their local value). When the report service
+	// enables it, the document is re-fetched every SyncInterval and the filter is
+	// hot-reloaded without a restart, so a data centre can progressively widen
+	// which records are collected. Connection fields (mongo.uri, remoteConfig
+	// itself) are never overridable remotely — they must come from the local file.
 	RemoteConfig RemoteConfig `mapstructure:"remoteConfig"`
 
-	// Agent configures the daemon's agent feature (agent.enabled): a worker
-	// that registers a heartbeat, claims tasks published to a shared MongoDB
-	// queue, executes them (report-sync / backfill / sql), and reports results.
+	// Agent holds the task-queue runtime settings (projected from the tasks
+	// config section). The worker service registers a heartbeat, claims tasks
+	// from a shared MongoDB queue, executes them (report-sync / backfill / sql),
+	// and reports results.
 	Agent AgentConfig `mapstructure:"agent"`
 }
 
@@ -172,14 +168,14 @@ type MongoConfig struct {
 	ServerSelectionTimeout time.Duration `mapstructure:"serverSelectionTimeout"`
 }
 
-// SourceConfig configures the file-tailing data source (daemon/once modes).
+// SourceConfig configures the file-tailing data source (report service).
 type SourceConfig struct {
 	// LogPattern is a list of glob/regex patterns matched against file paths.
-	// Required for daemon and once modes; ignored by ingest/backfill/agent.
+	// Required for the report service; ignored by the worker / backfill paths.
 	LogPattern []string `mapstructure:"logPattern"`
 	// TailMode selects the file-tailing strategy: hybrid (default) / poll / event.
 	TailMode string `mapstructure:"tailMode"`
-	// RescanInterval is how often the tailer rescans for new files (daemon).
+	// RescanInterval is how often the tailer rescans for new files.
 	// Default 30s.
 	RescanInterval time.Duration `mapstructure:"rescanInterval"`
 	// PollInterval is the poll cadence used by poll / hybrid tail modes.
@@ -263,9 +259,9 @@ type FilterConfig struct {
 	Exclude []string `mapstructure:"exclude"`
 }
 
-// AgentConfig controls the in-daemon task-worker (agent) feature.
+// AgentConfig holds the task-queue runtime settings for the worker service.
 type AgentConfig struct {
-	// Enabled turns the agent feature on inside the daemon.
+	// Enabled turns the task worker on (set by the worker loader).
 	Enabled bool `mapstructure:"enabled"`
 
 	// TasksCollection holds the task queue documents. Defaults "_tango_tasks".
@@ -307,7 +303,7 @@ type RemoteConfig struct {
 	// Defaults to "default".
 	DocumentID string `mapstructure:"documentID"`
 
-	// SyncInterval is how often daemon mode re-fetches the document to
+	// SyncInterval is how often the report service re-fetches the document to
 	// hot-reload the filter. Defaults to 1h.
 	SyncInterval time.Duration `mapstructure:"syncInterval"`
 }
@@ -466,267 +462,6 @@ func (c Config) BatchChannelSize() int {
 		return c.Pipeline.ChannelBuffer
 	}
 	return c.Pipeline.BatchSize * 2
-}
-
-// Load builds a Config from defaults → YAML file → env vars → CLI flags.
-//
-// Priority (lowest to highest):
-//  1. Built-in defaults
-//  2. YAML config file (optional)
-//  3. Remote config (applied by caller, only filter fields)
-//  4. Environment variables (TANGO_*)
-//  5. CLI flags
-//
-// If path is empty or the file does not exist, file loading is skipped silently.
-func Load(path string, flags *pflag.FlagSet) (Config, error) {
-	v := viper.New()
-
-	// 1. Register defaults (lowest priority).
-	setDefaults(v)
-
-	// 2. Load YAML file (optional).
-	if path != "" {
-		if _, err := os.Stat(path); err == nil {
-			v.SetConfigFile(path)
-			if err := v.ReadInConfig(); err != nil {
-				return Config{}, fmt.Errorf("read config %q: %w", path, err)
-			}
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return Config{}, fmt.Errorf("stat config %q: %w", path, err)
-		}
-		// ErrNotExist: silently skip; use defaults + env + flags.
-	}
-
-	// 3. Apply environment variables (override YAML but CLI overrides these below).
-	applyEnvOverrides(v)
-
-	// 4. Bind CLI flags (highest priority - overrides ENV and YAML).
-	if flags != nil {
-		if err := bindFlags(v, flags); err != nil {
-			return Config{}, err
-		}
-	}
-
-	// 5. Unmarshal to Config struct.
-	var cfg Config
-	if err := v.Unmarshal(&cfg); err != nil {
-		return Config{}, fmt.Errorf("unmarshal config: %w", err)
-	}
-
-	applyDefaults(&cfg)
-	return cfg, nil
-}
-
-// FlagKeyMap maps CLI flag names to their (possibly nested) viper config keys.
-// Callers (the cmd package) supply it so config need not know flag specifics.
-type FlagKeyMap map[string]string
-
-// flagKeys is set by LoadWithFlagKeys; bindFlags consults it to translate flag
-// names into nested viper keys. Defaults to identity mapping when nil.
-var flagKeys FlagKeyMap
-
-// bindFlags binds every flag in the set to its matching viper key, translating
-// known flag names to nested keys via flagKeys. Only flags explicitly set on
-// the CLI take effect; unset flags fall back to the file / env / default chain.
-func bindFlags(v *viper.Viper, flags *pflag.FlagSet) error {
-	var bindErr error
-	flags.VisitAll(func(f *pflag.Flag) {
-		if bindErr != nil {
-			return
-		}
-		key := f.Name
-		if mapped, ok := flagKeys[f.Name]; ok {
-			key = mapped
-		}
-		if err := v.BindPFlag(key, f); err != nil {
-			bindErr = fmt.Errorf("bind flag %q: %w", f.Name, err)
-		}
-	})
-	return bindErr
-}
-
-// SetFlagKeyMap installs the flag→config-key translation used by Load. The cmd
-// package calls this once at init.
-func SetFlagKeyMap(m FlagKeyMap) { flagKeys = m }
-
-// applyEnvOverrides reads TANGO_* environment variables and calls v.Set() to
-// override values already loaded from YAML or defaults. This is called before
-// CLI flags are bound, so the priority order is:
-// defaults < YAML < ENV < CLI flags.
-func applyEnvOverrides(v *viper.Viper) {
-	// Map of env var name -> (config key, type, parse func)
-	// Only non-string types need special handling.
-	overrides := map[string]struct {
-		key  string
-		kind string
-	}{
-		// String types (AutomaticEnv handles these)
-		"TANGO_MODE":                            {key: "mode"},
-		"TANGO_INSTANCE_ID":                     {key: "instanceID"},
-		"TANGO_LOGGING_LEVEL":                   {key: "logging.level"},
-		"TANGO_LOGGING_FORMAT":                  {key: "logging.format"},
-		"TANGO_MONGO_URI":                       {key: "mongo.uri"},
-		"TANGO_MONGO_MAXELAPSEDTIME":            {key: "mongo.maxElapsedTime"},
-		"TANGO_MONGO_CONNECTTIMEOUT":            {key: "mongo.connectTimeout"},
-		"TANGO_MONGO_SERVERSELECTIONTIMEOUT":    {key: "mongo.serverSelectionTimeout"},
-		"TANGO_SOURCE_LOGPATTERN":               {key: "source.logPattern"},
-		"TANGO_SOURCE_TAILMODE":                 {key: "source.tailMode"},
-		"TANGO_SOURCE_RESCANINTERVAL":           {key: "source.rescanInterval"},
-		"TANGO_SOURCE_POLLINTERVAL":             {key: "source.pollInterval"},
-		"TANGO_SOURCE_MAXLINEBYTES":             {key: "source.maxLineBytes"},
-		"TANGO_PIPELINE_BATCH_SIZE":             {key: "pipeline.batchSize"},
-		"TANGO_PIPELINE_BATCH_SIZE_MIN":         {key: "pipeline.batchSizeMin"},
-		"TANGO_PIPELINE_BATCH_SIZE_MAX":         {key: "pipeline.batchSizeMax"},
-		"TANGO_PIPELINE_BATCH_WORKERS":          {key: "pipeline.batchWorkers"},
-		"TANGO_PIPELINE_FLUSH_INTERVAL":         {key: "pipeline.flushInterval"},
-		"TANGO_PIPELINE_CHANNEL_BUFFER":         {key: "pipeline.channelBuffer"},
-		"TANGO_PIPELINE_DEAD_LETTER_CAP":        {key: "pipeline.deadLetterCap"},
-		"TANGO_FILTER_INCLUDE":                  {key: "filter.include"},
-		"TANGO_FILTER_EXCLUDE":                  {key: "filter.exclude"},
-		"TANGO_BACKFILL_API_BASE_URL":           {key: "backfill.apiBaseURL"},
-		"TANGO_BACKFILL_TOKEN":                  {key: "backfill.token"},
-		"TANGO_BACKFILL_PROJECT_ID":             {key: "backfill.projectID"},
-		"TANGO_BACKFILL_FILTER_TABLE":           {key: "backfillFilter.table"},
-		"TANGO_BACKFILL_FILTER_EVENTS":          {key: "backfillFilter.events"},
-		"TANGO_BACKFILL_PART_DATE_RANGE_START":  {key: "backfill.partDateRange.start"},
-		"TANGO_BACKFILL_PART_DATE_RANGE_END":    {key: "backfill.partDateRange.end"},
-		"TANGO_BACKFILL_EVENT_TIME_RANGE_START": {key: "backfill.eventTimeRange.start"},
-		"TANGO_BACKFILL_EVENT_TIME_RANGE_END":   {key: "backfill.eventTimeRange.end"},
-		"TANGO_BACKFILL_RUN_ID":                 {key: "backfill.runID"},
-		"TANGO_BACKFILL_PROGRESS_COLLECTION":    {key: "backfill.progressCollection"},
-		"TANGO_BACKFILL_PROXY":                  {key: "backfill.proxy"},
-		"TANGO_BACKFILL_SCHEMA_PREFIX":          {key: "backfill.schemaPrefix"},
-		"TANGO_REMOTE_CONFIG_ENABLED":           {key: "remoteConfig.enabled"},
-		"TANGO_REMOTE_CONFIG_COLLECTION":        {key: "remoteConfig.collection"},
-		"TANGO_REMOTE_CONFIG_DOCUMENT_ID":       {key: "remoteConfig.documentID"},
-		"TANGO_REMOTE_CONFIG_SYNC_INTERVAL":     {key: "remoteConfig.syncInterval"},
-		"TANGO_AGENT_TASKS_COLLECTION":          {key: "agent.tasksCollection"},
-		"TANGO_AGENT_INSTANCES_COLLECTION":      {key: "agent.instancesCollection"},
-		"TANGO_AGENT_POLL_INTERVAL":             {key: "agent.pollInterval"},
-		"TANGO_AGENT_LEASE_DURATION":            {key: "agent.leaseDuration"},
-		"TANGO_AGENT_HEARTBEAT_INTERVAL":        {key: "agent.heartbeatInterval"},
-		"TANGO_AGENT_INSTANCE_TTL":              {key: "agent.instanceTTL"},
-	}
-
-	// Process int types first, then duration, then string (as strings are default)
-	intKeys := map[string]string{
-		"TANGO_SOURCE_MAXLINEBYTES":      "source.maxLineBytes",
-		"TANGO_PIPELINE_BATCH_SIZE":      "pipeline.batchSize",
-		"TANGO_PIPELINE_BATCH_SIZE_MIN":  "pipeline.batchSizeMin",
-		"TANGO_PIPELINE_BATCH_SIZE_MAX":  "pipeline.batchSizeMax",
-		"TANGO_PIPELINE_BATCH_WORKERS":   "pipeline.batchWorkers",
-		"TANGO_PIPELINE_CHANNEL_BUFFER":  "pipeline.channelBuffer",
-		"TANGO_PIPELINE_DEAD_LETTER_CAP": "pipeline.deadLetterCap",
-		"TANGO_BACKFILL_PROJECT_ID":      "backfill.projectID",
-		"TANGO_BACKFILL_PAGE_SIZE":       "backfill.pageSize",
-		"TANGO_BACKFILL_PAGE_RETRIES":    "backfill.pageRetries",
-		"TANGO_BACKFILL_LIMIT":           "backfill.limit",
-	}
-	for envKey, cfgKey := range intKeys {
-		if val := os.Getenv(envKey); val != "" {
-			var intVal int
-			if _, err := fmt.Sscanf(val, "%d", &intVal); err == nil {
-				v.Set(cfgKey, intVal)
-			}
-		}
-	}
-
-	// Process duration types
-	durationKeys := map[string]string{
-		"TANGO_MONGO_MAXELAPSEDTIME":         "mongo.maxElapsedTime",
-		"TANGO_MONGO_CONNECTTIMEOUT":         "mongo.connectTimeout",
-		"TANGO_MONGO_SERVERSELECTIONTIMEOUT": "mongo.serverSelectionTimeout",
-		"TANGO_SOURCE_RESCANINTERVAL":        "source.rescanInterval",
-		"TANGO_SOURCE_POLLINTERVAL":          "source.pollInterval",
-		"TANGO_PIPELINE_FLUSH_INTERVAL":      "pipeline.flushInterval",
-		"TANGO_BACKFILL_POLL_INTERVAL":       "backfill.pollInterval",
-		"TANGO_BACKFILL_POLL_TIMEOUT":        "backfill.pollTimeout",
-		"TANGO_REMOTE_CONFIG_SYNC_INTERVAL":  "remoteConfig.syncInterval",
-		"TANGO_AGENT_POLL_INTERVAL":          "agent.pollInterval",
-		"TANGO_AGENT_LEASE_DURATION":         "agent.leaseDuration",
-		"TANGO_AGENT_HEARTBEAT_INTERVAL":     "agent.heartbeatInterval",
-		"TANGO_AGENT_INSTANCE_TTL":           "agent.instanceTTL",
-	}
-	for envKey, cfgKey := range durationKeys {
-		if val := os.Getenv(envKey); val != "" {
-			if d, err := time.ParseDuration(val); err == nil {
-				v.Set(cfgKey, d)
-			}
-		}
-	}
-
-	// Process bool types
-	boolKeys := map[string]string{
-		"TANGO_BACKFILL_PAGINATE":            "backfill.paginate",
-		"TANGO_BACKFILL_FORCE_SKIP_EXISTING": "backfill.forceSkipExisting",
-		"TANGO_BACKFILL_SKIP_LOCAL_FILTER":   "backfill.skipLocalFilter",
-		"TANGO_REMOTE_CONFIG_ENABLED":        "remoteConfig.enabled",
-	}
-	for envKey, cfgKey := range boolKeys {
-		if val := os.Getenv(envKey); val != "" {
-			if val == "true" || val == "1" {
-				v.Set(cfgKey, true)
-			} else if val == "false" || val == "0" {
-				v.Set(cfgKey, false)
-			}
-		}
-	}
-
-	// Process string types (including instanceID special case)
-	stringKeys := map[string]string{
-		"TANGO_MODE":                            "mode",
-		"TANGO_INSTANCE_ID":                     "instanceID",
-		"TANGO_LOGGING_LEVEL":                   "logging.level",
-		"TANGO_LOGGING_FORMAT":                  "logging.format",
-		"TANGO_MONGO_URI":                       "mongo.uri",
-		"TANGO_SOURCE_TAILMODE":                 "source.tailMode",
-		"TANGO_BACKFILL_API_BASE_URL":           "backfill.apiBaseURL",
-		"TANGO_BACKFILL_TOKEN":                  "backfill.token",
-		"TANGO_BACKFILL_FILTER_TABLE":           "backfillFilter.table",
-		"TANGO_BACKFILL_PART_DATE_RANGE_START":  "backfill.partDateRange.start",
-		"TANGO_BACKFILL_PART_DATE_RANGE_END":    "backfill.partDateRange.end",
-		"TANGO_BACKFILL_EVENT_TIME_RANGE_START": "backfill.eventTimeRange.start",
-		"TANGO_BACKFILL_EVENT_TIME_RANGE_END":   "backfill.eventTimeRange.end",
-		"TANGO_BACKFILL_RUN_ID":                 "backfill.runID",
-		"TANGO_BACKFILL_PROGRESS_COLLECTION":    "backfill.progressCollection",
-		"TANGO_BACKFILL_PROXY":                  "backfill.proxy",
-		"TANGO_BACKFILL_SCHEMA_PREFIX":          "backfill.schemaPrefix",
-		"TANGO_REMOTE_CONFIG_COLLECTION":        "remoteConfig.collection",
-		"TANGO_REMOTE_CONFIG_DOCUMENT_ID":       "remoteConfig.documentID",
-		"TANGO_AGENT_TASKS_COLLECTION":          "agent.tasksCollection",
-		"TANGO_AGENT_INSTANCES_COLLECTION":      "agent.instancesCollection",
-	}
-	_ = overrides // suppress unused warning
-	for envKey, cfgKey := range stringKeys {
-		if val := os.Getenv(envKey); val != "" {
-			v.Set(cfgKey, val)
-		}
-	}
-}
-
-// setDefaults registers viper defaults for all fields.
-func setDefaults(v *viper.Viper) {
-	v.SetDefault("mode", ModeReport)
-	v.SetDefault("logging.level", "info")
-	v.SetDefault("logging.format", "text")
-	v.SetDefault("mongo.uri", "")
-	v.SetDefault("mongo.maxElapsedTime", "10s")
-	v.SetDefault("mongo.connectTimeout", "10s")
-	v.SetDefault("mongo.serverSelectionTimeout", "30s")
-	v.SetDefault("source.logPattern", []string{})
-	v.SetDefault("source.tailMode", TailModeHybrid)
-	v.SetDefault("source.rescanInterval", "30s")
-	v.SetDefault("source.pollInterval", "200ms")
-	v.SetDefault("source.maxLineBytes", 10*1024*1024)
-	v.SetDefault("pipeline.batchSize", 1000)
-	v.SetDefault("pipeline.batchSizeMin", 0)
-	v.SetDefault("pipeline.batchSizeMax", 0)
-	v.SetDefault("pipeline.batchWorkers", 2)
-	v.SetDefault("pipeline.flushInterval", "1s")
-	v.SetDefault("pipeline.channelBuffer", 0)
-	v.SetDefault("pipeline.deadLetterCap", 128)
-	v.SetDefault("filter.include", []string{})
-	v.SetDefault("filter.exclude", []string{})
 }
 
 // applyDefaults fills in zero-value fields with sensible defaults.
@@ -895,7 +630,7 @@ func (c *Config) Validate() error {
 	}
 	// Pre-compile filter expressions to SQL only when the backfill mode is in
 	// play; otherwise we don't want a malformed SQL pushdown to block the
-	// daemon/once/ingest paths.
+	// report path.
 	if c.Mode == ModeBackfill {
 		switch c.BackfillFilter.Table {
 		case BackfillTableEvent, BackfillTableUser:
@@ -974,7 +709,7 @@ func (b *BackfillConfig) validate(table string) error {
 
 // BuildFilter compiles the configured filter expressions. Validate must have
 // been called first; this method is intended to be invoked by runtime
-// components (daemon, once, ingest) that need a ready-to-use filter.
+// components (the report service / upload paths) that need a ready-to-use filter.
 func (c *Config) BuildFilter() (*filter.Filter, error) {
 	return filter.New(c.Filter.Include, c.Filter.Exclude)
 }

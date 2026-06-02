@@ -23,10 +23,10 @@ import (
 	"rocket-nano/tools/tango/internal/process/pipeline"
 )
 
-// statsReportInterval is how often the daemon logs processing statistics.
+// statsReportInterval is how often the report service logs processing statistics.
 const statsReportInterval = 60 * time.Second
 
-// runStats tracks processing metrics for the daemon mode.
+// runStats tracks processing metrics for the report service.
 type runStats struct {
 	totalLines     atomic.Int64
 	parsedOK       atomic.Int64
