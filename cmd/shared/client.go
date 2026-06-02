@@ -23,15 +23,38 @@ func ConfigFlag(cmd *cobra.Command) string {
 	return v
 }
 
-// ClientConfigPath resolves the client config file: --config if set, else the
-// auto-detected client.{yaml,yml,json} next to the binary.
-func ClientConfigPath(cmd *cobra.Command) string {
-	return cli.ResolveConfigPath(ConfigFlag(cmd), "client.yaml", "client.yml", "client.json")
+// ClientLoader resolves and loads the ClientConfig a client-driven command runs
+// on. The role commands (operator, gateway) load the unified RoleConfig schema;
+// the legacy client wrapper loads the legacy client schema. Each returns a
+// ready-to-use ClientConfig and a logger derived from its logging level.
+type ClientLoader func(cmd *cobra.Command) (config.ClientConfig, *logrus.Logger, error)
+
+// OperatorConfig loads operator.{yaml,yml,json} via the unified RoleConfig
+// schema.
+func OperatorConfig(cmd *cobra.Command) (config.ClientConfig, *logrus.Logger, error) {
+	path := cli.ResolveConfigPath(ConfigFlag(cmd), "operator.yaml", "operator.yml", "operator.json")
+	_, cc, err := config.LoadOperator(path, cmd.Flags())
+	if err != nil {
+		return config.ClientConfig{}, nil, err
+	}
+	return cc, cli.NewLogger(cc.Logging.Level), nil
 }
 
-// LoadClientConfig loads the client config (file + env + flags).
-func LoadClientConfig(cmd *cobra.Command) (config.ClientConfig, *logrus.Logger, error) {
-	cc, err := config.LoadClient(ClientConfigPath(cmd), cmd.Flags())
+// GatewayConfig loads gateway.{yaml,yml,json} via the unified RoleConfig schema.
+func GatewayConfig(cmd *cobra.Command) (config.ClientConfig, *logrus.Logger, error) {
+	path := cli.ResolveConfigPath(ConfigFlag(cmd), "gateway.yaml", "gateway.yml", "gateway.json")
+	_, cc, err := config.LoadGateway(path, cmd.Flags())
+	if err != nil {
+		return config.ClientConfig{}, nil, err
+	}
+	return cc, cli.NewLogger(cc.Logging.Level), nil
+}
+
+// LegacyClientConfig loads the legacy client.{yaml,yml,json} schema, used by the
+// deprecated `tango client` wrapper.
+func LegacyClientConfig(cmd *cobra.Command) (config.ClientConfig, *logrus.Logger, error) {
+	path := cli.ResolveConfigPath(ConfigFlag(cmd), "client.yaml", "client.yml", "client.json")
+	cc, err := config.LoadClient(path, cmd.Flags())
 	if err != nil {
 		return config.ClientConfig{}, nil, err
 	}
@@ -50,9 +73,10 @@ func BuildClient(cmd *cobra.Command, cc config.ClientConfig, logger *logrus.Logg
 	return sdk.New(cmd.Context(), opts...)
 }
 
-// LoadClient is the common path for commands that need a plain client.
-func LoadClient(cmd *cobra.Command, extra ...sdk.Option) (config.ClientConfig, *sdk.Client, *logrus.Logger, error) {
-	cc, logger, err := LoadClientConfig(cmd)
+// ConnectClient loads the config via the given loader and returns a connected
+// client. It is the common path for commands that need a plain client.
+func ConnectClient(cmd *cobra.Command, load ClientLoader, extra ...sdk.Option) (config.ClientConfig, *sdk.Client, *logrus.Logger, error) {
+	cc, logger, err := load(cmd)
 	if err != nil {
 		return config.ClientConfig{}, nil, nil, err
 	}

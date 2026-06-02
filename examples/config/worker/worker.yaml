@@ -1,0 +1,28 @@
+# tango worker run --config worker.yaml
+#
+# Task worker service: claim and execute report-sync / backfill / sql tasks
+# from the shared MongoDB task queue. Unified role-config schema (Phase 4):
+# runtime + tasks + remoteConfig (report-sync writes the remote-config doc).
+runtime:
+  logging:
+    level: info
+    format: text
+  mongo:
+    uri: "mongodb://localhost:27017/tango"
+    maxElapsedTime: 30s
+
+tasks:
+  instanceID: "worker-001"
+  collection: _tango_tasks
+  instancesCollection: _tango_instances
+  pollInterval: 5s
+  leaseTTL: 60s
+  heartbeatInterval: 30s
+  instanceTTL: 120s
+
+# Where report-sync tasks write the reporting filter so report services can
+# converge on it via their own remote-config sync loop.
+remoteConfig:
+  enabled: true
+  collection: _tango_config
+  documentID: default

@@ -16,10 +16,10 @@ func NewCommand() *cobra.Command {
 		Use:   "worker",
 		Short: "Task worker service: claim and execute report-sync, backfill, and sql tasks",
 	}
-	cmd.PersistentFlags().String("mongo.uri", "", "MongoDB connection URI (config key mongo.uri)")
-	cmd.PersistentFlags().String("logging.level", "", "log level: debug, info, warn, error (config key logging.level)")
-	cmd.PersistentFlags().String("instanceID", "", "worker instance id (alias for agent.instanceID; required)")
-	cmd.PersistentFlags().String("agent.instanceID", "", "worker instance id (config key agent.instanceID; required)")
+	cmd.PersistentFlags().String("runtime.mongo.uri", "", "MongoDB connection URI (config key runtime.mongo.uri)")
+	cmd.PersistentFlags().String("runtime.logging.level", "", "log level: debug, info, warn, error (config key runtime.logging.level)")
+	cmd.PersistentFlags().String("tasks.instanceID", "", "worker instance id (config key tasks.instanceID; required)")
+	cmd.PersistentFlags().String("instanceID", "", "worker instance id (alias for tasks.instanceID; required)")
 	cmd.AddCommand(newRunCmd())
 	return cmd
 }
@@ -30,8 +30,7 @@ func newRunCmd() *cobra.Command {
 		Short: "Run the task worker service",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			path := cli.ResolveConfigPath(shared.ConfigFlag(cmd),
-				"worker.yaml", "worker.yml", "worker.json",
-				"agent.yaml", "agent.yml", "agent.json")
+				"worker.yaml", "worker.yml", "worker.json")
 			return shared.RunWorkerService(cmd, path)
 		},
 	}

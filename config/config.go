@@ -871,7 +871,7 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("config: agent mode requires TANGO_INSTANCE_ID to be set")
 	}
 	if c.Mongo.URI == "" {
-		return fmt.Errorf("config: mongo.uri is required (daemon: generic.mongo.uri; client: mongo.uri — set in the config file, via env, or via flag)")
+		return fmt.Errorf("config: mongo.uri is required (role files: runtime.mongo.uri; legacy daemon: generic.mongo.uri; legacy client: mongo.uri — set in the config file, via env, or via flag)")
 	}
 	switch c.Source.TailMode {
 	case TailModeHybrid, TailModePoll, TailModeEvent:

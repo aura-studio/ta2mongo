@@ -8,6 +8,7 @@ import (
 
 	"rocket-nano/tools/tango/cmd/gateway"
 	"rocket-nano/tools/tango/cmd/operator"
+	"rocket-nano/tools/tango/cmd/shared"
 )
 
 // NewCommand builds the legacy `tango client` parent command. It reuses the
@@ -25,6 +26,6 @@ func NewCommand() *cobra.Command {
 	// Viper-native hierarchical overrides: the flag name is the full config key.
 	cmd.PersistentFlags().String("mongo.uri", "", "MongoDB connection URI (config key mongo.uri)")
 	cmd.PersistentFlags().String("logging.level", "", "log level: debug, info, warn, error (config key logging.level)")
-	cmd.AddCommand(append(operator.Subcommands(), gateway.ServeCommand())...)
+	cmd.AddCommand(append(operator.Subcommands(shared.LegacyClientConfig), gateway.ServeCommand(shared.LegacyClientConfig))...)
 	return cmd
 }

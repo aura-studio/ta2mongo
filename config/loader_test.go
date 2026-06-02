@@ -138,46 +138,128 @@ func TestLoadDaemon_HierarchicalFlags(t *testing.T) {
 	}
 }
 
-func TestLoadReport_RoleAliasesDoNotClobberLegacyGeneric(t *testing.T) {
+func TestLoadReport_Unified(t *testing.T) {
 	yaml := `
-generic:
+runtime:
   mongo:
-    uri: "mongodb://legacy/report"
+    uri: "mongodb://localhost/report"
 report:
   source:
     logPattern: ["/tmp/.*\\.log"]
+  filter:
+    include: ['#type == "track"']
+remoteConfig:
+  enabled: true
 `
-	_, rt, err := LoadReport(writeFile(t, "report.yaml", yaml), nil)
+	rc, rt, err := LoadReport(writeFile(t, "report.yaml", yaml), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rt.Mongo.URI != "mongodb://legacy/report" {
+	if rt.Mongo.URI != "mongodb://localhost/report" {
 		t.Errorf("LoadReport Mongo.URI = %q", rt.Mongo.URI)
 	}
+	if len(rt.Filter.Include) != 1 || rt.Filter.Include[0] != `#type == "track"` {
+		t.Errorf("report.filter -> runtime Filter = %v", rt.Filter.Include)
+	}
+	// The report loader never enables the task worker, regardless of file.
 	if rt.Agent.Enabled {
 		t.Error("LoadReport unexpectedly enabled task worker")
 	}
+	if !rt.RemoteConfig.Enabled {
+		t.Error("LoadReport did not honour remoteConfig.enabled")
+	}
+	if len(rc.Report.Source.LogPattern) != 1 {
+		t.Errorf("RoleConfig logPattern = %v", rc.Report.Source.LogPattern)
+	}
 }
 
-func TestLoadWorker_AllowsWorkerOnlyConfig(t *testing.T) {
+func TestLoadReport_RequiresLogPattern(t *testing.T) {
+	yaml := "runtime:\n  mongo:\n    uri: \"mongodb://localhost/report\"\n"
+	if _, _, err := LoadReport(writeFile(t, "report.yaml", yaml), nil); err == nil {
+		t.Fatal("expected error: report without logPattern")
+	}
+}
+
+func TestLoadWorker_Unified(t *testing.T) {
+	// runtime.mongo.uri via a hierarchical flag; instanceID via the convenience
+	// alias that maps onto tasks.instanceID.
 	fs := pflag.NewFlagSet("worker", pflag.ContinueOnError)
-	fs.String("mongo.uri", "", "")
+	fs.String("runtime.mongo.uri", "", "")
 	fs.String("instanceID", "", "")
-	if err := fs.Parse([]string{"--mongo.uri", "mongodb://flag/worker", "--instanceID", "worker-1"}); err != nil {
+	if err := fs.Parse([]string{"--runtime.mongo.uri", "mongodb://flag/worker", "--instanceID", "worker-1"}); err != nil {
 		t.Fatal(err)
 	}
-	_, rt, err := LoadWorker("", fs)
+	rc, rt, err := LoadWorker("", fs)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if rt.Mongo.URI != "mongodb://flag/worker" {
 		t.Errorf("LoadWorker Mongo.URI = %q", rt.Mongo.URI)
 	}
-	if rt.InstanceID != "worker-1" {
-		t.Errorf("LoadWorker InstanceID = %q", rt.InstanceID)
+	if rt.InstanceID != "worker-1" || rc.Tasks.InstanceID != "worker-1" {
+		t.Errorf("LoadWorker InstanceID = %q (tasks=%q)", rt.InstanceID, rc.Tasks.InstanceID)
 	}
 	if !rt.Agent.Enabled || !rt.RemoteConfig.Enabled {
 		t.Errorf("worker switches: agent=%v remoteConfig=%v", rt.Agent.Enabled, rt.RemoteConfig.Enabled)
+	}
+}
+
+func TestLoadWorker_RequiresInstanceID(t *testing.T) {
+	yaml := "runtime:\n  mongo:\n    uri: \"mongodb://localhost/worker\"\n"
+	if _, _, err := LoadWorker(writeFile(t, "worker.yaml", yaml), nil); err == nil {
+		t.Fatal("expected error: worker without tasks.instanceID")
+	}
+}
+
+func TestLoadGateway_Unified(t *testing.T) {
+	yaml := `
+runtime:
+  mongo:
+    uri: "mongodb://localhost/gw"
+gateway:
+  addr: ":9090"
+upload:
+  string:
+    batchSize: 250
+tasks:
+  collection: custom_tasks
+`
+	_, cc, err := LoadGateway(writeFile(t, "gateway.yaml", yaml), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cc.Mongo.URI != "mongodb://localhost/gw" {
+		t.Errorf("gateway Mongo.URI = %q", cc.Mongo.URI)
+	}
+	if cc.Server.Addr != ":9090" {
+		t.Errorf("gateway addr = %q", cc.Server.Addr)
+	}
+	if cc.StringUpload.BatchSize != 250 {
+		t.Errorf("upload.string.batchSize = %d", cc.StringUpload.BatchSize)
+	}
+	if cc.Publish.TasksCollection != "custom_tasks" {
+		t.Errorf("tasks.collection -> publish = %q", cc.Publish.TasksCollection)
+	}
+}
+
+func TestLoadOperator_Unified(t *testing.T) {
+	yaml := `
+runtime:
+  mongo:
+    uri: "mongodb://localhost/op"
+backfillFilter:
+  table: user
+`
+	_, cc, err := LoadOperator(writeFile(t, "operator.yaml", yaml), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cc.BackfillFilter.Table != "user" {
+		t.Errorf("backfillFilter.table = %q", cc.BackfillFilter.Table)
+	}
+	// Publish defaults must be filled even when tasks is omitted.
+	if cc.Publish.TasksCollection != DefaultTasksCollection {
+		t.Errorf("publish default = %q", cc.Publish.TasksCollection)
 	}
 }
 
@@ -250,6 +332,23 @@ func TestExampleClientConfigsLoad(t *testing.T) {
 				t.Errorf("BackfillRuntime invalid: %v", err)
 			}
 		})
+	}
+}
+
+// TestExampleRoleConfigsLoad ensures the shipped unified role examples
+// (report/worker/gateway/operator) parse and validate under their loaders.
+func TestExampleRoleConfigsLoad(t *testing.T) {
+	if _, _, err := LoadReport("../examples/config/report/report.yaml", nil); err != nil {
+		t.Errorf("LoadReport(report.yaml): %v", err)
+	}
+	if _, _, err := LoadWorker("../examples/config/worker/worker.yaml", nil); err != nil {
+		t.Errorf("LoadWorker(worker.yaml): %v", err)
+	}
+	if _, _, err := LoadGateway("../examples/config/gateway/gateway.yaml", nil); err != nil {
+		t.Errorf("LoadGateway(gateway.yaml): %v", err)
+	}
+	if _, _, err := LoadOperator("../examples/config/operator/operator.yaml", nil); err != nil {
+		t.Errorf("LoadOperator(operator.yaml): %v", err)
 	}
 }
 

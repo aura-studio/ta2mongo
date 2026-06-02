@@ -30,7 +30,7 @@ func newLocalCmd() *cobra.Command {
 			path := cli.ResolveConfigPath(shared.ConfigFlag(cmd),
 				"local.yaml", "local.yml", "local.json",
 				"standalone.yaml", "standalone.yml", "standalone.json")
-			return shared.RunReportService(cmd, path)
+			return shared.RunDaemon(cmd, config.DaemonModeStandalone, path)
 		},
 	}
 }

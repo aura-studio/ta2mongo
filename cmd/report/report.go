@@ -16,9 +16,9 @@ func NewCommand() *cobra.Command {
 		Use:   "report",
 		Short: "Report service: tail TA logs, filter, and write to MongoDB",
 	}
-	cmd.PersistentFlags().String("mongo.uri", "", "MongoDB connection URI (config key mongo.uri)")
-	cmd.PersistentFlags().String("logging.level", "", "log level: debug, info, warn, error (config key logging.level)")
-	cmd.PersistentFlags().Bool("remote-config.enabled", false, "enable report remote-config hot reload")
+	cmd.PersistentFlags().String("runtime.mongo.uri", "", "MongoDB connection URI (config key runtime.mongo.uri)")
+	cmd.PersistentFlags().String("runtime.logging.level", "", "log level: debug, info, warn, error (config key runtime.logging.level)")
+	cmd.PersistentFlags().Bool("remoteConfig.enabled", false, "enable report remote-config hot reload (config key remoteConfig.enabled)")
 	cmd.AddCommand(newRunCmd())
 	return cmd
 }
@@ -29,8 +29,7 @@ func newRunCmd() *cobra.Command {
 		Short: "Run the report service",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			path := cli.ResolveConfigPath(shared.ConfigFlag(cmd),
-				"report.yaml", "report.yml", "report.json",
-				"standalone.yaml", "standalone.yml", "standalone.json")
+				"report.yaml", "report.yml", "report.json")
 			return shared.RunReportService(cmd, path)
 		},
 	}
