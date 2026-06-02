@@ -33,7 +33,11 @@ import (
 func NewCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "daemon",
-		Short: "Daemon role: standalone (report only) or agent (report + sync + tasks)",
+		Short: "Legacy daemon role: use tango report, worker, or profile instead",
+	}
+	cmd.Run = func(cmd *cobra.Command, _ []string) {
+		cmd.PrintErrln("warning: 'tango daemon' is deprecated; use 'tango report run', 'tango worker run', or 'tango profile managed'")
+		_ = cmd.Help()
 	}
 	// Viper-native hierarchical overrides shared by both modes: the flag name is
 	// the full config key.
@@ -43,11 +47,94 @@ func NewCommand() *cobra.Command {
 	return cmd
 }
 
+func NewReportCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "report",
+		Short: "Report service: tail TA logs, filter, and write to MongoDB",
+	}
+	cmd.PersistentFlags().String("mongo.uri", "", "MongoDB connection URI (config key mongo.uri)")
+	cmd.PersistentFlags().String("logging.level", "", "log level: debug, info, warn, error (config key logging.level)")
+	cmd.PersistentFlags().Bool("remote-config.enabled", false, "enable report remote-config hot reload")
+	cmd.AddCommand(newReportRunCmd())
+	return cmd
+}
+
+func NewWorkerCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "worker",
+		Short: "Task worker service: claim and execute report-sync, backfill, and sql tasks",
+	}
+	cmd.PersistentFlags().String("mongo.uri", "", "MongoDB connection URI (config key mongo.uri)")
+	cmd.PersistentFlags().String("logging.level", "", "log level: debug, info, warn, error (config key logging.level)")
+	cmd.PersistentFlags().String("instanceID", "", "worker instance id (alias for agent.instanceID; required)")
+	cmd.PersistentFlags().String("agent.instanceID", "", "worker instance id (config key agent.instanceID; required)")
+	cmd.AddCommand(newWorkerRunCmd())
+	return cmd
+}
+
+func NewProfileCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "profile",
+		Short: "Compatibility deployment profiles composed from role services",
+	}
+	cmd.AddCommand(newProfileLocalCmd(), newProfileManagedCmd())
+	return cmd
+}
+
+func newReportRunCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "run",
+		Short: "Run the report service",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			path := cli.ResolveConfigPath(configFlag(cmd), "report.yaml", "report.yml", "report.json", "standalone.yaml", "standalone.yml", "standalone.json")
+			return runReportService(cmd, path)
+		},
+	}
+}
+
+func newWorkerRunCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "run",
+		Short: "Run the task worker service",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			path := cli.ResolveConfigPath(configFlag(cmd), "worker.yaml", "worker.yml", "worker.json", "agent.yaml", "agent.yml", "agent.json")
+			return runWorkerService(cmd, path)
+		},
+	}
+}
+
+func newProfileLocalCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "local",
+		Short: "Compatibility profile for report-only local deployment",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cmd.PrintErrln("warning: 'tango profile local' is a compatibility profile; prefer 'tango report run'")
+			path := cli.ResolveConfigPath(configFlag(cmd), "local.yaml", "local.yml", "local.json", "standalone.yaml", "standalone.yml", "standalone.json")
+			return runReportService(cmd, path)
+		},
+	}
+}
+
+func newProfileManagedCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "managed",
+		Short: "Compatibility profile for report + task worker in one process",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cmd.PrintErrln("warning: 'tango profile managed' is a compatibility profile; prefer separate 'tango report run' and 'tango worker run' processes")
+			path := cli.ResolveConfigPath(configFlag(cmd), "managed.yaml", "managed.yml", "managed.json", "agent.yaml", "agent.yml", "agent.json")
+			return runDaemon(cmd, config.DaemonModeAgent, path)
+		},
+	}
+	cmd.Flags().String("agent.instanceID", "", "agent instance id (config key agent.instanceID; required)")
+	return cmd
+}
+
 func newStandaloneCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "standalone",
 		Short: "Standalone reporting: tail TA logs into MongoDB (local filter, no remote config, no tasks)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			cmd.PrintErrln("warning: 'tango daemon standalone' is deprecated; use 'tango report run'")
 			path := cli.ResolveConfigPath(configFlag(cmd), "standalone.yaml", "standalone.yml", "standalone.json")
 			return runDaemon(cmd, config.DaemonModeStandalone, path)
 		},
@@ -59,12 +146,52 @@ func newAgentCmd() *cobra.Command {
 		Use:   "agent",
 		Short: "Agent: report + remote-config sync + claim/execute tasks (report-sync / backfill / sql)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			cmd.PrintErrln("warning: 'tango daemon agent' is deprecated; use separate 'tango report run' and 'tango worker run', or 'tango profile managed'")
 			path := cli.ResolveConfigPath(configFlag(cmd), "agent.yaml", "agent.yml", "agent.json")
 			return runDaemon(cmd, config.DaemonModeAgent, path)
 		},
 	}
 	cmd.Flags().String("agent.instanceID", "", "agent instance id (config key agent.instanceID; required)")
 	return cmd
+}
+
+func runReportService(cmd *cobra.Command, path string) error {
+	_, rt, err := config.LoadReport(path, cmd.Flags())
+	if err != nil {
+		return err
+	}
+	logger := cli.NewLogger(rt.Logging.Level)
+	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	logger.WithFields(logrus.Fields{
+		"pid":       os.Getpid(),
+		"go_procs":  runtime.GOMAXPROCS(0),
+		"mongo_uri": maskURI(rt.Mongo.URI),
+		"role":      "report",
+	}).Info("tango report: starting")
+
+	return runReport(ctx, rt, logger, false)
+}
+
+func runWorkerService(cmd *cobra.Command, path string) error {
+	_, rt, err := config.LoadWorker(path, cmd.Flags())
+	if err != nil {
+		return err
+	}
+	logger := cli.NewLogger(rt.Logging.Level)
+	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	logger.WithFields(logrus.Fields{
+		"pid":        os.Getpid(),
+		"go_procs":   runtime.GOMAXPROCS(0),
+		"mongo_uri":  maskURI(rt.Mongo.URI),
+		"role":       "worker",
+		"instanceID": rt.InstanceID,
+	}).Info("tango worker: starting")
+
+	return runWorker(ctx, rt, logger)
 }
 
 // configFlag reads the inherited --config persistent flag (empty when unset).
@@ -165,6 +292,24 @@ func startAgent(ctx context.Context, rt config.Config, logger *logrus.Logger, fl
 			logger.WithError(err).Error("tango daemon: agent shutdown error")
 		}
 	}, nil
+}
+
+func runWorker(ctx context.Context, rt config.Config, logger *logrus.Logger) error {
+	a, err := agent.New(ctx, rt, logger)
+	if err != nil {
+		logger.WithError(err).Error("tango worker: init failed")
+		return err
+	}
+	defer func() {
+		if err := a.Shutdown(); err != nil {
+			logger.WithError(err).Error("tango worker: shutdown error")
+		}
+	}()
+	if err := a.EnsureIndexes(ctx); err != nil {
+		logger.WithError(err).Error("tango worker: ensure indexes failed")
+		return err
+	}
+	return a.Run(ctx)
 }
 
 // maskURI masks the credentials portion of a MongoDB URI for safe logging.

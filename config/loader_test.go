@@ -138,6 +138,49 @@ func TestLoadDaemon_HierarchicalFlags(t *testing.T) {
 	}
 }
 
+func TestLoadReport_RoleAliasesDoNotClobberLegacyGeneric(t *testing.T) {
+	yaml := `
+generic:
+  mongo:
+    uri: "mongodb://legacy/report"
+report:
+  source:
+    logPattern: ["/tmp/.*\\.log"]
+`
+	_, rt, err := LoadReport(writeFile(t, "report.yaml", yaml), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.Mongo.URI != "mongodb://legacy/report" {
+		t.Errorf("LoadReport Mongo.URI = %q", rt.Mongo.URI)
+	}
+	if rt.Agent.Enabled {
+		t.Error("LoadReport unexpectedly enabled task worker")
+	}
+}
+
+func TestLoadWorker_AllowsWorkerOnlyConfig(t *testing.T) {
+	fs := pflag.NewFlagSet("worker", pflag.ContinueOnError)
+	fs.String("mongo.uri", "", "")
+	fs.String("instanceID", "", "")
+	if err := fs.Parse([]string{"--mongo.uri", "mongodb://flag/worker", "--instanceID", "worker-1"}); err != nil {
+		t.Fatal(err)
+	}
+	_, rt, err := LoadWorker("", fs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.Mongo.URI != "mongodb://flag/worker" {
+		t.Errorf("LoadWorker Mongo.URI = %q", rt.Mongo.URI)
+	}
+	if rt.InstanceID != "worker-1" {
+		t.Errorf("LoadWorker InstanceID = %q", rt.InstanceID)
+	}
+	if !rt.Agent.Enabled || !rt.RemoteConfig.Enabled {
+		t.Errorf("worker switches: agent=%v remoteConfig=%v", rt.Agent.Enabled, rt.RemoteConfig.Enabled)
+	}
+}
+
 func TestLoadClient_JSON(t *testing.T) {
 	json := `{
   "mongo": {"uri": "mongodb://localhost/tango"},

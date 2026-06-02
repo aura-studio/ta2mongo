@@ -4,13 +4,17 @@
 [usage.md](usage.md)，设计与数据流见 [arch.md](arch.md)。完整可运行样例见
 [examples/config](../examples/config)。
 
-## 两份配置文件，三种默认名
+## 配置文件与角色命令
 
 | 角色 / 模式 | 子命令 | schema | `--config` 留空时默认读取 |
 |------|--------|--------|------|
-| daemon · standalone | `tango daemon standalone` | DaemonConfig | `standalone.{yaml,yml,json}` |
-| daemon · agent | `tango daemon agent` | DaemonConfig | `agent.{yaml,yml,json}` |
-| client | `tango client <subcmd>` | ClientConfig | `client.{yaml,yml,json}` |
+| report service | `tango report run` | DaemonConfig 的 generic + report | `report.{yaml,yml,json}`，fallback `standalone.{yaml,yml,json}` |
+| worker service | `tango worker run` | DaemonConfig 的 generic + agent + report.filter.remote | `worker.{yaml,yml,json}`，fallback `agent.{yaml,yml,json}` |
+| gateway service | `tango gateway serve` | ClientConfig | `client.{yaml,yml,json}` |
+| operator CLI | `tango operator <subcmd>` | ClientConfig | `client.{yaml,yml,json}` |
+| legacy daemon standalone | `tango daemon standalone` | DaemonConfig | `standalone.{yaml,yml,json}` |
+| legacy daemon agent | `tango daemon agent` | DaemonConfig | `agent.{yaml,yml,json}` |
+| legacy client | `tango client <subcmd>` | ClientConfig | `client.{yaml,yml,json}` |
 
 默认文件在**二进制同级目录**按 `yaml → yml → json` 取首个存在者；各子命令只读自己的
 文件（standalone 不读 agent 文件，反之亦然）。文件缺失或解析为空时静默跳过。
@@ -20,8 +24,8 @@
 1. 内置默认值
 2. 配置文件（YAML/JSON，按扩展名识别）
 3. `TANGO_*` 环境变量
-4. CLI flag（完整层级名，如 `--generic.mongo.uri` / `--agent.instanceID` / client `--mongo.uri`；`--config` 是文件路径）
-5. 远程配置文档（仅 agent 模式、仅上报 `filter` 热生效；report-sync 任务写入该文档）
+4. CLI flag（完整层级名，如 `--mongo.uri` / `--instanceID` / legacy `--generic.mongo.uri` / `--agent.instanceID`；`--config` 是文件路径）
+5. 远程配置文档（仅 report service 启用 remote config 或 legacy agent/profile managed 时，仅上报 `filter` 热生效；report-sync 任务写入该文档）
 
 ### 环境变量映射
 
@@ -30,19 +34,29 @@
 
 | 配置键 | 环境变量 |
 |--------|----------|
-| daemon `generic.mongo.uri` | `TANGO_GENERIC_MONGO_URI` |
-| daemon `generic.logging.level` | `TANGO_GENERIC_LOGGING_LEVEL` |
+| report/worker alias `mongo.uri` | `TANGO_MONGO_URI` |
+| report/worker alias `logging.level` | `TANGO_LOGGING_LEVEL` |
+| legacy daemon `generic.mongo.uri` | `TANGO_GENERIC_MONGO_URI` |
+| legacy daemon `generic.logging.level` | `TANGO_GENERIC_LOGGING_LEVEL` |
 | daemon `report.source.tailMode` | `TANGO_REPORT_SOURCE_TAILMODE` |
-| daemon `agent.instanceID` | `TANGO_AGENT_INSTANCEID` |
-| client `mongo.uri` | `TANGO_MONGO_URI` |
+| worker alias `instanceID` | `TANGO_INSTANCEID` |
+| legacy daemon `agent.instanceID` | `TANGO_AGENT_INSTANCEID` |
+| gateway/operator `mongo.uri` | `TANGO_MONGO_URI` |
 
 ---
 
-## daemon 配置（DaemonConfig）
+## report / worker / legacy daemon 配置（DaemonConfig）
 
-三部分：`generic` / `report` / `agent`。运行模式由子命令决定,不是配置开关——因此
-**没有 `enabled` 字段**。standalone 只用 `generic` + `report`（忽略 `agent` 与
-`report.filter.remote`）；agent 额外启用 `report.filter.remote` 配置同步与 `agent` 任务派发。
+三部分：`generic` / `report` / `agent`。新角色命令会把角色化参数映射到这个 schema：
+
+- `tango report run --mongo.uri` → `generic.mongo.uri`
+- `tango report run --logging.level` → `generic.logging.level`
+- `tango worker run --instanceID` → `agent.instanceID`
+- `tango worker run --mongo.uri` → `generic.mongo.uri`
+
+legacy `daemon standalone` 只用 `generic` + `report`；legacy `daemon agent` 额外启用 `report.filter.remote` 配置同步与 `agent` 任务派发。
+
+新 `worker run` 只用 `generic` + `agent` + `report.filter.remote`，不要求 `report.source.logPattern`。
 
 ### generic（两种模式都用）
 
@@ -74,7 +88,7 @@
 | `report.filter.local.include` | optional | `[]`(全放行) | expr 表达式，OR 语义命中其一即保留 |
 | `report.filter.local.exclude` | optional | `[]` | 命中其一即丢弃（在 include 之后） |
 
-### report.filter.remote（仅 agent 模式生效）
+### report.filter.remote（report remote config / worker report-sync / legacy agent 生效）
 
 | 键 | required/optional | 默认 | 说明 |
 |----|----|----|----|
@@ -82,14 +96,13 @@
 | `report.filter.remote.documentID` | optional | `default` | 配置文档 `_id` |
 | `report.filter.remote.syncInterval` | optional | `1h` | 重新拉取并热重载的间隔 |
 
-> 是否启用同步由模式决定（agent 开、standalone 关），无 `enabled` 字段。连接类字段
-> （`generic.mongo.uri` 等）永不可被远端覆盖；只有上报 `filter` 支持运行时热生效。
+> 在 `tango report run` 中，可通过 `--remote-config.enabled` 启用同步；legacy agent/profile managed 默认启用。连接类字段（`generic.mongo.uri` 等）永不可被远端覆盖；只有上报 `filter` 支持运行时热生效。
 
-### agent（仅 agent 模式生效）
+### agent（worker service / legacy agent 生效）
 
 | 键 | required/optional | 默认 | 说明 |
 |----|----|----|----|
-| `agent.instanceID` | **required**(agent 模式) | — | 实例唯一标识；也可用 `--agent.instanceID` / `TANGO_AGENT_INSTANCEID` |
+| `agent.instanceID` | **required**(worker / legacy agent) | — | 实例唯一标识；worker 可用 `--instanceID`，legacy 可用 `--agent.instanceID` |
 | `agent.tasksCollection` | optional | `_tango_tasks` | 任务队列集合 |
 | `agent.instancesCollection` | optional | `_tango_instances` | 实例心跳集合（TTL 过期） |
 | `agent.pollInterval` | optional | `10s` | 轮询认领任务间隔 |
@@ -103,9 +116,9 @@
 
 ---
 
-## client 配置（ClientConfig）
+## gateway / operator / legacy client 配置（ClientConfig）
 
-client 用扁平的 `mongo`（连接串 `TANGO_MONGO_URI`），按五项功能分区，外加 `server`：
+gateway 和 operator 复用现有 ClientConfig。它使用扁平的 `mongo`（连接串 `TANGO_MONGO_URI`），按五项功能分区，外加 `server`：
 
 | 段 | 关键键（默认） | 用途 |
 |----|----|----|
@@ -116,7 +129,7 @@ client 用扁平的 `mongo`（连接串 `TANGO_MONGO_URI`），按五项功能�
 | `backfillFilter` | `table`(`event`)、`events`、`include`、`exclude` | 回填选表与谓词 |
 | `sql` | `schemaPrefix` | 临时 SQL 的执行覆盖（连接取自 backfill） |
 | `publish` | `tasksCollection`(`_tango_tasks`)、`instancesCollection`(`_tango_instances`)、`instanceTTL`(90s) | 任务发布端 |
-| `server` | `addr`(`:8080`) | `tango client serve` 监听地址 |
+| `server` | `addr`(`:8080`) | `tango gateway serve` / legacy `tango client serve` 监听地址 |
 
 ### backfill（client backfill / sql；agent 的 backfill/sql 任务参数来自任务 payload，不读此段）
 

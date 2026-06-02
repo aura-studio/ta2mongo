@@ -1,6 +1,4 @@
-// Package client implements the `tango client` subcommand tree: the five client
-// functions (string upload, file upload, backfill, ad-hoc SQL, task publishing)
-// as one-shot CLI subcommands plus the HTTP/REST server (`tango client serve`).
+// Package client wires operator/gateway commands and legacy client wrappers.
 package client
 
 import (
@@ -18,16 +16,41 @@ import (
 	"rocket-nano/tools/tango/internal/core/cli"
 )
 
-// NewCommand builds the `tango client` parent command and its subcommands.
 func NewCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "client",
-		Short: "Client role: upload, backfill, sql, and task publishing",
+		Short: "Legacy client role: use tango operator or tango gateway instead",
+	}
+	cmd.Run = func(cmd *cobra.Command, _ []string) {
+		cmd.PrintErrln("warning: 'tango client' is deprecated; use 'tango operator' for one-shot commands or 'tango gateway serve' for HTTP")
+		_ = cmd.Help()
 	}
 	// Viper-native hierarchical overrides: the flag name is the full config key.
 	cmd.PersistentFlags().String("mongo.uri", "", "MongoDB connection URI (config key mongo.uri)")
 	cmd.PersistentFlags().String("logging.level", "", "log level: debug, info, warn, error (config key logging.level)")
 	cmd.AddCommand(newIngestCmd(), newUploadCmd(), newBackfillCmd(), newSQLCmd(), newPublishCmd(), newServeCmd())
+	return cmd
+}
+
+func NewOperatorCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "operator",
+		Short: "Operator CLI: one-shot ingest, upload, backfill, sql, and task publishing",
+	}
+	cmd.PersistentFlags().String("mongo.uri", "", "MongoDB connection URI (config key mongo.uri)")
+	cmd.PersistentFlags().String("logging.level", "", "log level: debug, info, warn, error (config key logging.level)")
+	cmd.AddCommand(newIngestCmd(), newUploadCmd(), newBackfillCmd(), newSQLCmd(), newPublishCmd())
+	return cmd
+}
+
+func NewGatewayCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "gateway",
+		Short: "HTTP gateway service exposing ingest, upload, backfill, sql, and publish APIs",
+	}
+	cmd.PersistentFlags().String("mongo.uri", "", "MongoDB connection URI (config key mongo.uri)")
+	cmd.PersistentFlags().String("logging.level", "", "log level: debug, info, warn, error (config key logging.level)")
+	cmd.AddCommand(newServeCmd())
 	return cmd
 }
 
