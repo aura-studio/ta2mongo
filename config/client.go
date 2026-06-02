@@ -1,17 +1,12 @@
 package config
 
-import (
-	"time"
+import "time"
 
-	"github.com/spf13/pflag"
-	"github.com/spf13/viper"
-)
-
-// ClientConfig is the schema of the client config file (client.yaml /
-// client.json). The client is the operator/SDK role; its functionality is
-// partitioned into five independently-configured sections plus an HTTP server
-// block for the `serve` face. instanceID is NOT a client concept — it belongs
-// to the daemon's agent.
+// ClientConfig is the runtime configuration the client SDK / gateway / operator
+// commands consume. It is the projection target of the unified RoleConfig
+// (see RoleConfig.Client in role.go): its functionality is partitioned into the
+// upload/backfill/sql/publish sections plus an HTTP server block for the
+// gateway face. instanceID is NOT a client concept — it belongs to the worker.
 type ClientConfig struct {
 	Logging LoggingConfig `mapstructure:"logging"`
 	Mongo   MongoConfig   `mapstructure:"mongo"`
@@ -74,24 +69,6 @@ const DefaultFileUploadCheckpointCollection = "_tango_fileupload"
 // DefaultServerAddr is the default HTTP listen address for `tango serve`.
 const DefaultServerAddr = ":8080"
 
-// LoadClient loads and validates a client config from path (+ env + flags).
-func LoadClient(path string, flags *pflag.FlagSet) (ClientConfig, error) {
-	v := newViper()
-	setClientDefaults(v)
-	if err := readConfigFile(v, path); err != nil {
-		return ClientConfig{}, err
-	}
-	if err := bindFlagsTo(v, flags); err != nil {
-		return ClientConfig{}, err
-	}
-	var cc ClientConfig
-	if err := v.Unmarshal(&cc, durationDecodeHook()); err != nil {
-		return ClientConfig{}, err
-	}
-	cc.applyDefaults()
-	return cc, nil
-}
-
 func (c *ClientConfig) applyDefaults() {
 	if c.Logging.Level == "" {
 		c.Logging.Level = "info"
@@ -148,18 +125,4 @@ func (c ClientConfig) SQLRuntime() Config {
 		rt.Backfill.SchemaPrefix = c.SQL.SchemaPrefix
 	}
 	return rt
-}
-
-func setClientDefaults(v *viper.Viper) {
-	v.SetDefault("logging.level", "info")
-	v.SetDefault("logging.format", "text")
-	v.SetDefault("mongo.uri", "")
-	v.SetDefault("mongo.maxElapsedTime", "10s")
-	v.SetDefault("mongo.connectTimeout", "10s")
-	v.SetDefault("mongo.serverSelectionTimeout", "30s")
-	v.SetDefault("stringUpload.batchSize", 1000)
-	v.SetDefault("fileUpload.logPattern", []string{})
-	v.SetDefault("fileUpload.maxLineBytes", 10*1024*1024)
-	v.SetDefault("backfillFilter.table", BackfillTableEvent)
-	v.SetDefault("server.addr", DefaultServerAddr)
 }

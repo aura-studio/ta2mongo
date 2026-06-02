@@ -9,32 +9,19 @@ tango gateway serve              # 常驻 HTTP/REST gateway
 tango operator <subcommand>      # 一次性操作命令
 ```
 
-旧命令仍保留兼容：
-
-```bash
-tango daemon standalone          # deprecated: use tango report run
-tango daemon agent               # deprecated: use tango report run + tango worker run, or tango profile managed
-tango client <subcommand>        # deprecated: use tango operator <subcommand>
-tango client serve               # deprecated: use tango gateway serve
-```
-
 ## 通用规则
 
 - `--config <path>`：配置文件路径，支持 `.yaml` / `.yml` / `.json`。文件不存在时静默跳过，回退到默认值 + 环境变量 + flag。
 - 留空时各角色命令在二进制同级目录查找自己的默认文件。
-- CLI flag 名即配置键（viper 原生层级）。角色命令使用统一 schema 的键：`--runtime.mongo.uri`、`--runtime.logging.level`、`--remoteConfig.enabled`、`--tasks.instanceID`（worker 另提供 `--instanceID` 简写别名）。旧 daemon 命令仍用 `--generic.mongo.uri`、`--agent.instanceID`。
+- CLI flag 名即配置键（viper 原生层级）。角色命令使用统一 schema 的键：`--runtime.mongo.uri`、`--runtime.logging.level`、`--remoteConfig.enabled`、`--tasks.instanceID`（worker 另提供 `--instanceID` 简写别名）。
 - 所有键均可用 `TANGO_*` 环境变量覆盖，嵌套键 `.` 转 `_` 并大写（如 `runtime.mongo.uri` → `TANGO_RUNTIME_MONGO_URI`）。
 
-| 角色命令 | 默认配置文件 | 文件 schema |
+| 角色命令 | 默认配置文件 | 文件 schema（统一 RoleConfig 的子集） |
 |---|---|---|
-| `tango report run` | `report.{yaml,yml,json}` | 统一 RoleConfig（runtime + report + remoteConfig） |
-| `tango worker run` | `worker.{yaml,yml,json}` | 统一 RoleConfig（runtime + tasks + remoteConfig） |
-| `tango gateway serve` | `gateway.{yaml,yml,json}` | 统一 RoleConfig（runtime + gateway + upload + tasks） |
-| `tango operator ...` | `operator.{yaml,yml,json}` | 统一 RoleConfig（runtime + upload + backfill + tasks） |
-| `tango profile local` | `local.{yaml,yml,json}` → `standalone.{yaml,yml,json}` | 旧 daemon schema（兼容） |
-| `tango profile managed` | `managed.{yaml,yml,json}` → `agent.{yaml,yml,json}` | 旧 daemon schema（兼容） |
-
-> profile 与 daemon / client 兼容命令继续读取旧的 daemon / client 文件 schema；report / worker / gateway / operator 角色命令读取统一 RoleConfig schema。
+| `tango report run` | `report.{yaml,yml,json}` | runtime + report + remoteConfig |
+| `tango worker run` | `worker.{yaml,yml,json}` | runtime + tasks + remoteConfig |
+| `tango gateway serve` | `gateway.{yaml,yml,json}` | runtime + gateway + upload + tasks |
+| `tango operator ...` | `operator.{yaml,yml,json}` | runtime + upload + backfill + tasks |
 
 ## Report Service
 
@@ -126,20 +113,6 @@ tango operator publish sql 'SELECT * FROM v_event_35 LIMIT 10'
 | `publish report-sync` | 发布上报同步任务 | `--include`、`--exclude`、`--target` |
 | `publish backfill` | 发布回填任务 | `--target` |
 | `publish sql <statement>` | 发布临时 SQL 任务 | `--target` |
-
-## Profile 兼容层
-
-profile 是组合启动方式，不是基础角色。
-
-```bash
-tango profile local
-tango profile managed --agent.instanceID node-1
-```
-
-| profile | 等价关系 | 建议 |
-|---|---|---|
-| `local` | 旧 `daemon standalone` | 新部署优先使用 `tango report run` |
-| `managed` | 旧 `daemon agent`，同进程启动 report + worker | 新部署优先拆成 `tango report run` + `tango worker run` |
 
 ## Go SDK
 

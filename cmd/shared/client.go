@@ -50,17 +50,6 @@ func GatewayConfig(cmd *cobra.Command) (config.ClientConfig, *logrus.Logger, err
 	return cc, cli.NewLogger(cc.Logging.Level), nil
 }
 
-// LegacyClientConfig loads the legacy client.{yaml,yml,json} schema, used by the
-// deprecated `tango client` wrapper.
-func LegacyClientConfig(cmd *cobra.Command) (config.ClientConfig, *logrus.Logger, error) {
-	path := cli.ResolveConfigPath(ConfigFlag(cmd), "client.yaml", "client.yml", "client.json")
-	cc, err := config.LoadClient(path, cmd.Flags())
-	if err != nil {
-		return config.ClientConfig{}, nil, err
-	}
-	return cc, cli.NewLogger(cc.Logging.Level), nil
-}
-
 // BuildClient constructs a connected client from the config, layering the given
 // functional options on top of the config-derived connection settings.
 func BuildClient(cmd *cobra.Command, cc config.ClientConfig, logger *logrus.Logger, extra ...sdk.Option) (*sdk.Client, error) {

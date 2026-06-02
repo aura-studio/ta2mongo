@@ -4,22 +4,17 @@
 [usage.md](usage.md)，设计与数据流见 [arch.md](arch.md)。完整可运行样例见
 [examples/config](../examples/config)。
 
-角色命令（report / worker / gateway / operator）使用**统一 RoleConfig schema**；
-兼容命令（daemon / client / profile）继续使用旧的 DaemonConfig / ClientConfig schema。
+四个角色命令（report / worker / gateway / operator）共用**统一 RoleConfig schema**，
+每个角色只取自己需要的段。没有 legacy 兼容 schema。
 
 ## 配置文件与角色命令
 
-| 角色 / 模式 | 子命令 | schema | `--config` 留空时默认读取 |
+| 角色 | 子命令 | RoleConfig 子集 | `--config` 留空时默认读取 |
 |------|--------|--------|------|
-| report service | `tango report run` | RoleConfig：`runtime` + `report` + `remoteConfig` | `report.{yaml,yml,json}` |
-| worker service | `tango worker run` | RoleConfig：`runtime` + `tasks` + `remoteConfig` | `worker.{yaml,yml,json}` |
-| gateway service | `tango gateway serve` | RoleConfig：`runtime` + `gateway` + `upload` + `tasks` | `gateway.{yaml,yml,json}` |
-| operator CLI | `tango operator <subcmd>` | RoleConfig：`runtime` + `upload` + `backfill` + `tasks` | `operator.{yaml,yml,json}` |
-| legacy daemon standalone | `tango daemon standalone` | DaemonConfig | `standalone.{yaml,yml,json}` |
-| legacy daemon agent | `tango daemon agent` | DaemonConfig | `agent.{yaml,yml,json}` |
-| legacy client | `tango client <subcmd>` | ClientConfig | `client.{yaml,yml,json}` |
-| profile local | `tango profile local` | DaemonConfig（兼容） | `local`→`standalone.{yaml,yml,json}` |
-| profile managed | `tango profile managed` | DaemonConfig（兼容） | `managed`→`agent.{yaml,yml,json}` |
+| report service | `tango report run` | `runtime` + `report` + `remoteConfig` | `report.{yaml,yml,json}` |
+| worker service | `tango worker run` | `runtime` + `tasks` + `remoteConfig` | `worker.{yaml,yml,json}` |
+| gateway service | `tango gateway serve` | `runtime` + `gateway` + `upload` + `tasks` | `gateway.{yaml,yml,json}` |
+| operator CLI | `tango operator <subcmd>` | `runtime` + `upload` + `backfill` + `tasks` | `operator.{yaml,yml,json}` |
 
 默认文件在**二进制同级目录**按 `yaml → yml → json` 取首个存在者；各子命令只读自己的
 文件。文件缺失或解析为空时静默跳过（回退到默认值 + 环境变量 + flag）。
@@ -44,9 +39,6 @@
 | `remoteConfig.enabled` | `TANGO_REMOTECONFIG_ENABLED` |
 | `tasks.instanceID` | `TANGO_TASKS_INSTANCEID` |
 | `gateway.addr` | `TANGO_GATEWAY_ADDR` |
-| legacy daemon `generic.mongo.uri` | `TANGO_GENERIC_MONGO_URI` |
-| legacy daemon `agent.instanceID` | `TANGO_AGENT_INSTANCEID` |
-| legacy client `mongo.uri` | `TANGO_MONGO_URI` |
 
 ---
 
@@ -160,32 +152,11 @@
 
 ---
 
-## 兼容 schema（legacy daemon / client）
-
-兼容命令保留旧文件 schema，便于平滑迁移。
-
-### DaemonConfig（daemon standalone/agent、profile local/managed）
-
-三部分：`generic`（logging + mongo）/ `report`（`source` / `pipeline` / `filter.local` 本地规则 +
-`filter.remote` 同步源）/ `agent`（任务设置：`instanceID`、`tasksCollection`、`pollInterval`、
-`leaseDuration`、`heartbeatInterval`、`instanceTTL` 等）。standalone 只用 `generic` + `report`；
-agent 额外启用 `filter.remote` 同步与 `agent` 任务派发。
-
-样例：[standalone](../examples/config/standalone)、[agent](../examples/config/agent)（yaml/json × max/min）。
-
-### ClientConfig（client 子命令、client serve）
-
-扁平 `logging` / `mongo`，按功能分区 `stringUpload` / `fileUpload` / `backfill` / `backfillFilter` /
-`sql` / `publish` / `server`（`server.addr` 为 `tango client serve` 监听地址）。样例：
-[examples/config/client](../examples/config/client)。
-
----
-
 ## 两种 filter
 
 | | 上报 filter | backfill filter |
 |---|---|---|
-| 位置 | 角色 `report.filter` / `upload.string.filter` / `upload.file.filter`；legacy daemon `report.filter.local` / client `stringUpload.filter`、`fileUpload.filter` | `backfillFilter` |
+| 位置 | `report.filter` / `upload.string.filter` / `upload.file.filter` | `backfillFilter` |
 | 维度 | `#type` / `#event_name` / `properties.*` | **表名(event/user)** + 事件/属性（**不含 #type**） |
 | 表达式 | `include` / `exclude`（expr-lang） | `include` / `exclude` + `events`(语法糖 → `#event_name in [...]`) |
 

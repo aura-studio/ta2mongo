@@ -13,31 +13,23 @@ tango 仍是单一二进制，但启动体系按运行角色组织：
 | **HTTP Gateway Service** | `tango gateway serve` | 常驻 | 暴露 REST API，把 HTTP 请求转为 SDK 操作或任务发布 |
 | **Operator CLI** | `tango operator ...` | 一次性 | ingest/upload/backfill/sql/publish 等人工或脚本操作 |
 
-旧命令 `tango daemon ...` 和 `tango client ...` 保留为兼容入口，但不再作为主架构分类。
+tango 只有这四个角色命令，没有 legacy 兼容入口。
 
-## 2. 启动模式重构
+## 2. 启动模式：从部署 profile 到运行角色
 
-原先 `standalone` / `agent` 是部署模式和功能模式混用：
-
-- `daemon standalone` 只做 report。
-- `daemon agent` 同时做 report、remote config sync、task worker。
-- `client serve` 挂在 client 下，但实际是 gateway 常驻服务。
-
-重构后：
+早期 tango 把 `standalone` / `agent` 当作启动模式，混淆了部署形态与功能职责：
+`standalone` 只做 report，`agent` 同时做 report + remote config sync + task worker，
+而 HTTP 接入又藏在 `client serve` 下。现在按**运行角色**彻底拆开：
 
 ```text
-基础角色: report / worker / gateway / operator
-兼容 profile: local / managed
+report   — 常驻采集上报
+worker   — 常驻任务消费
+gateway  — 常驻 HTTP 接入
+operator — 一次性操作
 ```
 
-| 旧入口 | 新入口 | 状态 |
-|---|---|---|
-| `tango daemon standalone` | `tango report run` | deprecated wrapper |
-| `tango daemon agent` | `tango report run` + `tango worker run` | deprecated wrapper |
-| `tango client serve` | `tango gateway serve` | deprecated wrapper |
-| `tango client <subcmd>` | `tango operator <subcmd>` | deprecated wrapper |
-| - | `tango profile local` | compatibility profile |
-| - | `tango profile managed` | compatibility profile |
+角色之间不再有「单进程组合模式」：要同时跑采集与任务消费，就分别启动 `tango report run`
+与 `tango worker run` 两个进程。旧的 daemon / client / profile 命令与其配置 schema 已移除。
 
 ## 3. 目录结构
 
@@ -47,13 +39,10 @@ tango 仍是单一二进制，但启动体系按运行角色组织：
 ├── cmd/
 │   ├── report/      # tango report run
 │   ├── worker/      # tango worker run
-│   ├── gateway/     # tango gateway serve (+ ServeCommand reused by client wrapper)
-│   ├── operator/    # tango operator ... (+ Subcommands reused by client wrapper)
-│   ├── profile/     # tango profile local/managed (compatibility profiles)
-│   ├── shared/      # cmd glue: config resolution, client building, service runners
-│   ├── daemon/      # legacy daemon wrapper (standalone/agent)
-│   └── client/      # legacy client wrapper (delegates to operator + gateway)
-├── config/          # RoleConfig (unified) + role loaders; DaemonConfig/ClientConfig (legacy); shared runtime Config
+│   ├── gateway/     # tango gateway serve
+│   ├── operator/    # tango operator ...
+│   └── shared/      # cmd glue: config resolution, client building, service runners
+├── config/          # RoleConfig (unified file schema) + role loaders; ClientConfig (runtime projection); shared runtime Config
 ├── client/          # 对外 Go SDK
 ├── doc/ examples/
 └── internal/
@@ -125,9 +114,7 @@ tango worker run --instanceID worker-1
 | `backfill` | 执行历史回填 |
 | `sql` | 执行 SQL 并导入结果 |
 
-独立 `worker run` 不要求 `report.source.logPattern`，也不持有 report 的 `filter.Holder`。worker 与 report 完全解耦：执行 `report-sync` 只写 remote config 文档。
-
-兼容的 `daemon agent` / `profile managed` 仍会同进程启动 report + worker，但二者不再共享 in-process `filter.Holder`——同进程的 report service 通过自己的 remote config sync loop 应用过滤器（agent/managed 模式下 remoteConfig 默认开启），代价是按 `syncInterval` 的延迟而非即时热替换。
+`worker run` 不要求 `report.source.logPattern`，也不持有 report 的 `filter.Holder`。worker 与 report 完全解耦：执行 `report-sync` 只写 remote config 文档，由各 report service 通过自己的 remote config sync loop 收敛。
 
 ## 6. HTTP Gateway Service
 
@@ -150,7 +137,7 @@ POST /publish/backfill
 POST /publish/sql
 ```
 
-HTTP 运行时位于 `internal/service/gateway`；命令层 `cmd/gateway` 只做参数与配置加载，`ServeCommand` 同时被兼容的 `tango client serve` 复用。
+HTTP 运行时位于 `internal/service/gateway`；命令层 `cmd/gateway` 只做参数与配置加载。
 
 ## 7. Operator CLI 与 SDK
 
@@ -193,7 +180,7 @@ taskqueue 是可靠性敏感模块，重构启动体系时不改变其核心语�
 
 ## 10. Report-sync 语义
 
-统一的角色路径（独立部署与同进程兼容模式一致）：
+角色路径：
 
 ```text
 operator/gateway publish report-sync
@@ -201,4 +188,4 @@ worker claim task and write remote config document
 report service poll remote config and apply filter.Holder
 ```
 
-不再存在「worker 直接热替换同进程 report filter」的路径——`worker.executeReportSync` 只校验表达式能编译，然后写入 remote config 文档。因此 worker 完成 report-sync 表示 **remote config 写入成功**，而非所有 report service 已经应用。所有 report service（含同进程兼容模式）都通过各自的 remote config sync loop 收敛到该过滤器。若后续需要全局确认语义，可引入 config version + ack collection。
+`worker.executeReportSync` 只校验表达式能编译，然后写入 remote config 文档。因此 worker 完成 report-sync 表示 **remote config 写入成功**，而非所有 report service 已经应用——各 report service 通过自己的 remote config sync loop 收敛到该过滤器。若后续需要全局确认语义，可引入 config version + ack collection。

@@ -1,0 +1,6 @@
+# operator.min.yaml — `tango operator <subcmd>` 最精简配置：只含连接 required 字段。
+# upload/backfill/publish 等各自的 required 字段按所运行的子命令在运行时补充
+# （详见同目录 operator.max.yaml 的逐字段说明）。
+runtime:
+  mongo:
+    uri: mongodb://localhost:27017/tango   # [required]
