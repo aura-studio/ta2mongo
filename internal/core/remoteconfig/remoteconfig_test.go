@@ -9,7 +9,7 @@ import (
 
 func baseConfig() config.Config {
 	return config.Config{
-		Mode:     config.ModeDaemon,
+		Mode:     config.ModeReport,
 		Mongo:    config.MongoConfig{URI: "mongodb://local/db"},
 		Pipeline: config.PipelineConfig{BatchSize: 1000, BatchWorkers: 2, FlushInterval: time.Second},
 		Logging:  config.LoggingConfig{Level: "info"},

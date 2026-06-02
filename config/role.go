@@ -92,7 +92,7 @@ type UploadFileConfig struct {
 // Agent.Enabled) are applied by LoadReport, not here.
 func (r RoleConfig) ReportRuntime() Config {
 	return Config{
-		Mode:         ModeDaemon,
+		Mode:         ModeReport,
 		Logging:      r.Runtime.Logging,
 		Mongo:        r.Runtime.Mongo,
 		Source:       r.Report.Source,
@@ -106,7 +106,7 @@ func (r RoleConfig) ReportRuntime() Config {
 // the worker service. The control-plane switches are applied by LoadWorker.
 func (r RoleConfig) WorkerRuntime() Config {
 	return Config{
-		Mode:         ModeAgent,
+		Mode:         ModeWorker,
 		InstanceID:   r.Tasks.InstanceID,
 		Logging:      r.Runtime.Logging,
 		Mongo:        r.Runtime.Mongo,
@@ -204,7 +204,7 @@ func LoadWorker(path string, flags *pflag.FlagSet) (RoleConfig, Config, error) {
 	}
 	rt := rc.WorkerRuntime()
 	applyDefaults(&rt)
-	rt.Mode = ModeAgent
+	rt.Mode = ModeWorker
 	rt.RemoteConfig.Enabled = true
 	rt.Agent.Enabled = true
 

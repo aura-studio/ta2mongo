@@ -32,11 +32,16 @@ import (
 	"rocket-nano/tools/tango/internal/core/filter"
 )
 
-// Mode constants for the run mode configuration.
+// Mode constants identify the runtime role a Config drives. Mode is an internal
+// runtime distinction consumed only by Validate (it is never persisted and
+// cannot be set from the remote-config document); the role loaders set it from
+// the command that built the Config.
 const (
-	ModeDaemon   = "daemon"
-	ModeOnce     = "once"
-	ModeIngest   = "ingest"
+	// ModeReport is the report service runtime: tail logs -> filter -> Mongo.
+	ModeReport = "report"
+	// ModeWorker is the task worker runtime; it requires InstanceID.
+	ModeWorker = "worker"
+	// ModeBackfill is a backfill execution; it validates the backfill block.
 	ModeBackfill = "backfill"
 )
 
@@ -67,11 +72,6 @@ const (
 	DefaultInstanceTTL         = 90 * time.Second
 )
 
-// ModeAgent is retained as a runtime mode value for backward compatibility with
-// remote-config documents and tests. The agent is now a daemon feature
-// (agent.enabled), not a standalone run mode.
-const ModeAgent = "agent"
-
 // TailMode constants control how the tailer watches for file changes.
 const (
 	// TailModeHybrid uses hpcloud/tail's event-driven watcher as the
@@ -95,13 +95,13 @@ const (
 // at the top level. YAML keys are the mapstructure tags; env vars use the
 // TANGO_ prefix with "." → "_" (e.g. mongo.uri → TANGO_MONGO_URI).
 type Config struct {
-	// Mode selects the run mode: daemon (default), once, ingest, backfill, agent.
+	// Mode selects the runtime role: report (default), worker, or backfill.
 	Mode string `mapstructure:"mode"`
 
-	// InstanceID uniquely identifies this agent within a database namespace
-	// (used to target tasks and register heartbeats). It is populated from the
-	// daemon config's agent.instanceID and only used when the agent feature is
-	// enabled; other paths ignore it.
+	// InstanceID uniquely identifies a worker instance within a database
+	// namespace (used to target tasks and register heartbeats). It is populated
+	// from tasks.instanceID and only used by the worker runtime; other paths
+	// ignore it.
 	InstanceID string `mapstructure:"instanceID"`
 
 	// Logging configures log output.
@@ -706,7 +706,7 @@ func applyEnvOverrides(v *viper.Viper) {
 
 // setDefaults registers viper defaults for all fields.
 func setDefaults(v *viper.Viper) {
-	v.SetDefault("mode", ModeDaemon)
+	v.SetDefault("mode", ModeReport)
 	v.SetDefault("logging.level", "info")
 	v.SetDefault("logging.format", "text")
 	v.SetDefault("mongo.uri", "")
@@ -732,7 +732,7 @@ func setDefaults(v *viper.Viper) {
 // applyDefaults fills in zero-value fields with sensible defaults.
 func applyDefaults(c *Config) {
 	if c.Mode == "" {
-		c.Mode = ModeDaemon
+		c.Mode = ModeReport
 	}
 	if c.Logging.Level == "" {
 		c.Logging.Level = "info"
@@ -862,17 +862,17 @@ func (b *BackfillConfig) EffectivePageSize() int {
 // Validate checks that required fields are present.
 func (c *Config) Validate() error {
 	switch c.Mode {
-	case ModeDaemon, ModeOnce, ModeIngest, ModeBackfill, ModeAgent:
+	case ModeReport, ModeWorker, ModeBackfill:
 		// valid
 	default:
-		return fmt.Errorf("config: mode must be one of %q, %q, %q, %q, %q; got %q",
-			ModeDaemon, ModeOnce, ModeIngest, ModeBackfill, ModeAgent, c.Mode)
+		return fmt.Errorf("config: mode must be one of %q, %q, %q; got %q",
+			ModeReport, ModeWorker, ModeBackfill, c.Mode)
 	}
-	if c.Mode == ModeAgent && c.InstanceID == "" {
-		return fmt.Errorf("config: agent mode requires TANGO_INSTANCE_ID to be set")
+	if c.Mode == ModeWorker && c.InstanceID == "" {
+		return fmt.Errorf("config: worker mode requires tasks.instanceID to be set")
 	}
 	if c.Mongo.URI == "" {
-		return fmt.Errorf("config: mongo.uri is required (role files: runtime.mongo.uri; legacy daemon: generic.mongo.uri; legacy client: mongo.uri — set in the config file, via env, or via flag)")
+		return fmt.Errorf("config: mongo.uri is required (set runtime.mongo.uri in the config file, via TANGO_RUNTIME_MONGO_URI, or via --runtime.mongo.uri)")
 	}
 	switch c.Source.TailMode {
 	case TailModeHybrid, TailModePoll, TailModeEvent:
