@@ -1,4 +1,4 @@
-package daemon
+package report
 
 // Routing key extraction and route index tests have been moved to the shared
 // internal/pipeline package (internal/pipeline/routing_test.go).

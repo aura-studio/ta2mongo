@@ -10,6 +10,11 @@ import (
 
 	clientcmd "rocket-nano/tools/tango/cmd/client"
 	daemoncmd "rocket-nano/tools/tango/cmd/daemon"
+	gatewaycmd "rocket-nano/tools/tango/cmd/gateway"
+	operatorcmd "rocket-nano/tools/tango/cmd/operator"
+	profilecmd "rocket-nano/tools/tango/cmd/profile"
+	reportcmd "rocket-nano/tools/tango/cmd/report"
+	workercmd "rocket-nano/tools/tango/cmd/worker"
 )
 
 func main() {
@@ -27,11 +32,13 @@ func newRoot() *cobra.Command {
 		"path to config file (.yaml/.yml/.json); default: <mode>.{yaml,yml,json} next to the binary; skipped if absent")
 
 	root.AddCommand(
-		daemoncmd.NewReportCommand(),
-		daemoncmd.NewWorkerCommand(),
-		clientcmd.NewGatewayCommand(),
-		clientcmd.NewOperatorCommand(),
-		daemoncmd.NewProfileCommand(),
+		// Role-oriented primary commands.
+		reportcmd.NewCommand(),
+		workercmd.NewCommand(),
+		gatewaycmd.NewCommand(),
+		operatorcmd.NewCommand(),
+		profilecmd.NewCommand(),
+		// Legacy compatibility wrappers.
 		daemoncmd.NewCommand(),
 		clientcmd.NewCommand(),
 	)

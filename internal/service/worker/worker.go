@@ -1,8 +1,8 @@
-// Package agent implements the daemon's agent feature (enabled via
-// agent.enabled): a long-running worker that registers a heartbeat, claims
-// tasks from the shared MongoDB queue, executes them (report-sync / backfill /
-// sql), renews the lease while working, and reports the outcome.
-package agent
+// Package worker implements the task worker service: a long-running process
+// that registers a heartbeat, claims tasks from the shared MongoDB queue,
+// executes them (report-sync / backfill / sql), renews the lease while
+// working, and reports the outcome.
+package worker
 
 import (
 	"context"
@@ -22,10 +22,10 @@ import (
 	"rocket-nano/tools/tango/internal/service/backfill"
 )
 
-// Agent is the task-worker runtime. It is a feature of the daemon: when the
-// daemon enables it, the agent registers a heartbeat, claims published tasks,
-// executes them (report-sync / backfill / sql), and reports the outcome.
-type Agent struct {
+// Service is the task worker runtime: it registers a heartbeat, claims
+// published tasks, executes them (report-sync / backfill / sql), and reports
+// the outcome.
+type Service struct {
 	cfg      config.Config
 	logger   *logrus.Logger
 	client   *mongo.Client
@@ -42,26 +42,26 @@ type Agent struct {
 
 // AttachReportingFilter lets the hosting daemon share its live reporting filter
 // holder so a report-sync task can hot-swap it without a restart.
-func (a *Agent) AttachReportingFilter(h *filter.Holder) { a.reportFilter = h }
+func (a *Service) AttachReportingFilter(h *filter.Holder) { a.reportFilter = h }
 
 // New connects to MongoDB and constructs an Agent. Caller must call Shutdown.
-func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Agent, error) {
+func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Service, error) {
 	if cfg.InstanceID == "" {
-		return nil, fmt.Errorf("agent: TANGO_INSTANCE_ID is required")
+		return nil, fmt.Errorf("worker: TANGO_INSTANCE_ID is required")
 	}
 	mc, err := mongo.Connect(ctx, options.Client().ApplyURI(cfg.Mongo.URI).SetConnectTimeout(cfg.Mongo.ConnectTimeout).SetServerSelectionTimeout(cfg.Mongo.ServerSelectionTimeout))
 	if err != nil {
-		return nil, fmt.Errorf("agent: connect mongo: %w", err)
+		return nil, fmt.Errorf("worker: connect mongo: %w", err)
 	}
 	dbName, err := config.MongoDBFromURI(cfg.Mongo.URI)
 	if err != nil {
 		_ = mc.Disconnect(context.Background())
-		return nil, fmt.Errorf("agent: %w", err)
+		return nil, fmt.Errorf("worker: %w", err)
 	}
 	db := mc.Database(dbName)
 	hostname, _ := os.Hostname()
 
-	return &Agent{
+	return &Service{
 		cfg:      cfg,
 		logger:   logger,
 		client:   mc,
@@ -73,7 +73,7 @@ func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Agent,
 }
 
 // Shutdown deregisters the instance and disconnects.
-func (a *Agent) Shutdown() error {
+func (a *Service) Shutdown() error {
 	dctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = a.registry.Deregister(dctx, a.cfg.InstanceID)
@@ -81,7 +81,7 @@ func (a *Agent) Shutdown() error {
 }
 
 // EnsureIndexes creates the queue + registry indexes (idempotent).
-func (a *Agent) EnsureIndexes(ctx context.Context) error {
+func (a *Service) EnsureIndexes(ctx context.Context) error {
 	if err := a.queue.EnsureIndexes(ctx); err != nil {
 		return err
 	}
@@ -89,14 +89,14 @@ func (a *Agent) EnsureIndexes(ctx context.Context) error {
 }
 
 // Run blocks until ctx is cancelled, running the heartbeat and claim loops.
-func (a *Agent) Run(ctx context.Context) error {
+func (a *Service) Run(ctx context.Context) error {
 	a.logger.WithFields(logrus.Fields{
 		"instanceID":    a.cfg.InstanceID,
 		"tasks":         a.cfg.Agent.TasksCollection,
 		"instances":     a.cfg.Agent.InstancesCollection,
 		"poll_interval": a.cfg.Agent.PollInterval,
 		"lease":         a.cfg.Agent.LeaseDuration,
-	}).Info("agent: started")
+	}).Info("worker: started")
 
 	// Register immediately so targeting fail-fast works without waiting for
 	// the first heartbeat tick. Retry briefly: a transient failure here would
@@ -119,12 +119,12 @@ func (a *Agent) Run(ctx context.Context) error {
 			// nothing to do; run queue maintenance, then wait for next tick.
 			a.reap(ctx)
 		default:
-			a.logger.WithError(err).Warn("agent: claim failed")
+			a.logger.WithError(err).Warn("worker: claim failed")
 		}
 
 		select {
 		case <-ctx.Done():
-			a.logger.Info("agent: shutting down")
+			a.logger.Info("worker: shutting down")
 			return nil
 		case <-poll.C:
 		}
@@ -133,12 +133,12 @@ func (a *Agent) Run(ctx context.Context) error {
 
 // initialHeartbeat registers the instance with a few quick retries so a
 // transient error does not leave a live agent looking offline.
-func (a *Agent) initialHeartbeat(ctx context.Context) {
+func (a *Service) initialHeartbeat(ctx context.Context) {
 	for attempt := 0; attempt < 3; attempt++ {
 		if err := a.heartbeat(ctx); err == nil {
 			return
 		} else if attempt == 2 {
-			a.logger.WithError(err).Warn("agent: initial heartbeat failed after retries")
+			a.logger.WithError(err).Warn("worker: initial heartbeat failed after retries")
 			return
 		}
 		select {
@@ -152,18 +152,18 @@ func (a *Agent) initialHeartbeat(ctx context.Context) {
 // reap runs queue maintenance: it fails tasks orphaned by crashed agents (lease
 // expired + attempts exhausted) and targeted tasks whose target is offline past
 // the instance TTL grace window. Errors are logged, not fatal.
-func (a *Agent) reap(ctx context.Context) {
+func (a *Service) reap(ctx context.Context) {
 	n, err := a.queue.Reap(ctx, a.registry, a.cfg.Agent.InstanceTTL)
 	if err != nil {
-		a.logger.WithError(err).Debug("agent: reap failed")
+		a.logger.WithError(err).Debug("worker: reap failed")
 		return
 	}
 	if n > 0 {
-		a.logger.WithField("reaped", n).Info("agent: reaped stuck/orphaned tasks")
+		a.logger.WithField("reaped", n).Info("worker: reaped stuck/orphaned tasks")
 	}
 }
 
-func (a *Agent) heartbeatLoop(ctx context.Context) {
+func (a *Service) heartbeatLoop(ctx context.Context) {
 	t := time.NewTicker(a.cfg.Agent.HeartbeatInterval)
 	defer t.Stop()
 	for {
@@ -172,13 +172,13 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 			return
 		case <-t.C:
 			if err := a.heartbeat(ctx); err != nil {
-				a.logger.WithError(err).Warn("agent: heartbeat failed")
+				a.logger.WithError(err).Warn("worker: heartbeat failed")
 			}
 		}
 	}
 }
 
-func (a *Agent) heartbeat(ctx context.Context) error {
+func (a *Service) heartbeat(ctx context.Context) error {
 	return a.registry.Heartbeat(ctx, taskqueue.Instance{
 		ID:       a.cfg.InstanceID,
 		Hostname: a.hostname,
@@ -186,13 +186,13 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 }
 
 // runTask executes one claimed task with lease renewal and reports the result.
-func (a *Agent) runTask(ctx context.Context, task *taskqueue.Task) {
+func (a *Service) runTask(ctx context.Context, task *taskqueue.Task) {
 	log := a.logger.WithFields(logrus.Fields{
 		"taskID": task.ID,
 		"type":   task.Type,
 		"target": task.Target,
 	})
-	log.Info("agent: claimed task")
+	log.Info("worker: claimed task")
 
 	// Renew the lease in the background while the task runs. If renewal fails
 	// (the task was reclaimed because we appeared dead), cancel execCtx so we
@@ -212,22 +212,22 @@ func (a *Agent) runTask(ctx context.Context, task *taskqueue.Task) {
 	defer reportCancel()
 
 	if err != nil {
-		log.WithError(err).Error("agent: task failed")
+		log.WithError(err).Error("worker: task failed")
 		if ferr := a.queue.Fail(reportCtx, task, a.cfg.InstanceID, err); ferr != nil {
-			log.WithError(ferr).Warn("agent: reporting failure failed")
+			log.WithError(ferr).Warn("worker: reporting failure failed")
 		}
 		return
 	}
 	if cerr := a.queue.Complete(reportCtx, task.ID, a.cfg.InstanceID, result); cerr != nil {
-		log.WithError(cerr).Warn("agent: reporting success failed")
+		log.WithError(cerr).Warn("worker: reporting success failed")
 		return
 	}
-	log.WithField("result", result).Info("agent: task succeeded")
+	log.WithField("result", result).Info("worker: task succeeded")
 }
 
 // startLeaseRenewer renews the task lease at one third of the lease duration.
 // On a failed renewal it cancels the execution context (the lease was lost).
-func (a *Agent) startLeaseRenewer(ctx context.Context, cancel context.CancelFunc, taskID string) <-chan struct{} {
+func (a *Service) startLeaseRenewer(ctx context.Context, cancel context.CancelFunc, taskID string) <-chan struct{} {
 	done := make(chan struct{})
 	interval := a.cfg.Agent.LeaseDuration / 3
 	if interval <= 0 {
@@ -244,7 +244,7 @@ func (a *Agent) startLeaseRenewer(ctx context.Context, cancel context.CancelFunc
 			case <-t.C:
 				if err := a.queue.RenewLease(context.Background(), taskID, a.cfg.InstanceID, a.cfg.Agent.LeaseDuration); err != nil {
 					a.logger.WithError(err).WithField("taskID", taskID).
-						Warn("agent: lease renewal failed; abandoning task")
+						Warn("worker: lease renewal failed; abandoning task")
 					cancel()
 					return
 				}
@@ -255,7 +255,7 @@ func (a *Agent) startLeaseRenewer(ctx context.Context, cancel context.CancelFunc
 }
 
 // execute dispatches a task to the right handler and returns a result payload.
-func (a *Agent) execute(ctx context.Context, task *taskqueue.Task) (map[string]any, error) {
+func (a *Service) execute(ctx context.Context, task *taskqueue.Task) (map[string]any, error) {
 	switch task.Type {
 	case taskqueue.TaskReportSync:
 		return a.executeReportSync(ctx, task)
@@ -264,7 +264,7 @@ func (a *Agent) execute(ctx context.Context, task *taskqueue.Task) (map[string]a
 	case taskqueue.TaskSQL:
 		return a.executeSQL(ctx, task)
 	default:
-		return nil, fmt.Errorf("agent: unknown task type %q", task.Type)
+		return nil, fmt.Errorf("worker: unknown task type %q", task.Type)
 	}
 }
 
@@ -272,11 +272,11 @@ func (a *Agent) execute(ctx context.Context, task *taskqueue.Task) (map[string]a
 // payload's include/exclude expressions, hot-swaps the daemon's live filter
 // (when attached), and persists the override document so that restarts and
 // other daemons on the same database converge on the same filter.
-func (a *Agent) executeReportSync(ctx context.Context, task *taskqueue.Task) (map[string]any, error) {
+func (a *Service) executeReportSync(ctx context.Context, task *taskqueue.Task) (map[string]any, error) {
 	include, exclude := reportSyncFilters(task.Payload)
 	flt, err := filter.New(include, exclude)
 	if err != nil {
-		return nil, fmt.Errorf("agent: report-sync filter does not compile: %w", err)
+		return nil, fmt.Errorf("worker: report-sync filter does not compile: %w", err)
 	}
 	if a.reportFilter != nil {
 		a.reportFilter.Store(flt)
@@ -289,7 +289,7 @@ func (a *Agent) executeReportSync(ctx context.Context, task *taskqueue.Task) (ma
 		options.Update().SetUpsert(true),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("agent: persist report-sync filter: %w", err)
+		return nil, fmt.Errorf("worker: persist report-sync filter: %w", err)
 	}
 	return map[string]any{
 		"applied_live":   a.reportFilter != nil,
@@ -311,15 +311,15 @@ func reportSyncFilters(payload map[string]any) (include, exclude []string) {
 // executeBackfill builds a config from the agent's base settings overlaid with
 // the task payload (table / range / filter / runID …) and runs a full
 // checkpointed backfill.
-func (a *Agent) executeBackfill(ctx context.Context, task *taskqueue.Task) (map[string]any, error) {
+func (a *Service) executeBackfill(ctx context.Context, task *taskqueue.Task) (map[string]any, error) {
 	cfg := a.cfg // copy; Backfill is a value, so this copies it too
 	if err := decodePayload(task.Payload, &cfg.Backfill); err != nil {
-		return nil, fmt.Errorf("agent: decode backfill payload: %w", err)
+		return nil, fmt.Errorf("worker: decode backfill payload: %w", err)
 	}
 	// Overlay the backfill selection filter (table / events / include /
 	// exclude) from the payload — backfill never uses the reporting filter.
 	if err := overlayBackfillFilter(task.Payload, &cfg); err != nil {
-		return nil, fmt.Errorf("agent: decode backfill filter: %w", err)
+		return nil, fmt.Errorf("worker: decode backfill filter: %w", err)
 	}
 	if cfg.Backfill.RunID == "" {
 		cfg.Backfill.RunID = task.ID // checkpoint keyed by task id
@@ -347,10 +347,10 @@ func (a *Agent) executeBackfill(ctx context.Context, task *taskqueue.Task) (map[
 }
 
 // executeSQL runs an explicit SQL statement from the payload.
-func (a *Agent) executeSQL(ctx context.Context, task *taskqueue.Task) (map[string]any, error) {
+func (a *Service) executeSQL(ctx context.Context, task *taskqueue.Task) (map[string]any, error) {
 	sql, _ := task.Payload["sql"].(string)
 	if sql == "" {
-		return nil, fmt.Errorf("agent: sql task missing 'sql' field")
+		return nil, fmt.Errorf("worker: sql task missing 'sql' field")
 	}
 	cfg := a.cfg
 	if t, ok := task.Payload["table"].(string); ok && t != "" {
@@ -360,7 +360,7 @@ func (a *Agent) executeSQL(ctx context.Context, task *taskqueue.Task) (map[strin
 		cfg.Backfill.SchemaPrefix = sp
 	}
 	if err := overlayBackfillFilter(task.Payload, &cfg); err != nil {
-		return nil, fmt.Errorf("agent: decode sql filter: %w", err)
+		return nil, fmt.Errorf("worker: decode sql filter: %w", err)
 	}
 	cfg.Mode = config.ModeBackfill
 

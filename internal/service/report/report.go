@@ -1,6 +1,7 @@
-// Package daemon orchestrates the tango pipeline:
-// file tailing -> line parsing -> batch accumulation -> MongoDB bulk writes.
-package daemon
+// Package report implements the report service runtime, orchestrating the
+// tango pipeline: file tailing -> line parsing -> batch accumulation ->
+// MongoDB bulk writes, with optional remote-config filter hot-reload.
+package report
 
 import (
 	"context"
@@ -25,8 +26,8 @@ import (
 // statsReportInterval is how often the daemon logs processing statistics.
 const statsReportInterval = 60 * time.Second
 
-// daemonStats tracks processing metrics for the daemon mode.
-type daemonStats struct {
+// runStats tracks processing metrics for the daemon mode.
+type runStats struct {
 	totalLines     atomic.Int64
 	parsedOK       atomic.Int64
 	parseErrors    atomic.Int64
@@ -39,27 +40,27 @@ type daemonStats struct {
 	filterErrors   atomic.Int64
 }
 
-func (s *daemonStats) OnLine()          { s.totalLines.Add(1) }
-func (s *daemonStats) OnParseOK()       { s.parsedOK.Add(1) }
-func (s *daemonStats) OnParseError()    { s.parseErrors.Add(1) }
-func (s *daemonStats) OnIdentityError() { s.identityErrors.Add(1) }
-func (s *daemonStats) OnUserWrite()     { s.userWrites.Add(1) }
-func (s *daemonStats) OnEventWrite()    { s.eventWrites.Add(1) }
-func (s *daemonStats) OnDeadLetter()    { s.deadLetters.Add(1) }
-func (s *daemonStats) OnWriteError()    { s.writeErrors.Add(1) }
-func (s *daemonStats) OnFiltered()      { s.filtered.Add(1) }
-func (s *daemonStats) OnFilterError()   { s.filterErrors.Add(1) }
+func (s *runStats) OnLine()          { s.totalLines.Add(1) }
+func (s *runStats) OnParseOK()       { s.parsedOK.Add(1) }
+func (s *runStats) OnParseError()    { s.parseErrors.Add(1) }
+func (s *runStats) OnIdentityError() { s.identityErrors.Add(1) }
+func (s *runStats) OnUserWrite()     { s.userWrites.Add(1) }
+func (s *runStats) OnEventWrite()    { s.eventWrites.Add(1) }
+func (s *runStats) OnDeadLetter()    { s.deadLetters.Add(1) }
+func (s *runStats) OnWriteError()    { s.writeErrors.Add(1) }
+func (s *runStats) OnFiltered()      { s.filtered.Add(1) }
+func (s *runStats) OnFilterError()   { s.filterErrors.Add(1) }
 
-// daemonSnapshot is a point-in-time copy of counter values used for reporting.
-type daemonSnapshot struct {
+// runSnapshot is a point-in-time copy of counter values used for reporting.
+type runSnapshot struct {
 	totalLines, parsedOK, parseErrors, identityErrors int64
 	userWrites, eventWrites, deadLetters, writeErrors int64
 	filtered, filterErrors                            int64
 }
 
 // snapshot returns the current counter values for reporting.
-func (s *daemonStats) snapshot() daemonSnapshot {
-	return daemonSnapshot{
+func (s *runStats) snapshot() runSnapshot {
+	return runSnapshot{
 		totalLines:     s.totalLines.Load(),
 		parsedOK:       s.parsedOK.Load(),
 		parseErrors:    s.parseErrors.Load(),
@@ -73,8 +74,8 @@ func (s *daemonStats) snapshot() daemonSnapshot {
 	}
 }
 
-// Daemon is the main runtime that connects all components together.
-type Daemon struct {
+// Service is the main runtime that connects all components together.
+type Service struct {
 	cfg    config.Config
 	logger *logrus.Logger
 	store  *store.Store
@@ -83,12 +84,12 @@ type Daemon struct {
 	client *mongo.Client
 }
 
-// New connects to MongoDB and creates a ready-to-run Daemon.
+// New connects to MongoDB and creates a ready-to-run Service.
 // The caller must call Shutdown after Run returns to disconnect from MongoDB.
-func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Daemon, error) {
+func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Service, error) {
 	flt, err := cfg.BuildFilter()
 	if err != nil {
-		return nil, fmt.Errorf("daemon: %w", err)
+		return nil, fmt.Errorf("report: %w", err)
 	}
 
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(cfg.Mongo.URI).SetConnectTimeout(cfg.Mongo.ConnectTimeout).SetServerSelectionTimeout(cfg.Mongo.ServerSelectionTimeout))
@@ -99,31 +100,31 @@ func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Daemon
 	dbName, err := config.MongoDBFromURI(cfg.Mongo.URI)
 	if err != nil {
 		_ = client.Disconnect(context.Background())
-		return nil, fmt.Errorf("daemon: %w", err)
+		return nil, fmt.Errorf("report: %w", err)
 	}
 	db := client.Database(dbName)
 	st := store.New(db, cfg, logger)
 	p := talog.NewParser()
 
-	return &Daemon{cfg: cfg, logger: logger, store: st, parser: p, filter: filter.NewHolder(flt), client: client}, nil
+	return &Service{cfg: cfg, logger: logger, store: st, parser: p, filter: filter.NewHolder(flt), client: client}, nil
 }
 
 // Filter exposes the daemon's filter holder so the remote-config sync loop can
 // hot-swap the active filter at runtime.
-func (d *Daemon) Filter() *filter.Holder { return d.filter }
+func (d *Service) Filter() *filter.Holder { return d.filter }
 
 // MongoClient exposes the underlying client so callers can reuse the
 // connection (e.g. the remote-config fetcher) without opening a second one.
-func (d *Daemon) MongoClient() *mongo.Client { return d.client }
+func (d *Service) MongoClient() *mongo.Client { return d.client }
 
 // Shutdown disconnects the MongoDB client. It must be called after Run returns
 // to ensure all final flushes complete before the connection is closed.
-func (d *Daemon) Shutdown() error {
+func (d *Service) Shutdown() error {
 	return d.client.Disconnect(context.Background())
 }
 
 // EnsureIndexes creates all required MongoDB indexes (idempotent).
-func (d *Daemon) EnsureIndexes(ctx context.Context) error {
+func (d *Service) EnsureIndexes(ctx context.Context) error {
 	return d.store.EnsureIndexes(ctx)
 }
 
@@ -135,9 +136,9 @@ func (d *Daemon) EnsureIndexes(ctx context.Context) error {
 // and consistently hashes it to a fixed worker. This guarantees that all operations
 // for the same user are processed sequentially by a single worker, preventing
 // out-of-order overwrites across workers.
-func (d *Daemon) Run(ctx context.Context) error {
+func (d *Service) Run(ctx context.Context) error {
 	if len(d.cfg.Source.LogPattern) == 0 {
-		return errors.New("daemon: ta.logPattern is required (at least one regex)")
+		return errors.New("report: ta.logPattern is required (at least one regex)")
 	}
 
 	d.logger.WithFields(logrus.Fields{
@@ -146,14 +147,14 @@ func (d *Daemon) Run(ctx context.Context) error {
 		"batch_size":     d.cfg.Pipeline.BatchSize,
 		"flush_interval": d.cfg.Pipeline.FlushInterval,
 		"tail_mode":      d.cfg.Source.TailMode,
-	}).Info("daemon: starting pipeline")
+	}).Info("report: starting pipeline")
 
 	// Start the tailer; it returns a channel of log lines.
 	t := tailer.New(d.cfg.Source.LogPattern, d.cfg.Source.RescanInterval, d.cfg.Source.TailMode, d.logger).WithTuning(d.cfg.Source.PollInterval, d.cfg.Source.MaxLineBytes)
 	lineCh := t.Run(ctx)
 
 	// Create stats collector for periodic reporting.
-	stats := &daemonStats{}
+	stats := &runStats{}
 	startTime := time.Now()
 
 	// Launch periodic stats reporter.
@@ -183,10 +184,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 // hot-swaps the active filter when the include/exclude lists change. Non-filter
 // fields are reported but only take effect on the next restart (matching the
 // agreed "filter hot, rest on restart" policy). It returns when ctx is done.
-func (d *Daemon) syncRemoteConfig(ctx context.Context) {
+func (d *Service) syncRemoteConfig(ctx context.Context) {
 	dbName, err := config.MongoDBFromURI(d.cfg.Mongo.URI)
 	if err != nil {
-		d.logger.WithError(err).Warn("daemon: remote-config sync disabled (bad mongoURI)")
+		d.logger.WithError(err).Warn("report: remote-config sync disabled (bad mongoURI)")
 		return
 	}
 	coll := d.client.Database(dbName).Collection(d.cfg.RemoteConfig.Collection)
@@ -198,7 +199,7 @@ func (d *Daemon) syncRemoteConfig(ctx context.Context) {
 		"collection":    d.cfg.RemoteConfig.Collection,
 		"documentID":    d.cfg.RemoteConfig.DocumentID,
 		"sync_interval": d.cfg.RemoteConfig.SyncInterval,
-	}).Info("daemon: remote-config sync loop started")
+	}).Info("report: remote-config sync loop started")
 
 	// current is the most recently applied config; start from the boot config.
 	current := d.cfg
@@ -210,7 +211,7 @@ func (d *Daemon) syncRemoteConfig(ctx context.Context) {
 		case <-ticker.C:
 			doc, err := remoteconfig.Fetch(ctx, coll, d.cfg.RemoteConfig.DocumentID)
 			if err != nil {
-				d.logger.WithError(err).Warn("daemon: remote-config fetch failed; keeping current")
+				d.logger.WithError(err).Warn("report: remote-config fetch failed; keeping current")
 				continue
 			}
 			if doc == nil {
@@ -218,25 +219,25 @@ func (d *Daemon) syncRemoteConfig(ctx context.Context) {
 			}
 			merged, err := remoteconfig.Merge(current, doc)
 			if err != nil {
-				d.logger.WithError(err).Warn("daemon: remote-config merge failed; keeping current")
+				d.logger.WithError(err).Warn("report: remote-config merge failed; keeping current")
 				continue
 			}
 			if err := merged.Validate(); err != nil {
-				d.logger.WithError(err).Warn("daemon: remote-config invalid; keeping current")
+				d.logger.WithError(err).Warn("report: remote-config invalid; keeping current")
 				continue
 			}
 
 			if remoteconfig.FilterChanged(current, merged) {
 				newFilter, ferr := merged.BuildFilter()
 				if ferr != nil {
-					d.logger.WithError(ferr).Warn("daemon: remote filter failed to compile; keeping current")
+					d.logger.WithError(ferr).Warn("report: remote filter failed to compile; keeping current")
 					continue
 				}
 				d.filter.Store(newFilter)
 				d.logger.WithFields(logrus.Fields{
 					"filter_include": merged.Filter.Include,
 					"filter_exclude": merged.Filter.Exclude,
-				}).Info("daemon: hot-reloaded filter from remote config")
+				}).Info("report: hot-reloaded filter from remote config")
 			}
 			current = merged
 		}
@@ -244,13 +245,13 @@ func (d *Daemon) syncRemoteConfig(ctx context.Context) {
 }
 
 // reportStats periodically logs processing statistics every statsReportInterval.
-func (d *Daemon) reportStats(ctx context.Context, stats *daemonStats, startTime time.Time, done chan<- struct{}) {
+func (d *Service) reportStats(ctx context.Context, stats *runStats, startTime time.Time, done chan<- struct{}) {
 	defer close(done)
 
 	ticker := time.NewTicker(statsReportInterval)
 	defer ticker.Stop()
 
-	var prev daemonSnapshot
+	var prev runSnapshot
 
 	for {
 		select {
@@ -273,7 +274,7 @@ func (d *Daemon) reportStats(ctx context.Context, stats *daemonStats, startTime 
 				"interval_write_err":    cur.writeErrors - prev.writeErrors,
 				"interval_filtered":     cur.filtered - prev.filtered,
 				"interval_filter_err":   cur.filterErrors - prev.filterErrors,
-			}).Info("daemon: periodic stats (last 60s)")
+			}).Info("report: periodic stats (last 60s)")
 
 			d.logger.WithFields(logrus.Fields{
 				"total_lines":        cur.totalLines,
@@ -286,7 +287,7 @@ func (d *Daemon) reportStats(ctx context.Context, stats *daemonStats, startTime 
 				"total_write_err":    cur.writeErrors,
 				"total_filtered":     cur.filtered,
 				"total_filter_err":   cur.filterErrors,
-			}).Info("daemon: cumulative stats")
+			}).Info("report: cumulative stats")
 
 			prev = cur
 		}
@@ -294,12 +295,12 @@ func (d *Daemon) reportStats(ctx context.Context, stats *daemonStats, startTime 
 }
 
 // logFinalStats logs a final summary when the daemon is shutting down.
-func (d *Daemon) logFinalStats(stats *daemonStats, startTime time.Time) {
+func (d *Service) logFinalStats(stats *runStats, startTime time.Time) {
 	cur := stats.snapshot()
 
 	duration := time.Since(startTime).Round(time.Second)
 
-	d.logger.Info("daemon: ========== shutdown summary ==========")
+	d.logger.Info("report: ========== shutdown summary ==========")
 	d.logger.WithFields(logrus.Fields{
 		"total_lines":        cur.totalLines,
 		"total_parsed_ok":    cur.parsedOK,
@@ -312,16 +313,16 @@ func (d *Daemon) logFinalStats(stats *daemonStats, startTime time.Time) {
 		"total_filtered":     cur.filtered,
 		"total_filter_err":   cur.filterErrors,
 		"uptime":             duration,
-	}).Info("daemon: final stats")
+	}).Info("report: final stats")
 
 	if cur.totalLines > 0 && duration.Seconds() > 0 {
 		lps := float64(cur.totalLines) / duration.Seconds()
-		d.logger.WithField("lines_per_second", fmt.Sprintf("%.1f", lps)).Info("daemon: average throughput")
+		d.logger.WithField("lines_per_second", fmt.Sprintf("%.1f", lps)).Info("report: average throughput")
 	}
 
 	if cur.parseErrors > 0 || cur.identityErrors > 0 || cur.writeErrors > 0 {
-		d.logger.Warn("daemon: ========== SHUTDOWN WITH ERRORS ==========")
+		d.logger.Warn("report: ========== SHUTDOWN WITH ERRORS ==========")
 	} else {
-		d.logger.Info("daemon: ========== SHUTDOWN COMPLETE ==========")
+		d.logger.Info("report: ========== SHUTDOWN COMPLETE ==========")
 	}
 }
