@@ -45,17 +45,23 @@ tango 仍是单一二进制，但启动体系按运行角色组织：
 .
 ├── main.go
 ├── cmd/
-│   ├── daemon/      # report/worker/profile + legacy daemon wrappers
-│   └── client/      # gateway/operator + legacy client wrappers
-├── config/          # DaemonConfig, ClientConfig, role loaders, shared runtime Config
+│   ├── report/      # tango report run
+│   ├── worker/      # tango worker run
+│   ├── gateway/     # tango gateway serve (+ ServeCommand reused by client wrapper)
+│   ├── operator/    # tango operator ... (+ Subcommands reused by client wrapper)
+│   ├── profile/     # tango profile local/managed (compatibility profiles)
+│   ├── shared/      # cmd glue: config resolution, client building, service runners
+│   ├── daemon/      # legacy daemon wrapper (standalone/agent)
+│   └── client/      # legacy client wrapper (delegates to operator + gateway)
+├── config/          # RoleConfig (unified) + role loaders; DaemonConfig/ClientConfig (legacy); shared runtime Config
 ├── client/          # 对外 Go SDK
 ├── doc/ examples/
 └── internal/
     ├── core/        # cli remoteconfig filter store talog tailer dynamicbatch taskqueue
     ├── process/     # ingest pipeline
     └── service/
-        ├── daemon/  # report runtime implementation, retained package name for compatibility
-        ├── agent/   # task worker runtime implementation, retained package name for compatibility
+        ├── report/  # report service runtime (report.Service)
+        ├── worker/  # task worker service runtime (worker.Service)
         ├── gateway/ # HTTP gateway runtime
         └── backfill/
 ```
@@ -119,9 +125,9 @@ tango worker run --instanceID worker-1
 | `backfill` | 执行历史回填 |
 | `sql` | 执行 SQL 并导入结果 |
 
-独立 `worker run` 不再要求 `report.source.logPattern`，也不会 attach report 的 in-process `filter.Holder`。
+独立 `worker run` 不要求 `report.source.logPattern`，也不持有 report 的 `filter.Holder`。worker 与 report 完全解耦：执行 `report-sync` 只写 remote config 文档。
 
-兼容的 `daemon agent` / `profile managed` 仍会同进程启动 report + worker，并保留 shared `filter.Holder` 热替换行为。
+兼容的 `daemon agent` / `profile managed` 仍会同进程启动 report + worker，但二者不再共享 in-process `filter.Holder`——同进程的 report service 通过自己的 remote config sync loop 应用过滤器（agent/managed 模式下 remoteConfig 默认开启），代价是按 `syncInterval` 的延迟而非即时热替换。
 
 ## 6. HTTP Gateway Service
 
@@ -144,7 +150,7 @@ POST /publish/backfill
 POST /publish/sql
 ```
 
-HTTP 运行时位于 `internal/service/gateway`，`cmd/client/serve.go` 只保留薄命令层和兼容入口。
+HTTP 运行时位于 `internal/service/gateway`；命令层 `cmd/gateway` 只做参数与配置加载，`ServeCommand` 同时被兼容的 `tango client serve` 复用。
 
 ## 7. Operator CLI 与 SDK
 
@@ -187,18 +193,12 @@ taskqueue 是可靠性敏感模块，重构启动体系时不改变其核心语�
 
 ## 10. Report-sync 语义
 
-旧同进程路径：
-
-```text
-daemon agent -> worker executes report-sync -> shared filter.Holder -> report pipeline
-```
-
-新独立角色路径：
+统一的角色路径（独立部署与同进程兼容模式一致）：
 
 ```text
 operator/gateway publish report-sync
-worker claim task and write remote config
+worker claim task and write remote config document
 report service poll remote config and apply filter.Holder
 ```
 
-因此独立 worker 完成 report-sync 表示 remote config 写入成功，不再表示所有 report service 已经应用。若后续需要全局确认语义，可引入 config version + ack collection。
+不再存在「worker 直接热替换同进程 report filter」的路径——`worker.executeReportSync` 只校验表达式能编译，然后写入 remote config 文档。因此 worker 完成 report-sync 表示 **remote config 写入成功**，而非所有 report service 已经应用。所有 report service（含同进程兼容模式）都通过各自的 remote config sync loop 收敛到该过滤器。若后续需要全局确认语义，可引入 config version + ack collection。

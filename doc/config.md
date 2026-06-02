@@ -4,72 +4,66 @@
 [usage.md](usage.md)，设计与数据流见 [arch.md](arch.md)。完整可运行样例见
 [examples/config](../examples/config)。
 
+角色命令（report / worker / gateway / operator）使用**统一 RoleConfig schema**；
+兼容命令（daemon / client / profile）继续使用旧的 DaemonConfig / ClientConfig schema。
+
 ## 配置文件与角色命令
 
 | 角色 / 模式 | 子命令 | schema | `--config` 留空时默认读取 |
 |------|--------|--------|------|
-| report service | `tango report run` | DaemonConfig 的 generic + report | `report.{yaml,yml,json}`，fallback `standalone.{yaml,yml,json}` |
-| worker service | `tango worker run` | DaemonConfig 的 generic + agent + report.filter.remote | `worker.{yaml,yml,json}`，fallback `agent.{yaml,yml,json}` |
-| gateway service | `tango gateway serve` | ClientConfig | `client.{yaml,yml,json}` |
-| operator CLI | `tango operator <subcmd>` | ClientConfig | `client.{yaml,yml,json}` |
+| report service | `tango report run` | RoleConfig：`runtime` + `report` + `remoteConfig` | `report.{yaml,yml,json}` |
+| worker service | `tango worker run` | RoleConfig：`runtime` + `tasks` + `remoteConfig` | `worker.{yaml,yml,json}` |
+| gateway service | `tango gateway serve` | RoleConfig：`runtime` + `gateway` + `upload` + `tasks` | `gateway.{yaml,yml,json}` |
+| operator CLI | `tango operator <subcmd>` | RoleConfig：`runtime` + `upload` + `backfill` + `tasks` | `operator.{yaml,yml,json}` |
 | legacy daemon standalone | `tango daemon standalone` | DaemonConfig | `standalone.{yaml,yml,json}` |
 | legacy daemon agent | `tango daemon agent` | DaemonConfig | `agent.{yaml,yml,json}` |
 | legacy client | `tango client <subcmd>` | ClientConfig | `client.{yaml,yml,json}` |
+| profile local | `tango profile local` | DaemonConfig（兼容） | `local`→`standalone.{yaml,yml,json}` |
+| profile managed | `tango profile managed` | DaemonConfig（兼容） | `managed`→`agent.{yaml,yml,json}` |
 
 默认文件在**二进制同级目录**按 `yaml → yml → json` 取首个存在者；各子命令只读自己的
-文件（standalone 不读 agent 文件，反之亦然）。文件缺失或解析为空时静默跳过。
+文件。文件缺失或解析为空时静默跳过（回退到默认值 + 环境变量 + flag）。
 
 ## 来源与优先级（低 → 高）
 
 1. 内置默认值
 2. 配置文件（YAML/JSON，按扩展名识别）
 3. `TANGO_*` 环境变量
-4. CLI flag（完整层级名，如 `--mongo.uri` / `--instanceID` / legacy `--generic.mongo.uri` / `--agent.instanceID`；`--config` 是文件路径）
-5. 远程配置文档（仅 report service 启用 remote config 或 legacy agent/profile managed 时，仅上报 `filter` 热生效；report-sync 任务写入该文档）
+4. CLI flag（flag 名即配置键，如 `--runtime.mongo.uri` / `--tasks.instanceID`；`--config` 是文件路径）
+5. 远程配置文档（report service 启用 `remoteConfig.enabled` 或兼容 agent/profile managed 时，仅上报 `filter` 热生效；report-sync 任务写入该文档）
 
 ### 环境变量映射
 
-`TANGO_` 前缀 + 嵌套键 `.` → `_`、转大写。注意 **daemon 与 client 的连接串前缀不同**
-（schema 不同）：
+`TANGO_` 前缀 + 嵌套键 `.` → `_`、转大写。
 
 | 配置键 | 环境变量 |
 |--------|----------|
-| report/worker alias `mongo.uri` | `TANGO_MONGO_URI` |
-| report/worker alias `logging.level` | `TANGO_LOGGING_LEVEL` |
+| `runtime.mongo.uri` | `TANGO_RUNTIME_MONGO_URI` |
+| `runtime.logging.level` | `TANGO_RUNTIME_LOGGING_LEVEL` |
+| `report.source.tailMode` | `TANGO_REPORT_SOURCE_TAILMODE` |
+| `remoteConfig.enabled` | `TANGO_REMOTECONFIG_ENABLED` |
+| `tasks.instanceID` | `TANGO_TASKS_INSTANCEID` |
+| `gateway.addr` | `TANGO_GATEWAY_ADDR` |
 | legacy daemon `generic.mongo.uri` | `TANGO_GENERIC_MONGO_URI` |
-| legacy daemon `generic.logging.level` | `TANGO_GENERIC_LOGGING_LEVEL` |
-| daemon `report.source.tailMode` | `TANGO_REPORT_SOURCE_TAILMODE` |
-| worker alias `instanceID` | `TANGO_INSTANCEID` |
 | legacy daemon `agent.instanceID` | `TANGO_AGENT_INSTANCEID` |
-| gateway/operator `mongo.uri` | `TANGO_MONGO_URI` |
+| legacy client `mongo.uri` | `TANGO_MONGO_URI` |
 
 ---
 
-## report / worker / legacy daemon 配置（DaemonConfig）
+## 统一 RoleConfig schema
 
-三部分：`generic` / `report` / `agent`。新角色命令会把角色化参数映射到这个 schema：
-
-- `tango report run --mongo.uri` → `generic.mongo.uri`
-- `tango report run --logging.level` → `generic.logging.level`
-- `tango worker run --instanceID` → `agent.instanceID`
-- `tango worker run --mongo.uri` → `generic.mongo.uri`
-
-legacy `daemon standalone` 只用 `generic` + `report`；legacy `daemon agent` 额外启用 `report.filter.remote` 配置同步与 `agent` 任务派发。
-
-新 `worker run` 只用 `generic` + `agent` + `report.filter.remote`，不要求 `report.source.logPattern`。
-
-### generic（两种模式都用）
+### runtime（所有角色）
 
 | 键 | required/optional | 默认 | 说明 |
 |----|----|----|----|
-| `generic.logging.level` | optional | `info` | `debug`/`info`/`warn`/`error` |
-| `generic.logging.format` | optional | `text` | `text`/`json` |
-| `generic.mongo.uri` | **required** | — | MongoDB 连接串；库名取自 URI 路径 |
-| `generic.mongo.maxElapsedTime` | optional | `10s` | 单次 bulk-write 退避重试总时长上限 |
-| `generic.mongo.connectTimeout` | optional | `10s` | 初次连接握手超时 |
-| `generic.mongo.serverSelectionTimeout` | optional | `30s` | 选择可用节点超时 |
+| `runtime.logging.level` | optional | `info` | `debug`/`info`/`warn`/`error` |
+| `runtime.logging.format` | optional | `text` | `text`/`json` |
+| `runtime.mongo.uri` | **required** | — | MongoDB 连接串；库名取自 URI 路径 |
+| `runtime.mongo.maxElapsedTime` | optional | `10s` | 单次 bulk-write 退避重试总时长上限 |
+| `runtime.mongo.connectTimeout` | optional | `10s` | 初次连接握手超时 |
+| `runtime.mongo.serverSelectionTimeout` | optional | `30s` | 选择可用节点超时 |
 
-### report（两种模式都用）
+### report（report service）
 
 | 键 | required/optional | 默认 | 说明 |
 |----|----|----|----|
@@ -85,53 +79,55 @@ legacy `daemon standalone` 只用 `generic` + `report`；legacy `daemon agent` �
 | `report.pipeline.flushInterval` | optional | `1s` | 未满批次刷新间隔 |
 | `report.pipeline.channelBuffer` | optional | `0`(自动 = batchSize*2) | 每 worker 通道缓冲 |
 | `report.pipeline.deadLetterCap` | optional | `128` | 每 worker 死信批容量 |
-| `report.filter.local.include` | optional | `[]`(全放行) | expr 表达式，OR 语义命中其一即保留 |
-| `report.filter.local.exclude` | optional | `[]` | 命中其一即丢弃（在 include 之后） |
+| `report.filter.include` | optional | `[]`(全放行) | expr 表达式，OR 语义命中其一即保留 |
+| `report.filter.exclude` | optional | `[]` | 命中其一即丢弃（在 include 之后） |
 
-### report.filter.remote（report remote config / worker report-sync / legacy agent 生效）
-
-| 键 | required/optional | 默认 | 说明 |
-|----|----|----|----|
-| `report.filter.remote.collection` | optional | `_tango_config` | 配置文档所在集合 |
-| `report.filter.remote.documentID` | optional | `default` | 配置文档 `_id` |
-| `report.filter.remote.syncInterval` | optional | `1h` | 重新拉取并热重载的间隔 |
-
-> 在 `tango report run` 中，可通过 `--remote-config.enabled` 启用同步；legacy agent/profile managed 默认启用。连接类字段（`generic.mongo.uri` 等）永不可被远端覆盖；只有上报 `filter` 支持运行时热生效。
-
-### agent（worker service / legacy agent 生效）
+### remoteConfig（report service + worker report-sync）
 
 | 键 | required/optional | 默认 | 说明 |
 |----|----|----|----|
-| `agent.instanceID` | **required**(worker / legacy agent) | — | 实例唯一标识；worker 可用 `--instanceID`，legacy 可用 `--agent.instanceID` |
-| `agent.tasksCollection` | optional | `_tango_tasks` | 任务队列集合 |
-| `agent.instancesCollection` | optional | `_tango_instances` | 实例心跳集合（TTL 过期） |
-| `agent.pollInterval` | optional | `10s` | 轮询认领任务间隔 |
-| `agent.leaseDuration` | optional | `5m` | 任务租约；超时未续可被其他 agent 回收 |
-| `agent.heartbeatInterval` | optional | `30s` | 心跳刷新间隔 |
-| `agent.instanceTTL` | optional | `90s` | 心跳超过此时长视为离线 |
+| `remoteConfig.enabled` | optional | `false` | report service 是否监听远端配置热更新；worker 端固定启用 |
+| `remoteConfig.collection` | optional | `_tango_config` | 配置文档所在集合 |
+| `remoteConfig.documentID` | optional | `default` | 配置文档 `_id` |
+| `remoteConfig.syncInterval` | optional | `1h` | 重新拉取并热重载的间隔 |
 
-完整样例：[standalone.max.yaml](../examples/config/standalone/standalone.max.yaml)（全量+注释）、
-[standalone.min.yaml](../examples/config/standalone/standalone.min.yaml)（仅 required）；yaml/json
-各有 max/min 两份，agent 同理见 [examples/config/agent](../examples/config/agent)。
+> 连接类字段（`runtime.mongo.uri` 等）永不可被远端覆盖；只有上报 `filter` 支持运行时热生效。worker 执行 report-sync 仅写入该文档，report service 通过自己的 sync loop 应用。
 
----
+### tasks（worker service + operator/gateway publish）
 
-## gateway / operator / legacy client 配置（ClientConfig）
+| 键 | required/optional | 默认 | 说明 |
+|----|----|----|----|
+| `tasks.instanceID` | worker **required** | — | worker 实例唯一标识；可用 `--instanceID` 简写 |
+| `tasks.collection` | optional | `_tango_tasks` | 任务队列集合 |
+| `tasks.instancesCollection` | optional | `_tango_instances` | 实例心跳集合（TTL 过期） |
+| `tasks.pollInterval` | optional | `10s` | 轮询认领任务间隔 |
+| `tasks.leaseTTL` | optional | `5m` | 任务租约；超时未续可被其他 worker 回收 |
+| `tasks.heartbeatInterval` | optional | `30s` | 心跳刷新间隔 |
+| `tasks.instanceTTL` | optional | `90s` | 心跳超过此时长视为离线 |
 
-gateway 和 operator 复用现有 ClientConfig。它使用扁平的 `mongo`（连接串 `TANGO_MONGO_URI`），按五项功能分区，外加 `server`：
+> publish 端（operator/gateway）只用到 `tasks.collection` / `tasks.instancesCollection` / `tasks.instanceTTL`。
 
-| 段 | 关键键（默认） | 用途 |
-|----|----|----|
-| `logging` / `mongo` | `mongo.uri`**(required)**、`mongo.maxElapsedTime`(10s) | 共享连接/日志 |
-| `stringUpload` | `batchSize`(1000)、`filter.{include,exclude}` | 字符串单次上报（无重传） |
-| `fileUpload` | `logPattern`、`maxLineBytes`(10MB)、`pipeline.*`、`filter.*`、`checkpointCollection`(`_tango_fileupload`) | 文件上报（断点续传） |
-| `backfill` | 见下「backfill」 | 历史回填执行 |
-| `backfillFilter` | `table`(`event`)、`events`、`include`、`exclude` | 回填选表与谓词 |
-| `sql` | `schemaPrefix` | 临时 SQL 的执行覆盖（连接取自 backfill） |
-| `publish` | `tasksCollection`(`_tango_tasks`)、`instancesCollection`(`_tango_instances`)、`instanceTTL`(90s) | 任务发布端 |
-| `server` | `addr`(`:8080`) | `tango gateway serve` / legacy `tango client serve` 监听地址 |
+### gateway（gateway service）
 
-### backfill（client backfill / sql；agent 的 backfill/sql 任务参数来自任务 payload，不读此段）
+| 键 | required/optional | 默认 | 说明 |
+|----|----|----|----|
+| `gateway.addr` | optional | `:8080` | HTTP 监听地址；`--addr` 覆盖 |
+
+### upload（operator + gateway + SDK）
+
+| 键 | required/optional | 默认 | 说明 |
+|----|----|----|----|
+| `upload.string.batchSize` | optional | `1000` | 字符串上报批大小（无重传） |
+| `upload.string.filter.{include,exclude}` | optional | `[]` | 字符串上报的上报 filter |
+| `upload.file.logPattern` | optional | `[]` | 文件上报匹配模式；`--logPattern` 覆盖 |
+| `upload.file.maxLineBytes` | optional | `10485760`(10MB) | 单行最大字节 |
+| `upload.file.pipeline.*` | optional | 同 report.pipeline | 文件上报管线参数 |
+| `upload.file.filter.{include,exclude}` | optional | `[]` | 文件上报的上报 filter |
+| `upload.file.checkpointCollection` | optional | `_tango_fileupload` | 断点续传偏移集合 |
+
+### backfill / backfillFilter / sql（worker + operator + gateway）
+
+`backfill` 段字段（operator backfill / sql 直接执行时读取；worker 的 backfill/sql 任务参数来自任务 payload）：
 
 | 键 | required/optional | 默认 | 说明 |
 |----|----|----|----|
@@ -152,7 +148,36 @@ gateway 和 operator 复用现有 ClientConfig。它使用扁平的 `mongo`（�
 | `backfill.schemaPrefix` | optional | `""` | 表名前缀，如 `ta` → `ta.v_event_35` |
 | `backfill.limit` | optional | `0` | >0 时每条 SQL 追加 `LIMIT n`（冒烟用） |
 
-完整样例：[examples/config/client](../examples/config/client)。
+| 键 | required/optional | 默认 | 说明 |
+|----|----|----|----|
+| `backfillFilter.table` | optional | `event` | 回填选表：`event`/`user` |
+| `backfillFilter.events` | optional | `[]` | event 表语法糖 → `#event_name in [...]` |
+| `backfillFilter.include` / `.exclude` | optional | `[]` | 回填谓词（下推到 SQL + 本地兜底） |
+| `sql.schemaPrefix` | optional | `""` | 临时 SQL 的 schema 前缀覆盖 |
+
+完整样例：[report](../examples/config/report/report.yaml)、[worker](../examples/config/worker/worker.yaml)、
+[gateway](../examples/config/gateway/gateway.yaml)、[operator](../examples/config/operator/operator.yaml)。
+
+---
+
+## 兼容 schema（legacy daemon / client）
+
+兼容命令保留旧文件 schema，便于平滑迁移。
+
+### DaemonConfig（daemon standalone/agent、profile local/managed）
+
+三部分：`generic`（logging + mongo）/ `report`（`source` / `pipeline` / `filter.local` 本地规则 +
+`filter.remote` 同步源）/ `agent`（任务设置：`instanceID`、`tasksCollection`、`pollInterval`、
+`leaseDuration`、`heartbeatInterval`、`instanceTTL` 等）。standalone 只用 `generic` + `report`；
+agent 额外启用 `filter.remote` 同步与 `agent` 任务派发。
+
+样例：[standalone](../examples/config/standalone)、[agent](../examples/config/agent)（yaml/json × max/min）。
+
+### ClientConfig（client 子命令、client serve）
+
+扁平 `logging` / `mongo`，按功能分区 `stringUpload` / `fileUpload` / `backfill` / `backfillFilter` /
+`sql` / `publish` / `server`（`server.addr` 为 `tango client serve` 监听地址）。样例：
+[examples/config/client](../examples/config/client)。
 
 ---
 
@@ -160,19 +185,20 @@ gateway 和 operator 复用现有 ClientConfig。它使用扁平的 `mongo`（�
 
 | | 上报 filter | backfill filter |
 |---|---|---|
-| 位置 | daemon `report.filter.local` / client `stringUpload.filter`、`fileUpload.filter` | `backfillFilter` |
+| 位置 | 角色 `report.filter` / `upload.string.filter` / `upload.file.filter`；legacy daemon `report.filter.local` / client `stringUpload.filter`、`fileUpload.filter` | `backfillFilter` |
 | 维度 | `#type` / `#event_name` / `properties.*` | **表名(event/user)** + 事件/属性（**不含 #type**） |
 | 表达式 | `include` / `exclude`（expr-lang） | `include` / `exclude` + `events`(语法糖 → `#event_name in [...]`) |
 
 上报 filter 示例（expr-lang，作用于扁平化记录，`#` 前缀字段可直接引用）：
 
 ```yaml
-filter:
-  include:
-    - '#type == "track" && #event_name in ["login", "pay"]'
-    - '#type startsWith "user_"'
-  exclude:
-    - 'properties.is_loadtest == true'
+report:
+  filter:
+    include:
+      - '#type == "track" && #event_name in ["login", "pay"]'
+      - '#type startsWith "user_"'
+    exclude:
+      - 'properties.is_loadtest == true'
 ```
 
 被过滤掉的记录**不写 dead_letter**，是有意丢弃。

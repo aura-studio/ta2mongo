@@ -1,10 +1,11 @@
 // Package config defines tango's configuration.
 //
-// The two file-facing schemas are DaemonConfig (daemon.go, for
-// daemon.{yaml,json}) and ClientConfig (client.go, for client.{yaml,json});
-// both project onto the shared runtime Config in this file, which the internal
-// packages (daemon/once/ingest/backfill/agent) consume. loader.go holds the
-// shared YAML/JSON + TANGO_* env + flag loading helpers.
+// The file-facing schemas are RoleConfig (role.go, the unified report/worker/
+// gateway/operator file schema) plus the legacy DaemonConfig (daemon.go) and
+// ClientConfig (client.go) used by the daemon/client/profile wrapper commands.
+// All project onto the shared runtime Config in this file, which the internal
+// service packages (report/worker/gateway/backfill) consume. loader.go holds
+// the shared YAML/JSON + TANGO_* env + flag loading helpers.
 //
 // Sources, in increasing priority: built-in defaults < config file (YAML or
 // JSON, by extension) < TANGO_* environment variables < CLI flags. The
@@ -12,8 +13,9 @@
 // applied separately at startup / via report-sync tasks.
 //
 // The runtime Load below loads the flat runtime Config directly; it is retained
-// for tests and remote-config merging — production binaries use LoadDaemon /
-// LoadClient.
+// for tests and remote-config merging — production binaries use the role
+// loaders (LoadReport / LoadWorker / LoadGateway / LoadOperator) or the legacy
+// LoadDaemon / LoadClient.
 package config
 
 import (

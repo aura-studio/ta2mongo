@@ -22,23 +22,25 @@ tango client serve               # deprecated: use tango gateway serve
 
 - `--config <path>`：配置文件路径，支持 `.yaml` / `.yml` / `.json`。文件不存在时静默跳过，回退到默认值 + 环境变量 + flag。
 - 留空时各角色命令在二进制同级目录查找自己的默认文件。
-- CLI flag 使用完整层级名覆盖配置。新角色命令优先使用 `--mongo.uri`、`--logging.level`、`--instanceID` 等角色化参数；旧 daemon 命令仍支持 `--generic.mongo.uri`、`--agent.instanceID`。
-- 所有键均可用 `TANGO_*` 环境变量覆盖，嵌套键 `.` 转 `_` 并大写。
+- CLI flag 名即配置键（viper 原生层级）。角色命令使用统一 schema 的键：`--runtime.mongo.uri`、`--runtime.logging.level`、`--remoteConfig.enabled`、`--tasks.instanceID`（worker 另提供 `--instanceID` 简写别名）。旧 daemon 命令仍用 `--generic.mongo.uri`、`--agent.instanceID`。
+- 所有键均可用 `TANGO_*` 环境变量覆盖，嵌套键 `.` 转 `_` 并大写（如 `runtime.mongo.uri` → `TANGO_RUNTIME_MONGO_URI`）。
 
-| 角色命令 | 默认配置文件 | 兼容 fallback |
+| 角色命令 | 默认配置文件 | 文件 schema |
 |---|---|---|
-| `tango report run` | `report.{yaml,yml,json}` | `standalone.{yaml,yml,json}` |
-| `tango worker run` | `worker.{yaml,yml,json}` | `agent.{yaml,yml,json}` |
-| `tango gateway serve` | `client.{yaml,yml,json}` | 无，复用现有 ClientConfig |
-| `tango operator ...` | `client.{yaml,yml,json}` | 无，复用现有 ClientConfig |
-| `tango profile local` | `local.{yaml,yml,json}` | `standalone.{yaml,yml,json}` |
-| `tango profile managed` | `managed.{yaml,yml,json}` | `agent.{yaml,yml,json}` |
+| `tango report run` | `report.{yaml,yml,json}` | 统一 RoleConfig（runtime + report + remoteConfig） |
+| `tango worker run` | `worker.{yaml,yml,json}` | 统一 RoleConfig（runtime + tasks + remoteConfig） |
+| `tango gateway serve` | `gateway.{yaml,yml,json}` | 统一 RoleConfig（runtime + gateway + upload + tasks） |
+| `tango operator ...` | `operator.{yaml,yml,json}` | 统一 RoleConfig（runtime + upload + backfill + tasks） |
+| `tango profile local` | `local.{yaml,yml,json}` → `standalone.{yaml,yml,json}` | 旧 daemon schema（兼容） |
+| `tango profile managed` | `managed.{yaml,yml,json}` → `agent.{yaml,yml,json}` | 旧 daemon schema（兼容） |
+
+> profile 与 daemon / client 兼容命令继续读取旧的 daemon / client 文件 schema；report / worker / gateway / operator 角色命令读取统一 RoleConfig schema。
 
 ## Report Service
 
 ```bash
 tango report run --config report.yaml
-tango report run --mongo.uri mongodb://localhost:27017/tango --remote-config.enabled
+tango report run --runtime.mongo.uri mongodb://localhost:27017/tango --remoteConfig.enabled
 ```
 
 职责：
@@ -54,15 +56,15 @@ tango report run --mongo.uri mongodb://localhost:27017/tango --remote-config.ena
 
 | 参数 | 说明 |
 |---|---|
-| `--mongo.uri` | MongoDB 连接串，映射到旧 schema 的 `generic.mongo.uri` |
-| `--logging.level` | 日志级别，映射到 `generic.logging.level` |
-| `--remote-config.enabled` | 启用远端配置热更新 |
+| `--runtime.mongo.uri` | MongoDB 连接串（配置键 `runtime.mongo.uri`） |
+| `--runtime.logging.level` | 日志级别（配置键 `runtime.logging.level`） |
+| `--remoteConfig.enabled` | 启用远端配置热更新（配置键 `remoteConfig.enabled`） |
 
 ## Task Worker Service
 
 ```bash
 tango worker run --config worker.yaml --instanceID worker-1
-tango worker run --mongo.uri mongodb://localhost:27017/tango --instanceID worker-1
+tango worker run --runtime.mongo.uri mongodb://localhost:27017/tango --instanceID worker-1
 ```
 
 职责：
@@ -77,20 +79,20 @@ tango worker run --mongo.uri mongodb://localhost:27017/tango --instanceID worker
 
 | 参数 | 说明 |
 |---|---|
-| `--instanceID` | worker 实例 ID，必填；等价于旧 `agent.instanceID` |
-| `--agent.instanceID` | 兼容旧配置键 |
-| `--mongo.uri` | MongoDB 连接串 |
-| `--logging.level` | 日志级别 |
+| `--tasks.instanceID` | worker 实例 ID，必填（配置键 `tasks.instanceID`） |
+| `--instanceID` | 简写别名，映射到 `tasks.instanceID` |
+| `--runtime.mongo.uri` | MongoDB 连接串 |
+| `--runtime.logging.level` | 日志级别 |
 
 `worker run` 不要求 `report.source.logPattern`，因为它不启动文件追尾管线。
 
 ## HTTP Gateway Service
 
 ```bash
-tango gateway serve --config client.yaml --addr :8080
+tango gateway serve --config gateway.yaml --addr :8080
 ```
 
-gateway 是常驻 HTTP 服务，复用现有 ClientConfig 和 SDK。它不再作为主要 `client` 形态描述。
+gateway 是常驻 HTTP 服务，读取统一 RoleConfig（`runtime` + `gateway` + `upload` + `tasks`），底层复用 Go SDK。它不再作为 `client` 的形态描述。`--addr` 覆盖 `gateway.addr`。
 
 | 方法 | 路径 | body | 功能 |
 |---|---|---|---|
