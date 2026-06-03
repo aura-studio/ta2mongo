@@ -16,6 +16,10 @@ profile.cov
 go.work
 go.work.sum
 
+# Local agent/tool state
+/.sixth/skills/
+/.orchestrator/
+
 # Vendored deps are not committed (module mode)
 /vendor/
 

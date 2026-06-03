@@ -18,8 +18,8 @@ import (
 // an HTTP server block for the gateway face. Each section is a pointer to the
 // owning module's config struct.
 type ClientConfig struct {
-	Logging *logging.Config `mapstructure:"logging"`
-	Dao     *dao.Config     `mapstructure:"dao"`
+	Dao     *dao.Config    `mapstructure:"dao"`
+	Runtime *RuntimeConfig `mapstructure:"runtime"`
 
 	// StringUpload: single string ingest, no retransmission.
 	StringUpload StringUploadConfig `mapstructure:"stringUpload"`
@@ -59,14 +59,17 @@ const DefaultFileUploadCheckpointCollection = "_tango_fileupload"
 const DefaultServerAddr = ":8080"
 
 func (c *ClientConfig) applyDefaults() {
-	if c.Logging == nil {
-		c.Logging = &logging.Config{}
+	if c.Runtime == nil {
+		c.Runtime = &RuntimeConfig{}
 	}
-	if c.Logging.Level == "" {
-		c.Logging.Level = "info"
+	if c.Runtime.Logging == nil {
+		c.Runtime.Logging = &logging.Config{}
 	}
-	if c.Logging.Format == "" {
-		c.Logging.Format = "text"
+	if c.Runtime.Logging.Level == "" {
+		c.Runtime.Logging.Level = "info"
+	}
+	if c.Runtime.Logging.Format == "" {
+		c.Runtime.Logging.Format = "text"
 	}
 	if c.Dao == nil {
 		c.Dao = &dao.Config{}

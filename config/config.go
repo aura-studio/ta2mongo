@@ -8,8 +8,8 @@
 // TANGO_* env + flag loading helpers.
 //
 // Each runtime concern owns its own config struct in its module (dao.Config,
-// engine.Config, logging.Config, parser.Config, process.Config, tailer.Config);
-// the top-level Config merely references them by pointer.
+// engine.Config, parser.Config, process.Config, tailer.Config); the top-level
+// Config merely references them by pointer.
 //
 // Sources, in increasing priority: built-in defaults < config file (YAML or
 // JSON, by extension) < TANGO_* environment variables < CLI flags.
@@ -20,7 +20,6 @@ import (
 
 	"rocket-nano/tools/tango/internal/dao"
 	"rocket-nano/tools/tango/internal/engine"
-	"rocket-nano/tools/tango/internal/logging"
 	"rocket-nano/tools/tango/internal/parser"
 	"rocket-nano/tools/tango/internal/process"
 	"rocket-nano/tools/tango/internal/source/tailer"
@@ -43,14 +42,14 @@ type Config struct {
 	// Engine configures runtime engine behavior.
 	Engine *engine.Config `mapstructure:"engine"`
 
-	// Logging configures log output (internal/logging).
-	Logging *logging.Config `mapstructure:"logging"`
-
 	// Parser configures log parsing and reporting filters.
 	Parser *parser.Config `mapstructure:"parser"`
 
 	// Process configures ingestion processing.
 	Process *process.Config `mapstructure:"process"`
+
+	// Runtime configures process-wide settings loaded from runtime.* keys.
+	Runtime *RuntimeConfig `mapstructure:"runtime"`
 
 	// Source configures the file-tailing data source (internal/source/tailer).
 	Source *tailer.Config `mapstructure:"source"`

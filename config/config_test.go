@@ -267,8 +267,8 @@ dao:
 	if cfg.Process.Pipeline.DeadLetterCap != 128 {
 		t.Errorf("deadLetterCap = %d", cfg.Process.Pipeline.DeadLetterCap)
 	}
-	if cfg.Logging.Level != "info" || cfg.Logging.Format != "text" {
-		t.Errorf("logging = %+v", cfg.Logging)
+	if cfg.Runtime.Logging.Level != "info" || cfg.Runtime.Logging.Format != "text" {
+		t.Errorf("runtime.logging = %+v", cfg.Runtime.Logging)
 	}
 }
 
@@ -436,8 +436,8 @@ report:
 		t.Fatal(err)
 	}
 	// ENV (string) overrides YAML.
-	if rt.Logging.Level != "debug" {
-		t.Errorf("Logging.Level = %q, want %q (ENV should override YAML)", rt.Logging.Level, "debug")
+	if rt.Runtime.Logging.Level != "debug" {
+		t.Errorf("Runtime.Logging.Level = %q, want %q (ENV should override YAML)", rt.Runtime.Logging.Level, "debug")
 	}
 	// ENV (duration, via decode hook) overrides YAML.
 	if rt.Source.RescanInterval != 60*time.Second {

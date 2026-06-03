@@ -56,7 +56,7 @@ func GatewayConfig(cmd *cobra.Command) (config.ClientConfig, error) {
 	if err != nil {
 		return config.ClientConfig{}, err
 	}
-	logging.Init(cc.Logging.Level)
+	logging.Init(cc.Runtime.Logging.Level)
 	return cc, nil
 }
 

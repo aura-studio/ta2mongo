@@ -23,7 +23,7 @@ func RunStandaloneService(cmd *cobra.Command, path string) error {
 	if err != nil {
 		return err
 	}
-	logging.Init(rt.Logging.Level)
+	logging.Init(rt.Runtime.Logging.Level)
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 

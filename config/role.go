@@ -86,9 +86,9 @@ func (r RoleConfig) ReportRuntime() Config {
 	return Config{
 		Dao:     r.Runtime.Dao(),
 		Engine:  &engine.Config{Mode: ModeReport},
-		Logging: r.Runtime.Logging,
 		Parser:  parserConfigFromFilter(r.Report.Filter),
 		Process: &process.Config{Pipeline: r.Report.Pipeline},
+		Runtime: &r.Runtime,
 		Source:  r.Report.Source,
 	}
 }
@@ -97,8 +97,8 @@ func (r RoleConfig) ReportRuntime() Config {
 // gateway service (which drives the client SDK).
 func (r RoleConfig) Client() ClientConfig {
 	cc := ClientConfig{
-		Logging: r.Runtime.Logging,
 		Dao:     r.Runtime.Dao(),
+		Runtime: &r.Runtime,
 		StringUpload: StringUploadConfig{
 			BatchSize: r.Upload.String.BatchSize,
 			Filter:    r.Upload.String.Filter,
