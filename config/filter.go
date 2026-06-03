@@ -1,6 +1,6 @@
 package config
 
-import "rocket-nano/tools/tango/internal/core/filter"
+import "rocket-nano/tools/tango/internal/source/filter"
 
 // BuildFilter compiles the configured filter expressions. Validate must have
 // been called first; this method is intended to be invoked by runtime

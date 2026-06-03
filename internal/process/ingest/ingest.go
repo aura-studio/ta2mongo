@@ -10,7 +10,7 @@
 // immediately whether the write succeeded.
 //
 // The per-line rules (parse → filter → identity → write model / dead letter)
-// are shared with the pipeline via internal/process/ingestion.Processor; this
+// are shared with the pipeline via internal/process/processor.Processor; this
 // package only differs in lifecycle (synchronous, immediate writes).
 package ingest
 
@@ -19,24 +19,22 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/sirupsen/logrus"
 	drivermongo "go.mongodb.org/mongo-driver/mongo"
 
 	"rocket-nano/tools/tango/config"
-	"rocket-nano/tools/tango/internal/core/filter"
+	"rocket-nano/tools/tango/internal/dao"
 	daomongo "rocket-nano/tools/tango/internal/dao/mongo"
-	"rocket-nano/tools/tango/internal/dao/store"
-	"rocket-nano/tools/tango/internal/core/talog"
-	"rocket-nano/tools/tango/internal/process/ingestion"
+	"rocket-nano/tools/tango/internal/log"
+	"rocket-nano/tools/tango/internal/process/processor"
+	"rocket-nano/tools/tango/internal/source"
 )
 
 // Ingester processes individual JSON log lines synchronously.
 // It is safe for concurrent use from multiple goroutines.
 type Ingester struct {
-	proc   *ingestion.Processor
-	store  *store.Store
-	mongo  *daomongo.MongoResource
-	logger *logrus.Logger
+	proc  *processor.Processor
+	dao   *dao.Dao
+	mongo *daomongo.MongoResource
 }
 
 // ErrFiltered is returned by Ingest when the line is dropped by user-defined
@@ -45,7 +43,7 @@ var ErrFiltered = errors.New("ingest: dropped by filter")
 
 // New connects to MongoDB and creates a ready-to-use Ingester.
 // The caller must call Close when the Ingester is no longer needed.
-func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Ingester, error) {
+func New(ctx context.Context, cfg config.Config) (*Ingester, error) {
 	flt, err := cfg.BuildFilter()
 	if err != nil {
 		return nil, fmt.Errorf("ingest: %w", err)
@@ -54,14 +52,14 @@ func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Ingest
 	if err != nil {
 		return nil, fmt.Errorf("ingest: %w", err)
 	}
-	return newIngester(res, flt, cfg, logger), nil
+	return newIngester(res, source.New(flt), cfg), nil
 }
 
 // NewFromClient creates an Ingester from an existing MongoDB client, avoiding a
 // second connection. The client is borrowed: Close will not disconnect it (the
 // caller owns its lifecycle). Returns an error if the configured filter
 // expressions fail to compile.
-func NewFromClient(client *drivermongo.Client, cfg config.Config, logger *logrus.Logger) (*Ingester, error) {
+func NewFromClient(client *drivermongo.Client, cfg config.Config) (*Ingester, error) {
 	flt, err := cfg.BuildFilter()
 	if err != nil {
 		return nil, fmt.Errorf("ingest: %w", err)
@@ -70,16 +68,15 @@ func NewFromClient(client *drivermongo.Client, cfg config.Config, logger *logrus
 	if err != nil {
 		return nil, fmt.Errorf("ingest: %w", err)
 	}
-	return newIngester(res, flt, cfg, logger), nil
+	return newIngester(res, source.New(flt), cfg), nil
 }
 
-func newIngester(res *daomongo.MongoResource, flt *filter.Filter, cfg config.Config, logger *logrus.Logger) *Ingester {
-	st := daomongo.NewStore(res.DB, cfg, logger)
+func newIngester(res *daomongo.MongoResource, src *source.Source, cfg config.Config) *Ingester {
+	da := dao.New(res.DB, cfg)
 	return &Ingester{
-		proc:   ingestion.NewProcessor(talog.NewParser(), filter.NewHolder(flt), st, ingestion.NoopStats{}, ingestion.WriteOptions{}),
-		store:  st,
-		mongo:  res,
-		logger: logger,
+		proc:  processor.NewProcessor(src.Parser, src.Filter(), da.Store, processor.NoopStats{}, processor.WriteOptions{}),
+		dao:   da,
+		mongo: res,
 	}
 }
 
@@ -92,7 +89,7 @@ func (ig *Ingester) Close() error {
 
 // EnsureIndexes creates all required MongoDB indexes (idempotent).
 func (ig *Ingester) EnsureIndexes(ctx context.Context) error {
-	return ig.store.EnsureIndexes(ctx)
+	return ig.dao.EnsureIndexes(ctx)
 }
 
 // Ingest parses a single JSON log line, resolves user identity, and writes the
@@ -104,20 +101,20 @@ func (ig *Ingester) EnsureIndexes(ctx context.Context) error {
 func (ig *Ingester) Ingest(ctx context.Context, line string) error {
 	res := ig.proc.Process(ctx, line)
 	switch res.Kind {
-	case ingestion.KindParseError:
+	case processor.KindParseError:
 		ig.writeDeadLetter(ctx, res.Model)
 		return fmt.Errorf("ingest: parse: %w", res.Err)
-	case ingestion.KindFiltered:
+	case processor.KindFiltered:
 		return ErrFiltered
-	case ingestion.KindIdentityError:
+	case processor.KindIdentityError:
 		ig.writeDeadLetter(ctx, res.Model)
 		return fmt.Errorf("ingest: identity resolve: %w", res.Err)
-	case ingestion.KindUser:
-		if err := ig.store.BulkWriteOrdered(ctx, ig.store.UserCollection(), []drivermongo.WriteModel{res.Model}); err != nil {
+	case processor.KindUser:
+		if err := ig.dao.BulkWriteOrdered(ctx, ig.dao.UserCollection(), []drivermongo.WriteModel{res.Model}); err != nil {
 			return fmt.Errorf("ingest: write user: %w", err)
 		}
-	case ingestion.KindEvent:
-		if err := ig.store.BulkWrite(ctx, ig.store.EventCollection(), []drivermongo.WriteModel{res.Model}); err != nil {
+	case processor.KindEvent:
+		if err := ig.dao.BulkWrite(ctx, ig.dao.EventCollection(), []drivermongo.WriteModel{res.Model}); err != nil {
 			return fmt.Errorf("ingest: write event: %w", err)
 		}
 	}
@@ -125,8 +122,8 @@ func (ig *Ingester) Ingest(ctx context.Context, line string) error {
 }
 
 func (ig *Ingester) writeDeadLetter(ctx context.Context, model drivermongo.WriteModel) {
-	if err := ig.store.BulkWrite(ctx, ig.store.DeadLetterCollection(), []drivermongo.WriteModel{model}); err != nil {
-		ig.logger.WithError(err).Warn("ingest: failed to write dead letter")
+	if err := ig.dao.BulkWrite(ctx, ig.dao.DeadLetterCollection(), []drivermongo.WriteModel{model}); err != nil {
+		log.WithError(err).Warn("ingest: failed to write dead letter")
 	}
 }
 
@@ -146,17 +143,17 @@ func (ig *Ingester) IngestBatch(ctx context.Context, lines []string) error {
 	for _, line := range lines {
 		res := ig.proc.Process(ctx, line)
 		switch res.Kind {
-		case ingestion.KindParseError:
-			ig.logger.WithError(res.Err).Debug("ingest batch: invalid line")
+		case processor.KindParseError:
+			log.WithError(res.Err).Debug("ingest batch: invalid line")
 			deadModels = append(deadModels, res.Model)
-		case ingestion.KindIdentityError:
-			ig.logger.WithError(res.Err).Warn("ingest batch: identity resolve failed")
+		case processor.KindIdentityError:
+			log.WithError(res.Err).Warn("ingest batch: identity resolve failed")
 			deadModels = append(deadModels, res.Model)
-		case ingestion.KindFiltered:
+		case processor.KindFiltered:
 			// intentionally discarded
-		case ingestion.KindUser:
+		case processor.KindUser:
 			userModels = append(userModels, res.Model)
-		case ingestion.KindEvent:
+		case processor.KindEvent:
 			eventModels = append(eventModels, res.Model)
 		}
 	}
@@ -164,17 +161,17 @@ func (ig *Ingester) IngestBatch(ctx context.Context, lines []string) error {
 	// Flush all batches. User collection uses ordered writes for correctness.
 	var firstErr error
 	if len(userModels) > 0 {
-		if err := ig.store.BulkWriteOrdered(ctx, ig.store.UserCollection(), userModels); err != nil {
+		if err := ig.dao.BulkWriteOrdered(ctx, ig.dao.UserCollection(), userModels); err != nil {
 			firstErr = fmt.Errorf("ingest batch: write user: %w", err)
 		}
 	}
 	if len(eventModels) > 0 {
-		if err := ig.store.BulkWrite(ctx, ig.store.EventCollection(), eventModels); err != nil && firstErr == nil {
+		if err := ig.dao.BulkWrite(ctx, ig.dao.EventCollection(), eventModels); err != nil && firstErr == nil {
 			firstErr = fmt.Errorf("ingest batch: write event: %w", err)
 		}
 	}
 	if len(deadModels) > 0 {
-		if err := ig.store.BulkWrite(ctx, ig.store.DeadLetterCollection(), deadModels); err != nil && firstErr == nil {
+		if err := ig.dao.BulkWrite(ctx, ig.dao.DeadLetterCollection(), deadModels); err != nil && firstErr == nil {
 			firstErr = fmt.Errorf("ingest batch: write dead letter: %w", err)
 		}
 	}

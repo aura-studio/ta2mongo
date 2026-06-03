@@ -1,11 +1,11 @@
-package ingestion
+package processor
 
 import (
 	"context"
 	"testing"
 
-	"rocket-nano/tools/tango/internal/core/filter"
-	"rocket-nano/tools/tango/internal/core/talog"
+	"rocket-nano/tools/tango/internal/source/filter"
+	"rocket-nano/tools/tango/internal/source/talog"
 )
 
 // countStats records how many times each callback fired.

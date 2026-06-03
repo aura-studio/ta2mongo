@@ -25,11 +25,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/sirupsen/logrus"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"rocket-nano/tools/tango/config"
+	daomongo "rocket-nano/tools/tango/internal/dao/mongo"
 	"rocket-nano/tools/tango/internal/dao/store"
 	"rocket-nano/tools/tango/internal/process/ingest"
 )
@@ -48,10 +48,6 @@ type Options struct {
 	// BatchSize is the maximum number of write models per bulk write call
 	// when using IngestBatch. Default: 1000
 	BatchSize int
-
-	// Logger is an optional logrus logger. If nil, a default logger is created
-	// at Info level.
-	Logger *logrus.Logger
 
 	// FilterInclude / FilterExclude are optional reporting-filter expressions
 	// applied to Ingest / IngestBatch (string upload). Empty = pass everything.
@@ -77,11 +73,6 @@ func WithBatchSize(n int) Option {
 	return func(o *Options) { o.BatchSize = n }
 }
 
-// WithLogger sets the logger instance.
-func WithLogger(l *logrus.Logger) Option {
-	return func(o *Options) { o.Logger = l }
-}
-
 // WithFilter sets the reporting-filter expressions applied to string uploads
 // (Ingest / IngestBatch).
 func WithFilter(include, exclude []string) Option {
@@ -98,12 +89,6 @@ func (o *Options) defaults() {
 	if o.BatchSize <= 0 {
 		o.BatchSize = 1000
 	}
-	if o.Logger == nil {
-		l := logrus.New()
-		l.SetFormatter(&logrus.TextFormatter{FullTimestamp: true})
-		l.SetLevel(logrus.InfoLevel)
-		o.Logger = l
-	}
 }
 
 // Client is a connection-pool-backed client for writing ThinkingData records
@@ -112,7 +97,6 @@ type Client struct {
 	ingester *ingest.Ingester
 	client   *mongo.Client
 	store    *store.Store
-	logger   *logrus.Logger
 	opts     Options
 }
 
@@ -141,7 +125,7 @@ func New(ctx context.Context, optFns ...Option) (*Client, error) {
 	}
 	opts.defaults()
 
-	dbName, err := config.MongoDBFromURI(opts.URI)
+	dbName, err := daomongo.MongoDBFromURI(opts.URI)
 	if err != nil {
 		return nil, fmt.Errorf("client: URI must contain database name in path (e.g. mongodb://host:27017/tango): %w", err)
 	}
@@ -162,7 +146,7 @@ func New(ctx context.Context, optFns ...Option) (*Client, error) {
 	// Build a minimal config for the store (only retry settings matter).
 	// We provide batch tuning defaults; ingest itself doesn't use the daemon batch flusher.
 	cfg := config.Config{
-		Mongo: config.MongoConfig{
+		Mongo: daomongo.Config{
 			URI:            opts.URI,
 			MaxElapsedTime: opts.MaxElapsedTime,
 		},
@@ -174,8 +158,8 @@ func New(ctx context.Context, optFns ...Option) (*Client, error) {
 		Filter: config.FilterConfig{Include: opts.FilterInclude, Exclude: opts.FilterExclude},
 	}
 
-	st := store.New(db, cfg, opts.Logger)
-	ig, err := ingest.NewFromClient(mongoClient, cfg, opts.Logger)
+	st := store.New(db, store.Config{MaxElapsedTime: opts.MaxElapsedTime})
+	ig, err := ingest.NewFromClient(mongoClient, cfg)
 	if err != nil {
 		_ = mongoClient.Disconnect(ctx)
 		return nil, fmt.Errorf("client: %w", err)
@@ -185,7 +169,6 @@ func New(ctx context.Context, optFns ...Option) (*Client, error) {
 		ingester: ig,
 		client:   mongoClient,
 		store:    st,
-		logger:   opts.Logger,
 		opts:     opts,
 	}, nil
 }

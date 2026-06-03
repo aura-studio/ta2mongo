@@ -1,13 +1,13 @@
-package ingestion
+package processor
 
 import (
 	"context"
 
 	"go.mongodb.org/mongo-driver/mongo"
 
-	"rocket-nano/tools/tango/internal/core/filter"
 	daostore "rocket-nano/tools/tango/internal/dao/store"
-	"rocket-nano/tools/tango/internal/core/talog"
+	"rocket-nano/tools/tango/internal/source/filter"
+	"rocket-nano/tools/tango/internal/source/talog"
 )
 
 // WriteOptions tunes write-side behaviour for callers that need to deviate from

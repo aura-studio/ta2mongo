@@ -8,20 +8,18 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/sirupsen/logrus"
-
 	sdk "rocket-nano/tools/tango/client"
 	"rocket-nano/tools/tango/config"
+	"rocket-nano/tools/tango/internal/log"
 )
 
 type Server struct {
-	cc     config.ClientConfig
-	cli    *sdk.Client
-	logger *logrus.Logger
+	cc  config.ClientConfig
+	cli *sdk.Client
 }
 
-func New(cc config.ClientConfig, cli *sdk.Client, logger *logrus.Logger) *Server {
-	return &Server{cc: cc, cli: cli, logger: logger}
+func New(cc config.ClientConfig, cli *sdk.Client) *Server {
+	return &Server{cc: cc, cli: cli}
 }
 
 func (s *Server) Run(ctx context.Context, addr string) error {
@@ -33,7 +31,7 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 	httpSrv := &http.Server{Addr: addr, Handler: mux}
 	errCh := make(chan error, 1)
 	go func() {
-		s.logger.WithField("addr", addr).Info("tango gateway: HTTP server listening")
+		log.WithField("addr", addr).Info("tango gateway: HTTP server listening")
 		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}

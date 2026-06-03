@@ -7,8 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sirupsen/logrus"
-
 	"rocket-nano/tools/tango/config"
 )
 
@@ -244,12 +242,9 @@ func TestDiscoverFiles_BasicPattern(t *testing.T) {
 		}
 	}
 
-	logger := logrus.New()
-	logger.SetOutput(os.Stderr)
-
 	// Glob pattern matches only .log files.
 	pattern := dir + "/*.log"
-	result := discoverFiles([]string{pattern}, logger)
+	result := discoverFiles([]string{pattern})
 
 	if len(result) != 2 {
 		t.Fatalf("expected 2 files, got %d: %v", len(result), result)
@@ -270,10 +265,8 @@ func TestDiscoverFiles_BasicPattern(t *testing.T) {
 }
 
 func TestDiscoverFiles_EmptyPattern(t *testing.T) {
-	logger := logrus.New()
-	logger.SetOutput(os.Stderr)
 
-	result := discoverFiles([]string{""}, logger)
+	result := discoverFiles([]string{""})
 	if len(result) != 0 {
 		t.Errorf("expected 0 files for empty pattern, got %d: %v", len(result), result)
 	}
@@ -287,13 +280,10 @@ func TestDiscoverFiles_Deduplication(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	logger := logrus.New()
-	logger.SetOutput(os.Stderr)
-
 	// Two patterns that match the same file.
 	p1 := dir + "/*.log"
 	p2 := dir + "/access.log"
-	result := discoverFiles([]string{p1, p2}, logger)
+	result := discoverFiles([]string{p1, p2})
 
 	if len(result) != 1 {
 		t.Errorf("expected 1 deduplicated file, got %d: %v", len(result), result)
@@ -312,12 +302,9 @@ func TestDiscoverFiles_SubdirectoryWithDoublestar(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	logger := logrus.New()
-	logger.SetOutput(os.Stderr)
-
 	// ** should match files in subdirectories.
 	pattern := dir + "/**/*.log"
-	result := discoverFiles([]string{pattern}, logger)
+	result := discoverFiles([]string{pattern})
 
 	if len(result) != 1 {
 		t.Fatalf("expected 1 file, got %d: %v", len(result), result)
@@ -339,14 +326,11 @@ func TestDiscoverFiles_MultiplePatterns(t *testing.T) {
 		}
 	}
 
-	logger := logrus.New()
-	logger.SetOutput(os.Stderr)
-
 	patterns := []string{
 		dir + "/*.log",
 		dir + "/*.txt",
 	}
-	result := discoverFiles(patterns, logger)
+	result := discoverFiles(patterns)
 
 	if len(result) != 2 {
 		t.Fatalf("expected 2 files, got %d: %v", len(result), result)
@@ -368,10 +352,8 @@ func TestDiscoverFiles_MultiplePatterns(t *testing.T) {
 }
 
 func TestDiscoverFiles_NonexistentDirectory(t *testing.T) {
-	logger := logrus.New()
-	logger.SetOutput(os.Stderr)
 
-	result := discoverFiles([]string{"/nonexistent/dir/*.log"}, logger)
+	result := discoverFiles([]string{"/nonexistent/dir/*.log"})
 	if len(result) != 0 {
 		t.Errorf("expected 0 files for nonexistent dir, got %d: %v", len(result), result)
 	}
@@ -398,11 +380,8 @@ func TestDiscoverFiles_RelativePath(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Chdir(orig) })
 
-	logger := logrus.New()
-	logger.SetOutput(os.Stderr)
-
 	pattern := "logs/ta.*.log"
-	result := discoverFiles([]string{pattern}, logger)
+	result := discoverFiles([]string{pattern})
 
 	if len(result) != 2 {
 		t.Fatalf("expected 2 files, got %d: %v", len(result), result)
@@ -426,11 +405,8 @@ func TestDiscoverFiles_DotSlashRelativePath(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Chdir(orig) })
 
-	logger := logrus.New()
-	logger.SetOutput(os.Stderr)
-
 	pattern := "./logs/*.log"
-	result := discoverFiles([]string{pattern}, logger)
+	result := discoverFiles([]string{pattern})
 
 	if len(result) != 1 {
 		t.Fatalf("expected 1 file, got %d: %v", len(result), result)
@@ -459,11 +435,8 @@ func TestDiscoverFiles_DoublestarRelative(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Chdir(orig) })
 
-	logger := logrus.New()
-	logger.SetOutput(os.Stderr)
-
 	pattern := "**/*.log"
-	result := discoverFiles([]string{pattern}, logger)
+	result := discoverFiles([]string{pattern})
 
 	if len(result) != 2 {
 		t.Fatalf("expected 2 files, got %d: %v", len(result), result)
@@ -482,11 +455,8 @@ func TestRescan_PicksUpNewFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	logger := logrus.New()
-	logger.SetOutput(os.Stderr)
-
 	pattern := dir + "/*.log"
-	tailer := New([]string{pattern}, 100*time.Millisecond, config.TailModeHybrid, logger)
+	tailer := New([]string{pattern}, 100*time.Millisecond, config.TailModeHybrid)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -531,11 +501,8 @@ func TestRescan_DoesNotDuplicateExistingFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	logger := logrus.New()
-	logger.SetOutput(os.Stderr)
-
 	pattern := dir + "/*.log"
-	tailer := New([]string{pattern}, 100*time.Millisecond, config.TailModeHybrid, logger)
+	tailer := New([]string{pattern}, 100*time.Millisecond, config.TailModeHybrid)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -569,11 +536,8 @@ func TestContinuousWrite_TailerKeepsUp(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	logger := logrus.New()
-	logger.SetOutput(os.Stderr)
-
 	pattern := dir + "/*.log"
-	tailer := New([]string{pattern}, 30*time.Second, config.TailModeHybrid, logger)
+	tailer := New([]string{pattern}, 30*time.Second, config.TailModeHybrid)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -643,11 +607,8 @@ func TestContinuousWrite_SlowConsumer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	logger := logrus.New()
-	logger.SetOutput(os.Stderr)
-
 	pattern := dir + "/*.log"
-	tailer := New([]string{pattern}, 30*time.Second, config.TailModeHybrid, logger)
+	tailer := New([]string{pattern}, 30*time.Second, config.TailModeHybrid)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -707,11 +668,8 @@ func TestContinuousWrite_SlowConsumer(t *testing.T) {
 func TestRescan_StreamsNewLinesFromNewFile(t *testing.T) {
 	dir := t.TempDir()
 
-	logger := logrus.New()
-	logger.SetOutput(os.Stderr)
-
 	pattern := dir + "/*.log"
-	tailer := New([]string{pattern}, 100*time.Millisecond, config.TailModeHybrid, logger)
+	tailer := New([]string{pattern}, 100*time.Millisecond, config.TailModeHybrid)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

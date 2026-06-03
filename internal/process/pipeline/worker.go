@@ -5,26 +5,26 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sirupsen/logrus"
 	"go.mongodb.org/mongo-driver/mongo"
 
 	"rocket-nano/tools/tango/config"
 	"rocket-nano/tools/tango/internal/core/dynamicbatch"
-	"rocket-nano/tools/tango/internal/core/filter"
 	daostore "rocket-nano/tools/tango/internal/dao/store"
-	"rocket-nano/tools/tango/internal/core/talog"
-	"rocket-nano/tools/tango/internal/process/ingestion"
+	"rocket-nano/tools/tango/internal/log"
+	"rocket-nano/tools/tango/internal/process/processor"
+	"rocket-nano/tools/tango/internal/source/filter"
+	"rocket-nano/tools/tango/internal/source/talog"
 )
 
 // RunWorkers launches N workers with affinity-based dispatch and blocks
 // until all workers finish. A nil flt is treated as a no-op filter. flt is a
 // Holder so the active filter can be hot-swapped while workers run.
 func RunWorkers(ctx context.Context, cfg config.Config, st *daostore.Store,
-	parser *talog.Parser, flt *filter.Holder, logger *logrus.Logger,
-	lineCh <-chan string, stats ingestion.StatsCollector, opts ingestion.WriteOptions,
+	parser *talog.Parser, flt *filter.Holder,
+	lineCh <-chan string, stats processor.StatsCollector, opts processor.WriteOptions,
 ) {
 	if stats == nil {
-		stats = ingestion.NoopStats{}
+		stats = processor.NoopStats{}
 	}
 
 	workerCount := cfg.Pipeline.BatchWorkers
@@ -42,7 +42,7 @@ func RunWorkers(ctx context.Context, cfg config.Config, st *daostore.Store,
 	for i := 0; i < workerCount; i++ {
 		go func(ch <-chan string) {
 			defer wg.Done()
-			worker(ctx, cfg, st, parser, flt, logger, ch, stats, opts)
+			worker(ctx, cfg, st, parser, flt, ch, stats, opts)
 		}(workerChs[i])
 	}
 
@@ -53,14 +53,14 @@ func RunWorkers(ctx context.Context, cfg config.Config, st *daostore.Store,
 }
 
 // worker processes lines from a channel, batches them, and flushes to MongoDB.
-// Per-line parse/filter/identity/route rules live in ingestion.Processor; the
+// Per-line parse/filter/identity/route rules live in processor.Processor; the
 // worker owns only batching, the dynamic flush cadence, and the affinity-local
 // dead-letter logging.
 func worker(ctx context.Context, cfg config.Config, st *daostore.Store,
-	parser *talog.Parser, flt *filter.Holder, logger *logrus.Logger,
-	lineCh <-chan string, stats ingestion.StatsCollector, opts ingestion.WriteOptions,
+	parser *talog.Parser, flt *filter.Holder,
+	lineCh <-chan string, stats processor.StatsCollector, opts processor.WriteOptions,
 ) {
-	proc := ingestion.NewProcessor(parser, flt, st, stats, opts)
+	proc := processor.NewProcessor(parser, flt, st, stats, opts)
 
 	userBatch := NewBatch(cfg.BatchSizeMax())
 	eventBatch := NewBatch(cfg.BatchSizeMax())
@@ -73,9 +73,9 @@ func worker(ctx context.Context, cfg config.Config, st *daostore.Store,
 	// flush writes accumulated batches to MongoDB and resets them.
 	// User batch uses ordered writes to preserve operation sequence within a batch.
 	flush := func(flushCtx context.Context) {
-		flushBatchOrdered(flushCtx, st, logger, st.UserCollection(), userBatch, stats)
-		flushBatch(flushCtx, st, logger, st.EventCollection(), eventBatch, stats)
-		flushBatch(flushCtx, st, logger, st.DeadLetterCollection(), deadBatch, stats)
+		flushBatchOrdered(flushCtx, st, st.UserCollection(), userBatch, stats)
+		flushBatch(flushCtx, st, st.EventCollection(), eventBatch, stats)
+		flushBatch(flushCtx, st, st.DeadLetterCollection(), deadBatch, stats)
 		lastFlush = time.Now()
 	}
 
@@ -94,25 +94,25 @@ func worker(ctx context.Context, cfg config.Config, st *daostore.Store,
 
 			res := proc.Process(ctx, line)
 			switch res.Kind {
-			case ingestion.KindParseError:
+			case processor.KindParseError:
 				invalidCount++
 				if invalidCount%1000 == 0 {
-					logger.WithError(res.Err).Warnf("dropped invalid line (total invalid=%d)", invalidCount)
+					log.WithError(res.Err).Warnf("dropped invalid line (total invalid=%d)", invalidCount)
 				}
 				deadBatch.Add(res.Model)
 				if deadBatch.Full() || time.Since(lastFlush) >= flushInterval {
 					flush(ctx)
 				}
 				continue
-			case ingestion.KindIdentityError:
-				logger.WithError(res.Err).Warn("identity resolve failed, sending to dead letter")
+			case processor.KindIdentityError:
+				log.WithError(res.Err).Warn("identity resolve failed, sending to dead letter")
 				deadBatch.Add(res.Model)
 				continue
-			case ingestion.KindFiltered:
+			case processor.KindFiltered:
 				continue
-			case ingestion.KindUser:
+			case processor.KindUser:
 				userBatch.Add(res.Model)
-			case ingestion.KindEvent:
+			case processor.KindEvent:
 				eventBatch.Add(res.Model)
 			}
 
@@ -149,15 +149,15 @@ func worker(ctx context.Context, cfg config.Config, st *daostore.Store,
 }
 
 // flushBatch writes a batch to the given collection (unordered) and resets it.
-func flushBatch(ctx context.Context, st *daostore.Store, logger *logrus.Logger,
-	coll *mongo.Collection, b *Batch, stats ingestion.StatsCollector,
+func flushBatch(ctx context.Context, st *daostore.Store,
+	coll *mongo.Collection, b *Batch, stats processor.StatsCollector,
 ) {
 	if b.Empty() {
 		return
 	}
 	if err := st.BulkWrite(ctx, coll, b.Models); err != nil {
 		stats.OnWriteError()
-		logger.WithError(err).WithField("collection", coll.Name()).
+		log.WithError(err).WithField("collection", coll.Name()).
 			Error("bulk write failed")
 	}
 	b.Reset()
@@ -165,15 +165,15 @@ func flushBatch(ctx context.Context, st *daostore.Store, logger *logrus.Logger,
 
 // flushBatchOrdered writes a batch to the given collection with ordered writes
 // to guarantee that operations within the batch are applied sequentially.
-func flushBatchOrdered(ctx context.Context, st *daostore.Store, logger *logrus.Logger,
-	coll *mongo.Collection, b *Batch, stats ingestion.StatsCollector,
+func flushBatchOrdered(ctx context.Context, st *daostore.Store,
+	coll *mongo.Collection, b *Batch, stats processor.StatsCollector,
 ) {
 	if b.Empty() {
 		return
 	}
 	if err := st.BulkWriteOrdered(ctx, coll, b.Models); err != nil {
 		stats.OnWriteError()
-		logger.WithError(err).WithField("collection", coll.Name()).
+		log.WithError(err).WithField("collection", coll.Name()).
 			Error("bulk write failed")
 	}
 	b.Reset()

@@ -9,16 +9,14 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/sirupsen/logrus"
-
 	"rocket-nano/tools/tango/config"
-	"rocket-nano/tools/tango/internal/core/filter"
-	daomongo "rocket-nano/tools/tango/internal/dao/mongo"
-	"rocket-nano/tools/tango/internal/dao/store"
 	"rocket-nano/tools/tango/internal/core/tailer"
-	"rocket-nano/tools/tango/internal/core/talog"
-	"rocket-nano/tools/tango/internal/process/ingestion"
+	"rocket-nano/tools/tango/internal/dao"
+	daomongo "rocket-nano/tools/tango/internal/dao/mongo"
+	"rocket-nano/tools/tango/internal/log"
 	"rocket-nano/tools/tango/internal/process/pipeline"
+	"rocket-nano/tools/tango/internal/process/processor"
+	"rocket-nano/tools/tango/internal/source"
 )
 
 // statsReportInterval is how often the report service logs processing statistics.
@@ -27,16 +25,14 @@ const statsReportInterval = 60 * time.Second
 // Service is the main runtime that connects all components together.
 type Service struct {
 	cfg    config.Config
-	logger *logrus.Logger
-	store  *store.Store
-	parser *talog.Parser
-	filter *filter.Holder
+	dao    *dao.Dao
+	source *source.Source
 	mongo  *daomongo.MongoResource
 }
 
 // New connects to MongoDB and creates a ready-to-run Service.
 // The caller must call Shutdown after Run returns to disconnect from MongoDB.
-func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Service, error) {
+func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	flt, err := cfg.BuildFilter()
 	if err != nil {
 		return nil, fmt.Errorf("report: %w", err)
@@ -46,10 +42,9 @@ func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Servic
 	if err != nil {
 		return nil, fmt.Errorf("report: %w", err)
 	}
-	st := daomongo.NewStore(res.DB, cfg, logger)
-	p := talog.NewParser()
+	da := dao.New(res.DB, cfg)
 
-	return &Service{cfg: cfg, logger: logger, store: st, parser: p, filter: filter.NewHolder(flt), mongo: res}, nil
+	return &Service{cfg: cfg, dao: da, source: source.New(flt), mongo: res}, nil
 }
 
 // Shutdown disconnects the MongoDB client. It must be called after Run returns
@@ -60,7 +55,7 @@ func (d *Service) Shutdown() error {
 
 // EnsureIndexes creates all required MongoDB indexes (idempotent).
 func (d *Service) EnsureIndexes(ctx context.Context) error {
-	return d.store.EnsureIndexes(ctx)
+	return d.dao.EnsureIndexes(ctx)
 }
 
 // Run starts the daemon pipeline and blocks until ctx is cancelled.
@@ -76,7 +71,7 @@ func (d *Service) Run(ctx context.Context) error {
 		return errors.New("report: ta.logPattern is required (at least one regex)")
 	}
 
-	d.logger.WithFields(logrus.Fields{
+	log.WithFields(log.Fields{
 		"log_patterns":   d.cfg.Source.LogPattern,
 		"workers":        d.cfg.Pipeline.BatchWorkers,
 		"batch_size":     d.cfg.Pipeline.BatchSize,
@@ -85,11 +80,11 @@ func (d *Service) Run(ctx context.Context) error {
 	}).Info("report: starting pipeline")
 
 	// Start the tailer; it returns a channel of log lines.
-	t := tailer.New(d.cfg.Source.LogPattern, d.cfg.Source.RescanInterval, d.cfg.Source.TailMode, d.logger).WithTuning(d.cfg.Source.PollInterval, d.cfg.Source.MaxLineBytes)
+	t := tailer.New(d.cfg.Source.LogPattern, d.cfg.Source.RescanInterval, d.cfg.Source.TailMode).WithTuning(d.cfg.Source.PollInterval, d.cfg.Source.MaxLineBytes)
 	lineCh := t.Run(ctx)
 
 	// Create stats collector for periodic reporting.
-	stats := &ingestion.Counters{}
+	stats := &processor.Counters{}
 	startTime := time.Now()
 
 	// Launch periodic stats reporter.
@@ -97,7 +92,7 @@ func (d *Service) Run(ctx context.Context) error {
 	go d.reportStats(ctx, stats, startTime, reportDone)
 
 	// Block until all workers finish.
-	pipeline.RunWorkers(ctx, d.cfg, d.store, d.parser, d.filter, d.logger, lineCh, stats, ingestion.WriteOptions{})
+	pipeline.RunWorkers(ctx, d.cfg, d.dao.Store, d.source.Parser, d.source.Filter(), lineCh, stats, processor.WriteOptions{})
 
 	// Wait for the reporter goroutine to exit.
 	<-reportDone
@@ -109,13 +104,13 @@ func (d *Service) Run(ctx context.Context) error {
 }
 
 // reportStats periodically logs processing statistics every statsReportInterval.
-func (d *Service) reportStats(ctx context.Context, stats *ingestion.Counters, startTime time.Time, done chan<- struct{}) {
+func (d *Service) reportStats(ctx context.Context, stats *processor.Counters, startTime time.Time, done chan<- struct{}) {
 	defer close(done)
 
 	ticker := time.NewTicker(statsReportInterval)
 	defer ticker.Stop()
 
-	var prev ingestion.Snapshot
+	var prev processor.Snapshot
 
 	for {
 		select {
@@ -126,7 +121,7 @@ func (d *Service) reportStats(ctx context.Context, stats *ingestion.Counters, st
 
 			uptime := time.Since(startTime).Round(time.Second)
 
-			d.logger.WithFields(logrus.Fields{
+			log.WithFields(log.Fields{
 				"uptime":                uptime,
 				"interval_lines":        cur.TotalLines - prev.TotalLines,
 				"interval_parsed_ok":    cur.ParsedOK - prev.ParsedOK,
@@ -140,7 +135,7 @@ func (d *Service) reportStats(ctx context.Context, stats *ingestion.Counters, st
 				"interval_filter_err":   cur.FilterErrors - prev.FilterErrors,
 			}).Info("report: periodic stats (last 60s)")
 
-			d.logger.WithFields(logrus.Fields{
+			log.WithFields(log.Fields{
 				"total_lines":        cur.TotalLines,
 				"total_parsed_ok":    cur.ParsedOK,
 				"total_parse_err":    cur.ParseErrors,
@@ -159,13 +154,13 @@ func (d *Service) reportStats(ctx context.Context, stats *ingestion.Counters, st
 }
 
 // logFinalStats logs a final summary when the daemon is shutting down.
-func (d *Service) logFinalStats(stats *ingestion.Counters, startTime time.Time) {
+func (d *Service) logFinalStats(stats *processor.Counters, startTime time.Time) {
 	cur := stats.Snapshot()
 
 	duration := time.Since(startTime).Round(time.Second)
 
-	d.logger.Info("report: ========== shutdown summary ==========")
-	d.logger.WithFields(logrus.Fields{
+	log.Info("report: ========== shutdown summary ==========")
+	log.WithFields(log.Fields{
 		"total_lines":        cur.TotalLines,
 		"total_parsed_ok":    cur.ParsedOK,
 		"total_parse_errors": cur.ParseErrors,
@@ -181,12 +176,12 @@ func (d *Service) logFinalStats(stats *ingestion.Counters, startTime time.Time) 
 
 	if cur.TotalLines > 0 && duration.Seconds() > 0 {
 		lps := float64(cur.TotalLines) / duration.Seconds()
-		d.logger.WithField("lines_per_second", fmt.Sprintf("%.1f", lps)).Info("report: average throughput")
+		log.WithField("lines_per_second", fmt.Sprintf("%.1f", lps)).Info("report: average throughput")
 	}
 
 	if cur.ParseErrors > 0 || cur.IdentityErrors > 0 || cur.WriteErrors > 0 {
-		d.logger.Warn("report: ========== SHUTDOWN WITH ERRORS ==========")
+		log.Warn("report: ========== SHUTDOWN WITH ERRORS ==========")
 	} else {
-		d.logger.Info("report: ========== SHUTDOWN COMPLETE ==========")
+		log.Info("report: ========== SHUTDOWN COMPLETE ==========")
 	}
 }

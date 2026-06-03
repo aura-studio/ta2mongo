@@ -1,12 +1,14 @@
 package config
 
+import "rocket-nano/tools/tango/internal/dao/mongo"
+
 // ClientConfig is the runtime configuration the client SDK / gateway service
 // consume. It is the projection target of the unified RoleConfig (see
 // RoleConfig.Client in role.go): its functionality is the upload sections plus
 // an HTTP server block for the gateway face.
 type ClientConfig struct {
 	Logging LoggingConfig `mapstructure:"logging"`
-	Mongo   MongoConfig   `mapstructure:"mongo"`
+	Mongo   mongo.Config  `mapstructure:"mongo"`
 
 	// StringUpload: single string ingest, no retransmission.
 	StringUpload StringUploadConfig `mapstructure:"stringUpload"`

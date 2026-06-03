@@ -5,6 +5,8 @@ import (
 
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
+
+	"rocket-nano/tools/tango/internal/dao/mongo"
 )
 
 // RoleConfig is the unified, role-oriented config file schema. One schema backs
@@ -29,7 +31,7 @@ type RoleConfig struct {
 // RuntimeConfig is the process-wide block shared by every role.
 type RuntimeConfig struct {
 	Logging LoggingConfig `mapstructure:"logging"`
-	Mongo   MongoConfig   `mapstructure:"mongo"`
+	Mongo   mongo.Config  `mapstructure:"mongo"`
 }
 
 // RoleReportConfig is the reporting pipeline block for the standalone service.

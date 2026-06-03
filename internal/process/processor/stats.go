@@ -1,9 +1,9 @@
-// Package ingestion holds the shared per-line ingestion semantics — parse,
+// Package processor holds the shared per-line ingestion semantics — parse,
 // filter, identity resolve, and write-model construction — used by the async
 // pipeline, the synchronous ingest API, and backfill's event path, so the
 // rules (what becomes a user/event write, what is filtered, what goes to dead
 // letter) live in exactly one place.
-package ingestion
+package processor
 
 // StatsCollector is an optional callback interface for recording processing
 // statistics. Implementations must be safe for concurrent use.

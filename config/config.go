@@ -13,11 +13,10 @@ package config
 
 import (
 	"fmt"
-	"net/url"
-	"strings"
 	"time"
 
-	"rocket-nano/tools/tango/internal/core/filter"
+	"rocket-nano/tools/tango/internal/dao/mongo"
+	"rocket-nano/tools/tango/internal/source/filter"
 )
 
 // Mode constants identify the runtime role a Config drives. Mode is an internal
@@ -57,7 +56,7 @@ type Config struct {
 	Logging LoggingConfig `mapstructure:"logging"`
 
 	// Mongo configures the MongoDB connection and write-retry behaviour.
-	Mongo MongoConfig `mapstructure:"mongo"`
+	Mongo mongo.Config `mapstructure:"mongo"`
 
 	// Source configures the file-tailing data source (report service).
 	Source SourceConfig `mapstructure:"source"`
@@ -77,21 +76,6 @@ type LoggingConfig struct {
 	Level string `mapstructure:"level"`
 	// Format selects the log encoding: "text" (default) or "json".
 	Format string `mapstructure:"format"`
-}
-
-// MongoConfig configures the MongoDB connection and write-retry behaviour.
-type MongoConfig struct {
-	// URI is the MongoDB connection URI (required). The database name is taken
-	// from the URI path.
-	URI string `mapstructure:"uri"`
-	// MaxElapsedTime is the maximum total retry time for a single bulk write.
-	// Default 10s.
-	MaxElapsedTime time.Duration `mapstructure:"maxElapsedTime"`
-	// ConnectTimeout bounds the initial connection handshake. Default 10s.
-	ConnectTimeout time.Duration `mapstructure:"connectTimeout"`
-	// ServerSelectionTimeout bounds how long the driver waits for a suitable
-	// server before failing an operation. Default 30s.
-	ServerSelectionTimeout time.Duration `mapstructure:"serverSelectionTimeout"`
 }
 
 // SourceConfig configures the file-tailing data source (report service).
@@ -176,20 +160,4 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("config: %w", err)
 	}
 	return nil
-}
-
-// MongoDBFromURI extracts the database name from a MongoDB URI path.
-// Examples:
-//   - mongodb://host:27017/tango => "tango"
-//   - mongodb://host:27017       => "tango" (default fallback)
-func MongoDBFromURI(uri string) (string, error) {
-	u, err := url.Parse(uri)
-	if err != nil {
-		return "", fmt.Errorf("parse mongo uri: %w", err)
-	}
-	db := strings.Trim(u.Path, "/")
-	if db == "" {
-		return "tango", nil
-	}
-	return db, nil
 }

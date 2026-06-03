@@ -15,6 +15,7 @@ import (
 
 	"rocket-nano/tools/tango/config"
 	"rocket-nano/tools/tango/internal/core/tailer"
+	daomongo "rocket-nano/tools/tango/internal/dao/mongo"
 )
 
 // UploadRequest configures a file upload (function #2: file single upload with
@@ -62,13 +63,13 @@ func (c *Client) UploadFiles(ctx context.Context, req UploadRequest) (UploadResu
 	if collName == "" {
 		collName = config.DefaultFileUploadCheckpointCollection
 	}
-	dbName, err := config.MongoDBFromURI(c.opts.URI)
+	dbName, err := daomongo.MongoDBFromURI(c.opts.URI)
 	if err != nil {
 		return UploadResult{}, fmt.Errorf("client: %w", err)
 	}
 	ckpt := c.client.Database(dbName).Collection(collName)
 
-	files := tailer.DiscoverFiles(req.Patterns, c.logger)
+	files := tailer.DiscoverFiles(req.Patterns)
 	var res UploadResult
 	res.Files = len(files)
 	for _, path := range files {

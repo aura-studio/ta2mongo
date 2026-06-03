@@ -1,13 +1,10 @@
 // Package cli holds helpers shared by the cmd/* subcommand packages: locating
-// the default config file next to the binary, and building the logger.
+// the default config file next to the binary.
 package cli
 
 import (
 	"os"
 	"path/filepath"
-	"strings"
-
-	"github.com/sirupsen/logrus"
 )
 
 // ResolveConfigPath returns the config file path to use. When flagVal is set
@@ -31,17 +28,4 @@ func ResolveConfigPath(flagVal string, candidates ...string) string {
 		}
 	}
 	return ""
-}
-
-// NewLogger builds a logrus text logger at the given level (default info on a
-// parse error).
-func NewLogger(level string) *logrus.Logger {
-	l := logrus.New()
-	l.SetFormatter(&logrus.TextFormatter{FullTimestamp: true})
-	lvl, err := logrus.ParseLevel(strings.ToLower(level))
-	if err != nil {
-		lvl = logrus.InfoLevel
-	}
-	l.SetLevel(lvl)
-	return l
 }

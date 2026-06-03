@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"rocket-nano/tools/tango/config"
+	daomongo "rocket-nano/tools/tango/internal/dao/mongo"
 
-	"github.com/sirupsen/logrus"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -48,7 +48,7 @@ func testIngesterSetup(t *testing.T) (*Ingester, *mongo.Database, func()) {
 	uri := testMongoURI + "/" + dbName
 
 	cfg := config.Config{
-		Mongo: config.MongoConfig{
+		Mongo: daomongo.Config{
 			URI:            uri,
 			MaxElapsedTime: 5 * time.Second,
 		},
@@ -59,12 +59,9 @@ func testIngesterSetup(t *testing.T) (*Ingester, *mongo.Database, func()) {
 		},
 	}
 
-	logger := logrus.New()
-	logger.SetLevel(logrus.WarnLevel)
-
 	ctx := context.Background()
 
-	ig, err := New(ctx, cfg, logger)
+	ig, err := New(ctx, cfg)
 	if err != nil {
 		t.Fatalf("create ingester: %v", err)
 	}
@@ -525,15 +522,13 @@ func TestNewFromClient(t *testing.T) {
 
 	dbName := fmt.Sprintf("tango_fromclient_test_%d", time.Now().UnixNano())
 	cfg := config.Config{
-		Mongo: config.MongoConfig{
+		Mongo: daomongo.Config{
 			URI:            testMongoURI + "/" + dbName,
 			MaxElapsedTime: 5 * time.Second,
 		},
 	}
-	logger := logrus.New()
-	logger.SetLevel(logrus.WarnLevel)
 
-	ig, err := NewFromClient(client, cfg, logger)
+	ig, err := NewFromClient(client, cfg)
 	if err != nil {
 		t.Fatalf("NewFromClient: %v", err)
 	}

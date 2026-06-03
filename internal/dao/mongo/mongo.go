@@ -11,8 +11,6 @@ import (
 
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
-
-	"rocket-nano/tools/tango/config"
 )
 
 // MongoResource bundles a MongoDB client with its resolved database and an
@@ -28,7 +26,7 @@ type MongoResource struct {
 // ConnectMongo opens a MongoDB connection from the given config, resolves the
 // database from the URI path, and returns an owned MongoResource. The caller
 // must Close it.
-func ConnectMongo(ctx context.Context, cfg config.MongoConfig) (*MongoResource, error) {
+func ConnectMongo(ctx context.Context, cfg Config) (*MongoResource, error) {
 	client, err := mongo.Connect(ctx, options.Client().
 		ApplyURI(cfg.URI).
 		SetConnectTimeout(cfg.ConnectTimeout).
@@ -57,7 +55,7 @@ func Borrow(client *mongo.Client, uri string) (*MongoResource, error) {
 // DatabaseFromClient resolves the database named in the URI path on the given
 // client.
 func DatabaseFromClient(client *mongo.Client, uri string) (*mongo.Database, error) {
-	name, err := config.MongoDBFromURI(uri)
+	name, err := MongoDBFromURI(uri)
 	if err != nil {
 		return nil, fmt.Errorf("runtime: %w", err)
 	}

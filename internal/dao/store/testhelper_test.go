@@ -7,9 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"rocket-nano/tools/tango/config"
-
-	"github.com/sirupsen/logrus"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
@@ -43,22 +40,7 @@ func testSetup(t *testing.T) (*Store, *mongo.Database, func()) {
 	dbName := fmt.Sprintf("tango_test_%d_%d", time.Now().UnixNano(), rand.Intn(10000))
 	db := client.Database(dbName)
 
-	cfg := config.Config{
-		Mongo: config.MongoConfig{
-			URI:            testMongoURI + "/" + dbName,
-			MaxElapsedTime: 5 * time.Second,
-		},
-		Pipeline: config.PipelineConfig{
-			BatchSize:     100,
-			BatchWorkers:  2,
-			FlushInterval: 500 * time.Millisecond,
-		},
-	}
-
-	logger := logrus.New()
-	logger.SetLevel(logrus.WarnLevel)
-
-	st := New(db, cfg, logger)
+	st := New(db, Config{MaxElapsedTime: 5 * time.Second})
 
 	cleanup := func() {
 		dropCtx, dropCancel := context.WithTimeout(context.Background(), 5*time.Second)

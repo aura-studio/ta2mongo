@@ -7,13 +7,20 @@ import (
 	"sync/atomic"
 	"time"
 
-	"rocket-nano/tools/tango/config"
+	"rocket-nano/tools/tango/internal/log"
 
 	"github.com/cenkalti/backoff/v4"
-	"github.com/sirupsen/logrus"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
+
+// Config is the store's own configuration — the subset of settings the store
+// actually uses, owned here instead of depending on the top-level config
+// package. Callers (e.g. dao) project the loaded configuration onto it.
+type Config struct {
+	// MaxElapsedTime is the maximum total retry time for a single bulk write.
+	MaxElapsedTime time.Duration
+}
 
 // WriteStats holds cumulative retry statistics for bulk writes.
 type WriteStats struct {
@@ -29,20 +36,18 @@ type Store struct {
 	event      *mongo.Collection
 	deadLetter *mongo.Collection
 	identity   *IdentityResolver
-	cfg        config.Config
-	logger     *logrus.Logger
+	cfg        Config
 	stats      WriteStats
 }
 
 // New creates a Store backed by the given database.
-func New(db *mongo.Database, cfg config.Config, logger *logrus.Logger) *Store {
+func New(db *mongo.Database, cfg Config) *Store {
 	return &Store{
 		user:       db.Collection("user"),
 		event:      db.Collection("event"),
 		deadLetter: db.Collection("dead_letter"),
 		identity:   NewIdentityResolver(db),
 		cfg:        cfg,
-		logger:     logger,
 	}
 }
 
@@ -91,7 +96,7 @@ func (s *Store) bulkWrite(ctx context.Context, coll *mongo.Collection, models []
 	bo := backoff.NewExponentialBackOff()
 	bo.InitialInterval = 200 * time.Millisecond
 	bo.MaxInterval = 2 * time.Second
-	bo.MaxElapsedTime = s.cfg.Mongo.MaxElapsedTime
+	bo.MaxElapsedTime = s.cfg.MaxElapsedTime
 	bo.Reset()
 
 	err := backoff.Retry(op, backoff.WithContext(bo, ctx))
@@ -102,7 +107,7 @@ func (s *Store) bulkWrite(ctx context.Context, coll *mongo.Collection, models []
 	}
 
 	if err != nil {
-		s.logger.WithError(err).WithField("collection", coll.Name()).
+		log.WithError(err).WithField("collection", coll.Name()).
 			Warn("bulk write failed after retries")
 		return err
 	}

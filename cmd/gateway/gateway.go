@@ -18,7 +18,7 @@ func NewCommand() *cobra.Command {
 		Use:   "gateway",
 		Short: "HTTP gateway exposing the ingest and upload log-reporting APIs",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cc, cli, logger, err := shared.ConnectClient(cmd, shared.GatewayConfig)
+			cc, cli, err := shared.ConnectClient(cmd, shared.GatewayConfig)
 			if err != nil {
 				return err
 			}
@@ -29,7 +29,7 @@ func NewCommand() *cobra.Command {
 			if addr == "" {
 				addr = cc.Server.Addr
 			}
-			return gateway.New(cc, cli, logger).Run(cmd.Context(), addr)
+			return gateway.New(cc, cli).Run(cmd.Context(), addr)
 		},
 	}
 	cmd.Flags().String("runtime.mongo.uri", "", "MongoDB connection URI (config key runtime.mongo.uri)")

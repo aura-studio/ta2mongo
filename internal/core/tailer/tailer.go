@@ -16,9 +16,9 @@ import (
 	"time"
 
 	"github.com/hpcloud/tail"
-	"github.com/sirupsen/logrus"
 
 	"rocket-nano/tools/tango/config"
+	"rocket-nano/tools/tango/internal/log"
 )
 
 // ---------------------------------------------------------------------------
@@ -213,7 +213,6 @@ type Tailer struct {
 	patterns       []string
 	rescanInterval time.Duration
 	tailMode       string // config.TailModePoll or config.TailModeEvent
-	logger         *logrus.Logger
 
 	pollInterval time.Duration // EOF re-read cadence (poll/hybrid modes)
 	maxLineSize  int           // scanner buffer cap per line
@@ -226,7 +225,7 @@ type Tailer struct {
 // tailMode selects the file-watching strategy: config.TailModePoll (default)
 // or config.TailModeEvent. Tuning (poll interval, max line size) defaults to
 // sane values; override with WithTuning.
-func New(patterns []string, rescanInterval time.Duration, tailMode string, logger *logrus.Logger) *Tailer {
+func New(patterns []string, rescanInterval time.Duration, tailMode string) *Tailer {
 	if tailMode == "" {
 		tailMode = config.TailModePoll
 	}
@@ -234,7 +233,6 @@ func New(patterns []string, rescanInterval time.Duration, tailMode string, logge
 		patterns:       patterns,
 		rescanInterval: rescanInterval,
 		tailMode:       tailMode,
-		logger:         logger,
 		pollInterval:   defaultPollInterval,
 		maxLineSize:    defaultMaxLineSize,
 		tailed:         make(map[string]struct{}),
@@ -286,7 +284,7 @@ func (t *Tailer) run(ctx context.Context, out chan<- string) {
 
 // scanAndTail discovers files matching patterns and starts tailing new ones.
 func (t *Tailer) scanAndTail(ctx context.Context, out chan<- string) {
-	for _, path := range discoverFiles(t.patterns, t.logger) {
+	for _, path := range discoverFiles(t.patterns) {
 		t.startFile(ctx, path, out)
 	}
 }
@@ -301,7 +299,7 @@ func (t *Tailer) startFile(ctx context.Context, path string, out chan<- string) 
 	t.tailed[path] = struct{}{}
 	t.mu.Unlock()
 
-	t.logger.WithFields(logrus.Fields{
+	log.WithFields(log.Fields{
 		"path":      path,
 		"tail_mode": t.tailMode,
 	}).Info("tailer: discovered and tailing new file")
@@ -332,7 +330,7 @@ func (t *Tailer) tailFile(ctx context.Context, path string, out chan<- string) {
 			if ctx.Err() != nil {
 				return
 			}
-			t.logger.WithError(err).WithField("path", path).Warn("tailer: error reading file, will retry")
+			log.WithError(err).WithField("path", path).Warn("tailer: error reading file, will retry")
 		}
 
 		// File was deleted or rotated; wait for it to reappear.
@@ -450,7 +448,7 @@ func (t *Tailer) tailFileEvent(ctx context.Context, path string, out chan<- stri
 		MaxLineSize: t.maxLineSize,
 	})
 	if err != nil {
-		t.logger.WithError(err).WithField("path", path).Warn("tailer: failed to start event-mode tailing")
+		log.WithError(err).WithField("path", path).Warn("tailer: failed to start event-mode tailing")
 		t.mu.Lock()
 		delete(t.tailed, path)
 		t.mu.Unlock()
@@ -525,12 +523,12 @@ func (t *Tailer) tailFileHybrid(ctx context.Context, path string, out chan<- str
 		}
 
 		// --- Phase 2: poll fallback to drain missed data ---
-		t.logger.WithField("path", path).Debug("tailer: hybrid fallback — draining missed data via poll")
+		log.WithField("path", path).Debug("tailer: hybrid fallback — draining missed data via poll")
 		if err := t.drainByPoll(ctx, path, out, &lastSize); err != nil {
 			if ctx.Err() != nil {
 				return
 			}
-			t.logger.WithError(err).WithField("path", path).Warn("tailer: hybrid poll drain error")
+			log.WithError(err).WithField("path", path).Warn("tailer: hybrid poll drain error")
 			select {
 			case <-ctx.Done():
 				return
@@ -646,13 +644,13 @@ func (t *Tailer) drainByPoll(ctx context.Context, path string, out chan<- string
 
 // DiscoverFiles walks directories matching glob patterns and returns
 // deduplicated file paths. This is exported for use by the once package.
-func DiscoverFiles(patterns []string, logger *logrus.Logger) []string {
-	return discoverFiles(patterns, logger)
+func DiscoverFiles(patterns []string) []string {
+	return discoverFiles(patterns)
 }
 
 // discoverFiles walks directories matching glob patterns and returns
 // deduplicated file paths.
-func discoverFiles(patterns []string, logger *logrus.Logger) []string {
+func discoverFiles(patterns []string) []string {
 	seen := make(map[string]struct{})
 	var result []string
 
@@ -674,7 +672,7 @@ func discoverFiles(patterns []string, logger *logrus.Logger) []string {
 		matchPattern = normalizePath(matchPattern)
 
 		base := globBaseDir(pattern)
-		logger.WithFields(logrus.Fields{
+		log.WithFields(log.Fields{
 			"pattern":  pattern,
 			"walk_dir": base,
 		}).Debug("tailer: scanning directory for matching files")
@@ -700,10 +698,10 @@ func discoverFiles(patterns []string, logger *logrus.Logger) []string {
 			return nil
 		})
 		if walkErr != nil {
-			logger.WithError(walkErr).WithField("walk_dir", base).Warn("tailer: error walking directory")
+			log.WithError(walkErr).WithField("walk_dir", base).Warn("tailer: error walking directory")
 		}
 
-		logger.WithFields(logrus.Fields{
+		log.WithFields(log.Fields{
 			"pattern":       pattern,
 			"walk_dir":      base,
 			"files_matched": matched,

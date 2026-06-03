@@ -9,11 +9,10 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
 	"rocket-nano/tools/tango/config"
-	"rocket-nano/tools/tango/internal/core/cli"
+	"rocket-nano/tools/tango/internal/log"
 	"rocket-nano/tools/tango/internal/service/report"
 )
 
@@ -24,35 +23,35 @@ func RunStandaloneService(cmd *cobra.Command, path string) error {
 	if err != nil {
 		return err
 	}
-	logger := cli.NewLogger(rt.Logging.Level)
+	log.Init(rt.Logging.Level)
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	logger.WithFields(logrus.Fields{
+	log.WithFields(log.Fields{
 		"pid":       os.Getpid(),
 		"go_procs":  runtime.GOMAXPROCS(0),
 		"mongo_uri": MaskURI(rt.Mongo.URI),
 		"role":      "standalone",
 	}).Info("tango standalone: starting")
 
-	return runReport(ctx, rt, logger)
+	return runReport(ctx, rt)
 }
 
 // runReport runs the reporting pipeline and blocks until ctx is cancelled.
-func runReport(ctx context.Context, rt config.Config, logger *logrus.Logger) error {
-	svc, err := report.New(ctx, rt, logger)
+func runReport(ctx context.Context, rt config.Config) error {
+	svc, err := report.New(ctx, rt)
 	if err != nil {
-		logger.WithError(err).Error("tango standalone: init failed")
+		log.WithError(err).Error("tango standalone: init failed")
 		return err
 	}
 	defer func() {
 		if err := svc.Shutdown(); err != nil {
-			logger.WithError(err).Error("tango standalone: shutdown error")
+			log.WithError(err).Error("tango standalone: shutdown error")
 		}
 	}()
 
 	if err := svc.EnsureIndexes(ctx); err != nil {
-		logger.WithError(err).Error("tango standalone: ensure indexes failed")
+		log.WithError(err).Error("tango standalone: ensure indexes failed")
 		return err
 	}
 

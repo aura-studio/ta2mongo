@@ -6,10 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"rocket-nano/tools/tango/config"
-
 	"github.com/cenkalti/backoff/v4"
-	"github.com/sirupsen/logrus"
 )
 
 // ---------------------------------------------------------------------------
@@ -159,17 +156,13 @@ func TestRetryWithDifferentMaxElapsedTimes(t *testing.T) {
 // correctly used when constructing the backoff. We replicate the exact
 // backoff setup from Store.BulkWrite with the configured MaxElapsedTime.
 func TestConfigMaxElapsedTimeWiring(t *testing.T) {
-	cfg := config.Config{
-		Mongo: config.MongoConfig{MaxElapsedTime: 500 * time.Millisecond},
-	}
-
-	_ = logrus.New()
+	cfg := Config{MaxElapsedTime: 500 * time.Millisecond}
 
 	// Replicate the backoff setup from BulkWrite.
 	bo := backoff.NewExponentialBackOff()
 	bo.InitialInterval = 200 * time.Millisecond
 	bo.MaxInterval = 2 * time.Second
-	bo.MaxElapsedTime = cfg.Mongo.MaxElapsedTime
+	bo.MaxElapsedTime = cfg.MaxElapsedTime
 	bo.Reset()
 
 	if bo.MaxElapsedTime != 500*time.Millisecond {
@@ -177,7 +170,7 @@ func TestConfigMaxElapsedTimeWiring(t *testing.T) {
 	}
 
 	// Also verify the config value propagation.
-	if cfg.Mongo.MaxElapsedTime != 500*time.Millisecond {
-		t.Errorf("expected config MaxElapsedTime = 500ms, got %v", cfg.Mongo.MaxElapsedTime)
+	if cfg.MaxElapsedTime != 500*time.Millisecond {
+		t.Errorf("expected config MaxElapsedTime = 500ms, got %v", cfg.MaxElapsedTime)
 	}
 }
