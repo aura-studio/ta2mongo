@@ -18,6 +18,7 @@ import (
 
 	"rocket-nano/tools/tango/config"
 	"rocket-nano/tools/tango/internal/core/filter"
+	"rocket-nano/tools/tango/internal/core/runtime"
 	"rocket-nano/tools/tango/internal/core/taskqueue"
 	"rocket-nano/tools/tango/internal/service/backfill"
 )
@@ -28,7 +29,7 @@ import (
 type Service struct {
 	cfg      config.Config
 	logger   *logrus.Logger
-	client   *mongo.Client
+	mongo    *runtime.MongoResource
 	db       *mongo.Database
 	queue    *taskqueue.Queue
 	registry *taskqueue.Registry
@@ -41,22 +42,17 @@ func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Servic
 	if cfg.InstanceID == "" {
 		return nil, fmt.Errorf("worker: TANGO_INSTANCE_ID is required")
 	}
-	mc, err := mongo.Connect(ctx, options.Client().ApplyURI(cfg.Mongo.URI).SetConnectTimeout(cfg.Mongo.ConnectTimeout).SetServerSelectionTimeout(cfg.Mongo.ServerSelectionTimeout))
+	res, err := runtime.ConnectMongo(ctx, cfg.Mongo)
 	if err != nil {
-		return nil, fmt.Errorf("worker: connect mongo: %w", err)
-	}
-	dbName, err := config.MongoDBFromURI(cfg.Mongo.URI)
-	if err != nil {
-		_ = mc.Disconnect(context.Background())
 		return nil, fmt.Errorf("worker: %w", err)
 	}
-	db := mc.Database(dbName)
+	db := res.DB
 	hostname, _ := os.Hostname()
 
 	return &Service{
 		cfg:      cfg,
 		logger:   logger,
-		client:   mc,
+		mongo:    res,
 		db:       db,
 		queue:    taskqueue.NewQueue(db.Collection(cfg.Worker.TasksCollection)),
 		registry: taskqueue.NewRegistry(db.Collection(cfg.Worker.InstancesCollection), cfg.Worker.InstanceTTL),
@@ -69,7 +65,7 @@ func (a *Service) Shutdown() error {
 	dctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = a.registry.Deregister(dctx, a.cfg.InstanceID)
-	return a.client.Disconnect(dctx)
+	return a.mongo.Close()
 }
 
 // EnsureIndexes creates the queue + registry indexes (idempotent).

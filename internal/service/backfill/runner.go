@@ -11,10 +11,10 @@ import (
 	"github.com/sirupsen/logrus"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"rocket-nano/tools/tango/config"
 	"rocket-nano/tools/tango/internal/core/filter"
+	"rocket-nano/tools/tango/internal/core/runtime"
 	"rocket-nano/tools/tango/internal/core/store"
 	"rocket-nano/tools/tango/internal/core/talog"
 	"rocket-nano/tools/tango/internal/process/pipeline"
@@ -61,7 +61,7 @@ type Runner struct {
 	parser     *talog.Parser
 	filter     *filter.Holder
 	client     *Client
-	mongo      *mongo.Client
+	mongo      *runtime.MongoResource
 	checkpoint *Checkpoint
 	progress   *ProgressBar
 	stats      Stats
@@ -78,7 +78,7 @@ func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Runner
 
 	filterWhere, err := cfg.BackfillWhere()
 	if err != nil {
-		_ = r.mongo.Disconnect(context.Background())
+		_ = r.mongo.Close()
 		return nil, fmt.Errorf("backfill: %w", err)
 	}
 	sig := SQLSignature(cfg.BackfillFilter.Table, cfg.Backfill.ProjectID, filterWhere,
@@ -95,7 +95,7 @@ func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Runner
 		cfg.Backfill.RunID, cfg.Backfill.APIBaseURL, cfg.Backfill.ProjectID,
 		cfg.BackfillFilter.Table, startDate, endDate, sig)
 	if err != nil {
-		_ = r.mongo.Disconnect(context.Background())
+		_ = r.mongo.Close()
 		return nil, fmt.Errorf("backfill: %w", err)
 	}
 	r.checkpoint = cp
@@ -118,21 +118,16 @@ func newBase(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Ru
 		return nil, nil, fmt.Errorf("backfill: %w", err)
 	}
 
-	mc, err := mongo.Connect(ctx, options.Client().ApplyURI(cfg.Mongo.URI).SetConnectTimeout(cfg.Mongo.ConnectTimeout).SetServerSelectionTimeout(cfg.Mongo.ServerSelectionTimeout))
+	res, err := runtime.ConnectMongo(ctx, cfg.Mongo)
 	if err != nil {
-		return nil, nil, fmt.Errorf("backfill: connect mongo: %w", err)
-	}
-	dbName, err := config.MongoDBFromURI(cfg.Mongo.URI)
-	if err != nil {
-		_ = mc.Disconnect(context.Background())
 		return nil, nil, fmt.Errorf("backfill: %w", err)
 	}
-	db := mc.Database(dbName)
-	st := store.New(db, cfg, logger)
+	db := res.DB
+	st := runtime.NewStore(db, cfg, logger)
 
 	httpC, err := NewHTTPClient(cfg.Backfill.Proxy, 0)
 	if err != nil {
-		_ = mc.Disconnect(context.Background())
+		_ = res.Close()
 		return nil, nil, fmt.Errorf("backfill: build http client: %w", err)
 	}
 
@@ -143,12 +138,12 @@ func newBase(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Ru
 		parser: talog.NewParser(),
 		filter: filter.NewHolder(flt),
 		client: NewClient(cfg.Backfill.APIBaseURL, cfg.Backfill.Token, httpC),
-		mongo:  mc,
+		mongo:  res,
 	}, db, nil
 }
 
 // Shutdown disconnects from MongoDB.
-func (r *Runner) Shutdown() error { return r.mongo.Disconnect(context.Background()) }
+func (r *Runner) Shutdown() error { return r.mongo.Close() }
 
 // EnsureIndexes ensures the standard collection indexes (event/user/dead_letter
 // + id_mapping) exist. The checkpoint collection is keyed by _id and needs no

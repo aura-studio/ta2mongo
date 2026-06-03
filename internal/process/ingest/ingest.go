@@ -20,10 +20,10 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"rocket-nano/tools/tango/config"
 	"rocket-nano/tools/tango/internal/core/filter"
+	"rocket-nano/tools/tango/internal/core/runtime"
 	"rocket-nano/tools/tango/internal/core/store"
 	"rocket-nano/tools/tango/internal/core/talog"
 )
@@ -34,7 +34,7 @@ type Ingester struct {
 	store  *store.Store
 	parser *talog.Parser
 	filter *filter.Holder
-	client *mongo.Client
+	mongo  *runtime.MongoResource
 	logger *logrus.Logger
 }
 
@@ -50,23 +50,17 @@ func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Ingest
 		return nil, fmt.Errorf("ingest: %w", err)
 	}
 
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(cfg.Mongo.URI).SetConnectTimeout(cfg.Mongo.ConnectTimeout).SetServerSelectionTimeout(cfg.Mongo.ServerSelectionTimeout))
-	if err != nil {
-		return nil, fmt.Errorf("ingest: connect to mongo: %w", err)
-	}
-
-	dbName, err := config.MongoDBFromURI(cfg.Mongo.URI)
+	res, err := runtime.ConnectMongo(ctx, cfg.Mongo)
 	if err != nil {
 		return nil, fmt.Errorf("ingest: %w", err)
 	}
-	db := client.Database(dbName)
-	st := store.New(db, cfg, logger)
+	st := runtime.NewStore(res.DB, cfg, logger)
 
 	return &Ingester{
 		store:  st,
 		parser: talog.NewParser(),
 		filter: filter.NewHolder(flt),
-		client: client,
+		mongo:  res,
 		logger: logger,
 	}, nil
 }
@@ -82,27 +76,26 @@ func NewFromClient(client *mongo.Client, cfg config.Config, logger *logrus.Logge
 		return nil, fmt.Errorf("ingest: %w", err)
 	}
 
-	dbName, err := config.MongoDBFromURI(cfg.Mongo.URI)
+	res, err := runtime.Borrow(client, cfg.Mongo.URI)
 	if err != nil {
 		return nil, fmt.Errorf("ingest: %w", err)
 	}
-	db := client.Database(dbName)
-	st := store.New(db, cfg, logger)
+	st := runtime.NewStore(res.DB, cfg, logger)
 
 	return &Ingester{
 		store:  st,
 		parser: talog.NewParser(),
 		filter: filter.NewHolder(flt),
-		client: client,
+		mongo:  res,
 		logger: logger,
 	}, nil
 }
 
-// Close disconnects the MongoDB client. Only call this if the Ingester was
-// created with New (owns the connection). Do NOT call Close if the Ingester
-// was created with NewFromClient (the caller owns the connection).
+// Close releases the MongoDB connection when the Ingester owns it (created with
+// New). For an Ingester created with NewFromClient the connection is borrowed
+// and Close is a no-op — the caller owns the client's lifecycle.
 func (ig *Ingester) Close() error {
-	return ig.client.Disconnect(context.Background())
+	return ig.mongo.Close()
 }
 
 // EnsureIndexes creates all required MongoDB indexes (idempotent).

@@ -11,12 +11,11 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"rocket-nano/tools/tango/config"
 	"rocket-nano/tools/tango/internal/core/filter"
 	"rocket-nano/tools/tango/internal/core/remoteconfig"
+	"rocket-nano/tools/tango/internal/core/runtime"
 	"rocket-nano/tools/tango/internal/core/store"
 	"rocket-nano/tools/tango/internal/core/tailer"
 	"rocket-nano/tools/tango/internal/core/talog"
@@ -81,7 +80,7 @@ type Service struct {
 	store  *store.Store
 	parser *talog.Parser
 	filter *filter.Holder
-	client *mongo.Client
+	mongo  *runtime.MongoResource
 }
 
 // New connects to MongoDB and creates a ready-to-run Service.
@@ -92,27 +91,20 @@ func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Servic
 		return nil, fmt.Errorf("report: %w", err)
 	}
 
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(cfg.Mongo.URI).SetConnectTimeout(cfg.Mongo.ConnectTimeout).SetServerSelectionTimeout(cfg.Mongo.ServerSelectionTimeout))
+	res, err := runtime.ConnectMongo(ctx, cfg.Mongo)
 	if err != nil {
-		return nil, err
-	}
-
-	dbName, err := config.MongoDBFromURI(cfg.Mongo.URI)
-	if err != nil {
-		_ = client.Disconnect(context.Background())
 		return nil, fmt.Errorf("report: %w", err)
 	}
-	db := client.Database(dbName)
-	st := store.New(db, cfg, logger)
+	st := runtime.NewStore(res.DB, cfg, logger)
 	p := talog.NewParser()
 
-	return &Service{cfg: cfg, logger: logger, store: st, parser: p, filter: filter.NewHolder(flt), client: client}, nil
+	return &Service{cfg: cfg, logger: logger, store: st, parser: p, filter: filter.NewHolder(flt), mongo: res}, nil
 }
 
 // Shutdown disconnects the MongoDB client. It must be called after Run returns
 // to ensure all final flushes complete before the connection is closed.
 func (d *Service) Shutdown() error {
-	return d.client.Disconnect(context.Background())
+	return d.mongo.Close()
 }
 
 // EnsureIndexes creates all required MongoDB indexes (idempotent).
@@ -177,12 +169,7 @@ func (d *Service) Run(ctx context.Context) error {
 // fields are reported but only take effect on the next restart (matching the
 // agreed "filter hot, rest on restart" policy). It returns when ctx is done.
 func (d *Service) syncRemoteConfig(ctx context.Context) {
-	dbName, err := config.MongoDBFromURI(d.cfg.Mongo.URI)
-	if err != nil {
-		d.logger.WithError(err).Warn("report: remote-config sync disabled (bad mongoURI)")
-		return
-	}
-	coll := d.client.Database(dbName).Collection(d.cfg.RemoteConfig.Collection)
+	coll := d.mongo.DB.Collection(d.cfg.RemoteConfig.Collection)
 
 	ticker := time.NewTicker(d.cfg.RemoteConfig.SyncInterval)
 	defer ticker.Stop()
