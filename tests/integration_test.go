@@ -1,8 +1,9 @@
-// Package integration exercises every role (api / cli / gateway) across every
-// upload strategy (single / batch / pipeline) end-to-end against a real
-// MongoDB, plus the daemon's continuous tail+report. It is skipped when no
-// MongoDB is reachable at TANGO_TEST_MONGO_URI (default mongodb://localhost:27017).
-package integration
+// Package tests holds repo-level integration tests. They exercise every role
+// (api / cli / gateway) across every upload strategy (single / batch /
+// pipeline) end-to-end against a real MongoDB, plus the daemon's continuous
+// tail+report. Skipped when no MongoDB is reachable at TANGO_TEST_MONGO_URI
+// (default mongodb://localhost:27017).
+package tests
 
 import (
 	"context"
