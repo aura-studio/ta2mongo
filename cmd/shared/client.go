@@ -5,11 +5,13 @@
 package shared
 
 import (
+	"os"
+	"path/filepath"
+
 	"github.com/spf13/cobra"
 
 	sdk "rocket-nano/tools/tango/client"
 	"rocket-nano/tools/tango/config"
-	"rocket-nano/tools/tango/internal/core/cli"
 	"rocket-nano/tools/tango/internal/log"
 )
 
@@ -19,6 +21,29 @@ func ConfigFlag(cmd *cobra.Command) string {
 	return v
 }
 
+// ResolveConfigPath returns the config file path to use. When flagVal is set
+// (the --config flag) it is returned verbatim. Otherwise the first of the
+// candidate filenames that exists in the binary's own directory is returned, so
+// each subcommand auto-detects its own default (e.g. report.yaml / worker.yaml /
+// gateway.yaml / operator.yaml) regardless of the current working directory.
+// When none exist it returns "" and the loader falls back to defaults + env + flags.
+func ResolveConfigPath(flagVal string, candidates ...string) string {
+	if flagVal != "" {
+		return flagVal
+	}
+	dir := "."
+	if exe, err := os.Executable(); err == nil {
+		dir = filepath.Dir(exe)
+	}
+	for _, name := range candidates {
+		p := filepath.Join(dir, name)
+		if info, err := os.Stat(p); err == nil && !info.IsDir() {
+			return p
+		}
+	}
+	return ""
+}
+
 // ClientLoader resolves and loads the ClientConfig a client-driven command runs
 // on. It also initializes the shared logger from the config's logging level.
 type ClientLoader func(cmd *cobra.Command) (config.ClientConfig, error)
@@ -26,7 +51,7 @@ type ClientLoader func(cmd *cobra.Command) (config.ClientConfig, error)
 // GatewayConfig loads gateway.{yaml,yml,json} via the unified RoleConfig schema
 // and initializes the shared logger from its logging level.
 func GatewayConfig(cmd *cobra.Command) (config.ClientConfig, error) {
-	path := cli.ResolveConfigPath(ConfigFlag(cmd), "gateway.yaml", "gateway.yml", "gateway.json")
+	path := ResolveConfigPath(ConfigFlag(cmd), "gateway.yaml", "gateway.yml", "gateway.json")
 	_, cc, err := config.LoadGateway(path, cmd.Flags())
 	if err != nil {
 		return config.ClientConfig{}, err

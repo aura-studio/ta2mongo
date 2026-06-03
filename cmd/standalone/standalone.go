@@ -6,7 +6,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"rocket-nano/tools/tango/cmd/shared"
-	"rocket-nano/tools/tango/internal/core/cli"
 )
 
 // NewCommand builds the `tango standalone` command. It tails the configured TA
@@ -16,7 +15,7 @@ func NewCommand() *cobra.Command {
 		Use:   "standalone",
 		Short: "Standalone report service: tail TA logs, filter, and write to MongoDB",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			path := cli.ResolveConfigPath(shared.ConfigFlag(cmd),
+			path := shared.ResolveConfigPath(shared.ConfigFlag(cmd),
 				"standalone.yaml", "standalone.yml", "standalone.json")
 			return shared.RunStandaloneService(cmd, path)
 		},

@@ -14,7 +14,6 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"rocket-nano/tools/tango/config"
-	daomongo "rocket-nano/tools/tango/internal/dao/mongo"
 	"rocket-nano/tools/tango/internal/source/tailer"
 )
 
@@ -63,11 +62,7 @@ func (c *Client) UploadFiles(ctx context.Context, req UploadRequest) (UploadResu
 	if collName == "" {
 		collName = config.DefaultFileUploadCheckpointCollection
 	}
-	dbName, err := daomongo.MongoDBFromURI(c.opts.URI)
-	if err != nil {
-		return UploadResult{}, fmt.Errorf("client: %w", err)
-	}
-	ckpt := c.client.Database(dbName).Collection(collName)
+	ckpt := c.dao.Mongo.DB.Collection(collName)
 
 	files := tailer.DiscoverFiles(req.Patterns)
 	var res UploadResult

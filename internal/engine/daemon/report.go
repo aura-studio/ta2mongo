@@ -11,7 +11,6 @@ import (
 
 	"rocket-nano/tools/tango/config"
 	"rocket-nano/tools/tango/internal/dao"
-	daomongo "rocket-nano/tools/tango/internal/dao/mongo"
 	"rocket-nano/tools/tango/internal/log"
 	"rocket-nano/tools/tango/internal/parser"
 	"rocket-nano/tools/tango/internal/process"
@@ -26,7 +25,6 @@ type Service struct {
 	cfg    config.Config
 	dao    *dao.Dao
 	source *parser.Parser
-	mongo  *daomongo.MongoResource
 }
 
 // New connects to MongoDB and creates a ready-to-run Service.
@@ -37,19 +35,18 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		return nil, fmt.Errorf("report: %w", err)
 	}
 
-	res, err := daomongo.ConnectMongo(ctx, cfg.Dao.Mongo)
+	da, err := dao.New(ctx, cfg.Dao)
 	if err != nil {
 		return nil, fmt.Errorf("report: %w", err)
 	}
-	da := dao.New(res, cfg.Dao)
 
-	return &Service{cfg: cfg, dao: da, source: src, mongo: res}, nil
+	return &Service{cfg: cfg, dao: da, source: src}, nil
 }
 
 // Shutdown disconnects the MongoDB client. It must be called after Run returns
 // to ensure all final flushes complete before the connection is closed.
 func (d *Service) Shutdown() error {
-	return d.mongo.Close()
+	return d.dao.Mongo.Close()
 }
 
 // EnsureIndexes creates all required MongoDB indexes (idempotent).

@@ -25,9 +25,6 @@ import (
 	"fmt"
 	"time"
 
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
-
 	"rocket-nano/tools/tango/config"
 	"rocket-nano/tools/tango/internal/dao"
 	daomongo "rocket-nano/tools/tango/internal/dao/mongo"
@@ -98,8 +95,7 @@ func (o *Options) defaults() {
 // to MongoDB. It is safe for concurrent use.
 type Client struct {
 	ingester *process.Ingester
-	client   *mongo.Client
-	store    *store.Store
+	dao      *dao.Dao
 	opts     Options
 }
 
@@ -128,24 +124,6 @@ func New(ctx context.Context, optFns ...Option) (*Client, error) {
 	}
 	opts.defaults()
 
-	dbName, err := daomongo.MongoDBFromURI(opts.URI)
-	if err != nil {
-		return nil, fmt.Errorf("client: URI must contain database name in path (e.g. mongodb://host:27017/tango): %w", err)
-	}
-
-	mongoClient, err := mongo.Connect(ctx, options.Client().ApplyURI(opts.URI))
-	if err != nil {
-		return nil, fmt.Errorf("client: connect to mongo: %w", err)
-	}
-
-	// Ping to verify connection.
-	if err := mongoClient.Ping(ctx, nil); err != nil {
-		_ = mongoClient.Disconnect(ctx)
-		return nil, fmt.Errorf("client: ping mongo: %w", err)
-	}
-
-	db := mongoClient.Database(dbName)
-
 	// Build a minimal config for the store/ingester (only retry + filter
 	// settings matter; the synchronous ingester does not use the daemon's batch
 	// flusher, so no pipeline section is needed).
@@ -157,30 +135,27 @@ func New(ctx context.Context, optFns ...Option) (*Client, error) {
 		Parser: &parser.Config{Filter: &filter.Config{Include: opts.FilterInclude, Exclude: opts.FilterExclude}},
 	}
 
-	st := store.New(db, cfg.Dao.Store)
-	ig, err := process.NewIngesterFromClient(mongoClient, cfg)
+	ig, err := process.NewIngester(ctx, cfg)
 	if err != nil {
-		_ = mongoClient.Disconnect(ctx)
 		return nil, fmt.Errorf("client: %w", err)
 	}
 
 	return &Client{
 		ingester: ig,
-		client:   mongoClient,
-		store:    st,
+		dao:      ig.Dao(),
 		opts:     opts,
 	}, nil
 }
 
 // Close disconnects from MongoDB and releases all resources.
 func (c *Client) Close() error {
-	return c.client.Disconnect(context.Background())
+	return c.dao.Mongo.Close()
 }
 
 // EnsureIndexes creates all required MongoDB indexes (idempotent).
 // Call this once during application startup.
 func (c *Client) EnsureIndexes(ctx context.Context) error {
-	return c.store.EnsureIndexes(ctx)
+	return c.dao.Store.EnsureIndexes(ctx)
 }
 
 // Ingest parses a single JSON log line, resolves user identity, and writes
@@ -203,10 +178,10 @@ func (c *Client) IngestBatch(ctx context.Context, lines []string) error {
 
 // Ping verifies that the MongoDB connection is alive.
 func (c *Client) Ping(ctx context.Context) error {
-	return c.client.Ping(ctx, nil)
+	return c.dao.Mongo.Client.Ping(ctx, nil)
 }
 
 // Stats returns the cumulative write statistics (retry counts).
 func (c *Client) Stats() *store.WriteStats {
-	return c.store.Stats()
+	return c.dao.Store.Stats()
 }

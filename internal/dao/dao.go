@@ -1,9 +1,12 @@
 // Package dao is the data-access layer. It exposes the Dao object, the single
 // entry point the service and process layers use to reach MongoDB-backed
-// persistence, encapsulating the underlying mongo resource and store.
+// persistence. dao.New owns the full data-access setup: opening the MongoDB
+// connection, resolving the database, and constructing the Store.
 package dao
 
 import (
+	"context"
+
 	daomongo "rocket-nano/tools/tango/internal/dao/mongo"
 	"rocket-nano/tools/tango/internal/dao/store"
 )
@@ -16,7 +19,15 @@ type Dao struct {
 	Store *store.Store
 }
 
-// New constructs a Dao on the resolved Mongo resource.
-func New(res *daomongo.MongoResource, cfg *Config) *Dao {
-	return &Dao{Mongo: res, Store: store.New(res.DB, cfg.Store)}
+// New opens a MongoDB connection from cfg and constructs a Dao. The caller
+// must Close it.
+func New(ctx context.Context, cfg *Config) (*Dao, error) {
+	res, err := daomongo.ConnectMongo(ctx, cfg.Mongo)
+	if err != nil {
+		return nil, err
+	}
+	return &Dao{
+		Mongo: res,
+		Store: store.New(res.DB, cfg.Store),
+	}, nil
 }

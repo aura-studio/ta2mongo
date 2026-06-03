@@ -12,8 +12,6 @@ package process
 import (
 	"context"
 
-	drivermongo "go.mongodb.org/mongo-driver/mongo"
-
 	"rocket-nano/tools/tango/config"
 	"rocket-nano/tools/tango/internal/dao"
 	"rocket-nano/tools/tango/internal/parser"
@@ -23,7 +21,7 @@ import (
 )
 
 // Ingester is the synchronous single/batch ingestion handle (Ingest /
-// IngestBatch). It is produced by NewIngester / NewIngesterFromClient.
+// IngestBatch). It is produced by NewIngester.
 type Ingester = batch.Ingester
 
 // Counters accumulates per-line processing statistics for the pipeline mode.
@@ -39,12 +37,6 @@ type WriteOptions = single.WriteOptions
 // must Close it.
 func NewIngester(ctx context.Context, cfg config.Config) (*Ingester, error) {
 	return batch.New(ctx, cfg)
-}
-
-// NewIngesterFromClient returns a synchronous Ingester on an existing MongoDB
-// client. The client is borrowed: Close will not disconnect it.
-func NewIngesterFromClient(client *drivermongo.Client, cfg config.Config) (*Ingester, error) {
-	return batch.NewFromClient(client, cfg)
 }
 
 // RunPipeline runs the asynchronous streaming pipeline, reading lines from

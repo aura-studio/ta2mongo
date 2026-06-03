@@ -13,14 +13,11 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-// MongoResource bundles a MongoDB client with its resolved database and an
-// ownership flag. When Owns is true the resource opened the connection and
-// Close disconnects it; when false the connection is borrowed (the caller owns
-// its lifecycle) and Close is a no-op.
+// MongoResource bundles a MongoDB client with its resolved database. Close
+// disconnects the client.
 type MongoResource struct {
 	Client *mongo.Client
 	DB     *mongo.Database
-	Owns   bool
 }
 
 // ConnectMongo opens a MongoDB connection from the given config, resolves the
@@ -39,17 +36,7 @@ func ConnectMongo(ctx context.Context, cfg *Config) (*MongoResource, error) {
 		_ = client.Disconnect(context.Background())
 		return nil, err
 	}
-	return &MongoResource{Client: client, DB: db, Owns: true}, nil
-}
-
-// Borrow wraps an externally-owned client as a non-owning MongoResource,
-// resolving the database from uri. Close will not disconnect the client.
-func Borrow(client *mongo.Client, uri string) (*MongoResource, error) {
-	db, err := DatabaseFromClient(client, uri)
-	if err != nil {
-		return nil, err
-	}
-	return &MongoResource{Client: client, DB: db, Owns: false}, nil
+	return &MongoResource{Client: client, DB: db}, nil
 }
 
 // DatabaseFromClient resolves the database named in the URI path on the given
@@ -62,10 +49,9 @@ func DatabaseFromClient(client *mongo.Client, uri string) (*mongo.Database, erro
 	return client.Database(name), nil
 }
 
-// Close disconnects the client only when this resource owns it. It is safe to
-// call on a nil receiver or a borrowed resource.
+// Close disconnects the client. It is safe to call on a nil receiver.
 func (r *MongoResource) Close() error {
-	if r == nil || !r.Owns || r.Client == nil {
+	if r == nil || r.Client == nil {
 		return nil
 	}
 	return r.Client.Disconnect(context.Background())

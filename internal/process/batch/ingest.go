@@ -23,7 +23,6 @@ import (
 
 	"rocket-nano/tools/tango/config"
 	"rocket-nano/tools/tango/internal/dao"
-	daomongo "rocket-nano/tools/tango/internal/dao/mongo"
 	"rocket-nano/tools/tango/internal/log"
 	"rocket-nano/tools/tango/internal/parser"
 	"rocket-nano/tools/tango/internal/process/single"
@@ -32,10 +31,13 @@ import (
 // Ingester processes individual JSON log lines synchronously.
 // It is safe for concurrent use from multiple goroutines.
 type Ingester struct {
-	proc  *single.Processor
-	dao   *dao.Dao
-	mongo *daomongo.MongoResource
+	proc *single.Processor
+	dao  *dao.Dao
 }
+
+// Dao returns the underlying Dao (exposed for callers that need access to the
+// underlying store / mongo resource, e.g. the client SDK).
+func (ig *Ingester) Dao() *dao.Dao { return ig.dao }
 
 // ErrFiltered is returned by Ingest when the line is dropped by user-defined
 // filter rules. Callers can distinguish intentional drops from real errors.
@@ -48,43 +50,23 @@ func New(ctx context.Context, cfg config.Config) (*Ingester, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ingest: %w", err)
 	}
-	res, err := daomongo.ConnectMongo(ctx, cfg.Dao.Mongo)
+	da, err := dao.New(ctx, cfg.Dao)
 	if err != nil {
 		return nil, fmt.Errorf("ingest: %w", err)
 	}
-	return newIngester(res, src, cfg), nil
+	return newIngester(da, src), nil
 }
 
-// NewFromClient creates an Ingester from an existing MongoDB client, avoiding a
-// second connection. The client is borrowed: Close will not disconnect it (the
-// caller owns its lifecycle). Returns an error if the configured filter
-// expressions fail to compile.
-func NewFromClient(client *drivermongo.Client, cfg config.Config) (*Ingester, error) {
-	src, err := cfg.BuildParser()
-	if err != nil {
-		return nil, fmt.Errorf("ingest: %w", err)
-	}
-	res, err := daomongo.Borrow(client, cfg.Dao.Mongo.URI)
-	if err != nil {
-		return nil, fmt.Errorf("ingest: %w", err)
-	}
-	return newIngester(res, src, cfg), nil
-}
-
-func newIngester(res *daomongo.MongoResource, src *parser.Parser, cfg config.Config) *Ingester {
-	da := dao.New(res, cfg.Dao)
+func newIngester(da *dao.Dao, src *parser.Parser) *Ingester {
 	return &Ingester{
-		proc:  single.NewProcessor(src.Parser, src.Filter(), da.Store, single.NoopStats{}, single.WriteOptions{}),
-		dao:   da,
-		mongo: res,
+		proc: single.NewProcessor(src.Parser, src.Filter(), da.Store, single.NoopStats{}, single.WriteOptions{}),
+		dao:  da,
 	}
 }
 
-// Close releases the MongoDB connection when the Ingester owns it (created with
-// New). For an Ingester created with NewFromClient the connection is borrowed
-// and Close is a no-op — the caller owns the client's lifecycle.
+// Close releases the MongoDB connection.
 func (ig *Ingester) Close() error {
-	return ig.mongo.Close()
+	return ig.dao.Mongo.Close()
 }
 
 // EnsureIndexes creates all required MongoDB indexes (idempotent).
