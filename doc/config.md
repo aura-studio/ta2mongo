@@ -46,9 +46,11 @@
 | `runtime.logging.level` | optional | `info` | `debug`/`info`/`warn`/`error` |
 | `runtime.logging.format` | optional | `text` | `text`/`json` |
 | `runtime.mongo.uri` | **required** | — | MongoDB 连接串；库名取自 URI 路径 |
-| `runtime.mongo.maxElapsedTime` | optional | `10s` | 单次 bulk-write 退避重试总时长上限 |
 | `runtime.mongo.connectTimeout` | optional | `10s` | 初次连接握手超时 |
 | `runtime.mongo.serverSelectionTimeout` | optional | `30s` | 选择可用节点超时 |
+| `runtime.store.maxElapsedTime` | optional | `10s` | 单次 bulk-write 退避重试总时长上限（属于 store，不属于 mongo 连接） |
+
+> 注：`maxElapsedTime` 自 v1.1 起从 `runtime.mongo.*` 迁移到 `runtime.store.*`（重试预算归属 store 模块）。旧配置文件需把该键改名。
 
 ### report（standalone service）
 

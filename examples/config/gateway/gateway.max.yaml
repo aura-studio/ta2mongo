@@ -14,9 +14,10 @@ runtime:
     format: text                 # [optional]（默认 text）text / json
   mongo:
     uri: mongodb://localhost:27017/tango  # [required] MongoDB 连接串；库名取自 URI 路径
-    maxElapsedTime: 10s          # [optional]（默认 10s）单次 bulk-write 退避重试总时长上限
     connectTimeout: 10s          # [optional]（默认 10s）初次连接握手超时
     serverSelectionTimeout: 30s  # [optional]（默认 30s）选择可用节点超时
+  store:
+    maxElapsedTime: 10s          # [optional]（默认 10s）单次 bulk-write 退避重试总时长上限
 
 gateway:
   addr: ":8080"                  # [optional]（默认 :8080）HTTP 监听地址；--addr 覆盖

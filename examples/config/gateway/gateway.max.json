@@ -3,10 +3,10 @@
     "logging": { "level": "info", "format": "text" },
     "mongo": {
       "uri": "mongodb://localhost:27017/tango",
-      "maxElapsedTime": "10s",
       "connectTimeout": "10s",
       "serverSelectionTimeout": "30s"
-    }
+    },
+    "store": { "maxElapsedTime": "10s" }
   },
   "gateway": { "addr": ":8080" },
   "upload": {
