@@ -12,8 +12,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"rocket-nano/tools/tango/config"
+	"rocket-nano/tools/tango/internal/engine/daemon"
 	"rocket-nano/tools/tango/internal/log"
-	"rocket-nano/tools/tango/internal/service/report"
 )
 
 // RunStandaloneService loads the standalone config from path and runs the
@@ -39,7 +39,7 @@ func RunStandaloneService(cmd *cobra.Command, path string) error {
 
 // runReport runs the reporting pipeline and blocks until ctx is cancelled.
 func runReport(ctx context.Context, rt config.Config) error {
-	svc, err := report.New(ctx, rt)
+	svc, err := daemon.New(ctx, rt)
 	if err != nil {
 		log.WithError(err).Error("tango standalone: init failed")
 		return err

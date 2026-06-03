@@ -1,4 +1,4 @@
-package processor
+package single
 
 import (
 	"context"
@@ -6,8 +6,8 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 
 	daostore "rocket-nano/tools/tango/internal/dao/store"
-	"rocket-nano/tools/tango/internal/source/filter"
-	"rocket-nano/tools/tango/internal/source/talog"
+	"rocket-nano/tools/tango/internal/parser/filter"
+	"rocket-nano/tools/tango/internal/parser/talog"
 )
 
 // WriteOptions tunes write-side behaviour for callers that need to deviate from

@@ -22,5 +22,5 @@ type Dao struct {
 // configuration onto the store's own Config so the store stays decoupled from
 // the top-level config package.
 func New(db *mongo.Database, cfg config.Config) *Dao {
-	return &Dao{Store: store.New(db, store.Config{MaxElapsedTime: cfg.Mongo.MaxElapsedTime})}
+	return &Dao{Store: store.New(db, cfg.Store)}
 }

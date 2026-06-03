@@ -26,7 +26,7 @@ type MongoResource struct {
 // ConnectMongo opens a MongoDB connection from the given config, resolves the
 // database from the URI path, and returns an owned MongoResource. The caller
 // must Close it.
-func ConnectMongo(ctx context.Context, cfg Config) (*MongoResource, error) {
+func ConnectMongo(ctx context.Context, cfg *Config) (*MongoResource, error) {
 	client, err := mongo.Connect(ctx, options.Client().
 		ApplyURI(cfg.URI).
 		SetConnectTimeout(cfg.ConnectTimeout).

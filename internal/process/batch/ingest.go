@@ -10,9 +10,9 @@
 // immediately whether the write succeeded.
 //
 // The per-line rules (parse → filter → identity → write model / dead letter)
-// are shared with the pipeline via internal/process/processor.Processor; this
+// are shared with the pipeline via internal/process/single.Processor; this
 // package only differs in lifecycle (synchronous, immediate writes).
-package ingest
+package batch
 
 import (
 	"context"
@@ -25,14 +25,14 @@ import (
 	"rocket-nano/tools/tango/internal/dao"
 	daomongo "rocket-nano/tools/tango/internal/dao/mongo"
 	"rocket-nano/tools/tango/internal/log"
-	"rocket-nano/tools/tango/internal/process/processor"
-	"rocket-nano/tools/tango/internal/source"
+	"rocket-nano/tools/tango/internal/parser"
+	"rocket-nano/tools/tango/internal/process/single"
 )
 
 // Ingester processes individual JSON log lines synchronously.
 // It is safe for concurrent use from multiple goroutines.
 type Ingester struct {
-	proc  *processor.Processor
+	proc  *single.Processor
 	dao   *dao.Dao
 	mongo *daomongo.MongoResource
 }
@@ -52,7 +52,7 @@ func New(ctx context.Context, cfg config.Config) (*Ingester, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ingest: %w", err)
 	}
-	return newIngester(res, source.New(flt), cfg), nil
+	return newIngester(res, parser.New(flt), cfg), nil
 }
 
 // NewFromClient creates an Ingester from an existing MongoDB client, avoiding a
@@ -68,13 +68,13 @@ func NewFromClient(client *drivermongo.Client, cfg config.Config) (*Ingester, er
 	if err != nil {
 		return nil, fmt.Errorf("ingest: %w", err)
 	}
-	return newIngester(res, source.New(flt), cfg), nil
+	return newIngester(res, parser.New(flt), cfg), nil
 }
 
-func newIngester(res *daomongo.MongoResource, src *source.Source, cfg config.Config) *Ingester {
+func newIngester(res *daomongo.MongoResource, src *parser.Parser, cfg config.Config) *Ingester {
 	da := dao.New(res.DB, cfg)
 	return &Ingester{
-		proc:  processor.NewProcessor(src.Parser, src.Filter(), da.Store, processor.NoopStats{}, processor.WriteOptions{}),
+		proc:  single.NewProcessor(src.Parser, src.Filter(), da.Store, single.NoopStats{}, single.WriteOptions{}),
 		dao:   da,
 		mongo: res,
 	}
@@ -101,19 +101,19 @@ func (ig *Ingester) EnsureIndexes(ctx context.Context) error {
 func (ig *Ingester) Ingest(ctx context.Context, line string) error {
 	res := ig.proc.Process(ctx, line)
 	switch res.Kind {
-	case processor.KindParseError:
+	case single.KindParseError:
 		ig.writeDeadLetter(ctx, res.Model)
 		return fmt.Errorf("ingest: parse: %w", res.Err)
-	case processor.KindFiltered:
+	case single.KindFiltered:
 		return ErrFiltered
-	case processor.KindIdentityError:
+	case single.KindIdentityError:
 		ig.writeDeadLetter(ctx, res.Model)
 		return fmt.Errorf("ingest: identity resolve: %w", res.Err)
-	case processor.KindUser:
+	case single.KindUser:
 		if err := ig.dao.BulkWriteOrdered(ctx, ig.dao.UserCollection(), []drivermongo.WriteModel{res.Model}); err != nil {
 			return fmt.Errorf("ingest: write user: %w", err)
 		}
-	case processor.KindEvent:
+	case single.KindEvent:
 		if err := ig.dao.BulkWrite(ctx, ig.dao.EventCollection(), []drivermongo.WriteModel{res.Model}); err != nil {
 			return fmt.Errorf("ingest: write event: %w", err)
 		}
@@ -143,17 +143,17 @@ func (ig *Ingester) IngestBatch(ctx context.Context, lines []string) error {
 	for _, line := range lines {
 		res := ig.proc.Process(ctx, line)
 		switch res.Kind {
-		case processor.KindParseError:
+		case single.KindParseError:
 			log.WithError(res.Err).Debug("ingest batch: invalid line")
 			deadModels = append(deadModels, res.Model)
-		case processor.KindIdentityError:
+		case single.KindIdentityError:
 			log.WithError(res.Err).Warn("ingest batch: identity resolve failed")
 			deadModels = append(deadModels, res.Model)
-		case processor.KindFiltered:
+		case single.KindFiltered:
 			// intentionally discarded
-		case processor.KindUser:
+		case single.KindUser:
 			userModels = append(userModels, res.Model)
-		case processor.KindEvent:
+		case single.KindEvent:
 			eventModels = append(eventModels, res.Model)
 		}
 	}

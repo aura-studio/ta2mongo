@@ -1,0 +1,38 @@
+package tailer
+
+import "time"
+
+// TailMode constants control how the tailer watches for file changes.
+const (
+	// TailModeHybrid uses hpcloud/tail's event-driven watcher as the primary
+	// mechanism, with a periodic poll fallback that detects missed
+	// notifications. Combines low latency with reliability.
+	TailModeHybrid = "hybrid"
+
+	// TailModePoll uses a simple polling loop (read → sleep → retry). Immune to
+	// notification-drop races; suitable for all workloads.
+	TailModePoll = "poll"
+
+	// TailModeEvent uses hpcloud/tail's kqueue/inotify event-driven watcher.
+	// Lowest latency but may stall under sustained concurrent writes due to a
+	// known sendOnlyIfEmpty race in the upstream library.
+	TailModeEvent = "event"
+)
+
+// Config configures the file-tailing data source (the report daemon's source).
+// It is the tailer module's own configuration; the top-level config package
+// references it by pointer and the loader unmarshals the source.* keys into it.
+type Config struct {
+	// LogPattern is a list of glob/regex patterns matched against file paths.
+	// Required for the report service.
+	LogPattern []string `mapstructure:"logPattern"`
+	// TailMode selects the file-tailing strategy: hybrid (default) / poll / event.
+	TailMode string `mapstructure:"tailMode"`
+	// RescanInterval is how often the tailer rescans for new files. Default 30s.
+	RescanInterval time.Duration `mapstructure:"rescanInterval"`
+	// PollInterval is the poll cadence used by poll / hybrid tail modes.
+	// Default 200ms.
+	PollInterval time.Duration `mapstructure:"pollInterval"`
+	// MaxLineBytes caps a single log line's length. Default 10485760 (10 MB).
+	MaxLineBytes int `mapstructure:"maxLineBytes"`
+}

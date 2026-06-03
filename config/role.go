@@ -7,6 +7,11 @@ import (
 	"github.com/spf13/viper"
 
 	"rocket-nano/tools/tango/internal/dao/mongo"
+	"rocket-nano/tools/tango/internal/dao/store"
+	"rocket-nano/tools/tango/internal/log"
+	"rocket-nano/tools/tango/internal/parser/filter"
+	"rocket-nano/tools/tango/internal/process/pipeline"
+	"rocket-nano/tools/tango/internal/source/tailer"
 )
 
 // RoleConfig is the unified, role-oriented config file schema. One schema backs
@@ -14,7 +19,7 @@ import (
 // loader projects the sections it needs onto the internal runtime Config /
 // ClientConfig. Sections:
 //
-//   - runtime: process-wide logging + MongoDB connection (every role).
+//   - runtime: process-wide logging + MongoDB connection + store (every role).
 //   - report:  the reporting pipeline (standalone service).
 //   - gateway: the HTTP gateway listen address (gateway service).
 //   - upload:  string + file upload settings (gateway + SDK).
@@ -30,15 +35,16 @@ type RoleConfig struct {
 
 // RuntimeConfig is the process-wide block shared by every role.
 type RuntimeConfig struct {
-	Logging LoggingConfig `mapstructure:"logging"`
-	Mongo   mongo.Config  `mapstructure:"mongo"`
+	Logging *log.Config   `mapstructure:"logging"`
+	Mongo   *mongo.Config `mapstructure:"mongo"`
+	Store   *store.Config `mapstructure:"store"`
 }
 
 // RoleReportConfig is the reporting pipeline block for the standalone service.
 type RoleReportConfig struct {
-	Source   SourceConfig   `mapstructure:"source"`
-	Pipeline PipelineConfig `mapstructure:"pipeline"`
-	Filter   FilterConfig   `mapstructure:"filter"`
+	Source   *tailer.Config   `mapstructure:"source"`
+	Pipeline *pipeline.Config `mapstructure:"pipeline"`
+	Filter   *filter.Config   `mapstructure:"filter"`
 }
 
 // GatewayConfig is the HTTP gateway block.
@@ -54,17 +60,17 @@ type UploadConfig struct {
 
 // UploadStringConfig configures single-string ingest (no retransmission).
 type UploadStringConfig struct {
-	BatchSize int          `mapstructure:"batchSize"`
-	Filter    FilterConfig `mapstructure:"filter"`
+	BatchSize int            `mapstructure:"batchSize"`
+	Filter    *filter.Config `mapstructure:"filter"`
 }
 
 // UploadFileConfig configures file ingest with resume (retransmission).
 type UploadFileConfig struct {
-	LogPattern           []string       `mapstructure:"logPattern"`
-	MaxLineBytes         int            `mapstructure:"maxLineBytes"`
-	Pipeline             PipelineConfig `mapstructure:"pipeline"`
-	Filter               FilterConfig   `mapstructure:"filter"`
-	CheckpointCollection string         `mapstructure:"checkpointCollection"`
+	LogPattern           []string         `mapstructure:"logPattern"`
+	MaxLineBytes         int              `mapstructure:"maxLineBytes"`
+	Pipeline             *pipeline.Config `mapstructure:"pipeline"`
+	Filter               *filter.Config   `mapstructure:"filter"`
+	CheckpointCollection string           `mapstructure:"checkpointCollection"`
 }
 
 // ReportRuntime projects the unified config onto the runtime Config consumed by
@@ -74,6 +80,7 @@ func (r RoleConfig) ReportRuntime() Config {
 		Mode:     ModeReport,
 		Logging:  r.Runtime.Logging,
 		Mongo:    r.Runtime.Mongo,
+		Store:    r.Runtime.Store,
 		Source:   r.Report.Source,
 		Pipeline: r.Report.Pipeline,
 		Filter:   r.Report.Filter,
@@ -86,6 +93,7 @@ func (r RoleConfig) Client() ClientConfig {
 	cc := ClientConfig{
 		Logging: r.Runtime.Logging,
 		Mongo:   r.Runtime.Mongo,
+		Store:   r.Runtime.Store,
 		StringUpload: StringUploadConfig{
 			BatchSize: r.Upload.String.BatchSize,
 			Filter:    r.Upload.String.Filter,
@@ -136,7 +144,7 @@ func LoadStandalone(path string, flags *pflag.FlagSet) (RoleConfig, Config, erro
 	if err := rt.Validate(); err != nil {
 		return RoleConfig{}, Config{}, err
 	}
-	if len(rc.Report.Source.LogPattern) == 0 {
+	if rc.Report.Source == nil || len(rc.Report.Source.LogPattern) == 0 {
 		return RoleConfig{}, Config{}, fmt.Errorf("config: report.source.logPattern is required (at least one regex)")
 	}
 	return rc, rt, nil
@@ -160,12 +168,12 @@ func setRoleDefaults(v *viper.Viper) {
 	v.SetDefault("runtime.logging.level", "info")
 	v.SetDefault("runtime.logging.format", "text")
 	v.SetDefault("runtime.mongo.uri", "")
-	v.SetDefault("runtime.mongo.maxElapsedTime", "10s")
 	v.SetDefault("runtime.mongo.connectTimeout", "10s")
 	v.SetDefault("runtime.mongo.serverSelectionTimeout", "30s")
+	v.SetDefault("runtime.store.maxElapsedTime", "10s")
 	// report
 	v.SetDefault("report.source.logPattern", []string{})
-	v.SetDefault("report.source.tailMode", TailModeHybrid)
+	v.SetDefault("report.source.tailMode", tailer.TailModeHybrid)
 	v.SetDefault("report.source.rescanInterval", "30s")
 	v.SetDefault("report.source.pollInterval", "200ms")
 	v.SetDefault("report.source.maxLineBytes", 10*1024*1024)

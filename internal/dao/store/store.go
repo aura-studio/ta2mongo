@@ -36,12 +36,12 @@ type Store struct {
 	event      *mongo.Collection
 	deadLetter *mongo.Collection
 	identity   *IdentityResolver
-	cfg        Config
+	cfg        *Config
 	stats      WriteStats
 }
 
 // New creates a Store backed by the given database.
-func New(db *mongo.Database, cfg Config) *Store {
+func New(db *mongo.Database, cfg *Config) *Store {
 	return &Store{
 		user:       db.Collection("user"),
 		event:      db.Collection("event"),

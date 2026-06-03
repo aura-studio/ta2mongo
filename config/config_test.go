@@ -82,7 +82,7 @@ mongo:
   uri: "mongodb://localhost"
 `)
 	want := 10 * time.Second
-	if got := cfg.Mongo.MaxElapsedTime; got != want {
+	if got := cfg.Store.MaxElapsedTime; got != want {
 		t.Errorf("MaxElapsedTime = %v, want %v", got, want)
 	}
 }
@@ -91,10 +91,11 @@ func TestMaxElapsedTime_CustomValue(t *testing.T) {
 	cfg := loadFlat(t, `
 mongo:
   uri: "mongodb://localhost"
+store:
   maxElapsedTime: "30s"
 `)
 	want := 30 * time.Second
-	if got := cfg.Mongo.MaxElapsedTime; got != want {
+	if got := cfg.Store.MaxElapsedTime; got != want {
 		t.Errorf("MaxElapsedTime = %v, want %v", got, want)
 	}
 }
@@ -103,10 +104,11 @@ func TestMaxElapsedTime_FallbackForZero(t *testing.T) {
 	cfg := loadFlat(t, `
 mongo:
   uri: "mongodb://localhost"
+store:
   maxElapsedTime: "0s"
 `)
 	want := 10 * time.Second
-	if got := cfg.Mongo.MaxElapsedTime; got != want {
+	if got := cfg.Store.MaxElapsedTime; got != want {
 		t.Errorf("MaxElapsedTime = %v, want %v (should fallback for zero)", got, want)
 	}
 }
@@ -115,10 +117,11 @@ func TestMaxElapsedTime_LargeValue(t *testing.T) {
 	cfg := loadFlat(t, `
 mongo:
   uri: "mongodb://localhost"
+store:
   maxElapsedTime: "5m"
 `)
 	want := 5 * time.Minute
-	if got := cfg.Mongo.MaxElapsedTime; got != want {
+	if got := cfg.Store.MaxElapsedTime; got != want {
 		t.Errorf("MaxElapsedTime = %v, want %v", got, want)
 	}
 }
@@ -254,11 +257,11 @@ mongo:
 
 func TestChannelBuffer_DerivedVsExplicit(t *testing.T) {
 	cfg := loadFlat(t, "mongo:\n  uri: x\npipeline:\n  batchSize: 500\n")
-	if got := cfg.BatchChannelSize(); got != 1000 {
+	if got := cfg.Pipeline.ChannelSize(); got != 1000 {
 		t.Errorf("derived channel size = %d, want 1000", got)
 	}
 	cfg = loadFlat(t, "mongo:\n  uri: x\npipeline:\n  batchSize: 500\n  channelBuffer: 4096\n")
-	if got := cfg.BatchChannelSize(); got != 4096 {
+	if got := cfg.Pipeline.ChannelSize(); got != 4096 {
 		t.Errorf("explicit channel size = %d, want 4096", got)
 	}
 }
@@ -276,10 +279,10 @@ pipeline:
   batchSizeMin: 200
   batchSizeMax: 3000
 `)
-	if got := cfg.BatchSizeMin(); got != 200 {
+	if got := cfg.Pipeline.MinBatchSize(); got != 200 {
 		t.Errorf("BatchSizeMin() = %d, want 200", got)
 	}
-	if got := cfg.BatchSizeMax(); got != 3000 {
+	if got := cfg.Pipeline.MaxBatchSize(); got != 3000 {
 		t.Errorf("BatchSizeMax() = %d, want 3000", got)
 	}
 }
@@ -293,10 +296,10 @@ pipeline:
   batchSizeMin: 0
   batchSizeMax: 0
 `)
-	if got := cfg.BatchSizeMin(); got != 250 {
+	if got := cfg.Pipeline.MinBatchSize(); got != 250 {
 		t.Errorf("BatchSizeMin() = %d, want 250 (auto-derived BatchSize/4)", got)
 	}
-	if got := cfg.BatchSizeMax(); got != 2000 {
+	if got := cfg.Pipeline.MaxBatchSize(); got != 2000 {
 		t.Errorf("BatchSizeMax() = %d, want 2000 (auto-derived BatchSize*2)", got)
 	}
 }
@@ -310,7 +313,7 @@ pipeline:
   batchSizeMin: 1500
   batchSizeMax: 0
 `)
-	if got := cfg.BatchSizeMin(); got != 1000 {
+	if got := cfg.Pipeline.MinBatchSize(); got != 1000 {
 		t.Errorf("BatchSizeMin() = %d, want 1000 (clamped to batchSize)", got)
 	}
 	cfg2 := loadFlat(t, `
@@ -321,7 +324,7 @@ pipeline:
   batchSizeMin: 0
   batchSizeMax: 500
 `)
-	if got := cfg2.BatchSizeMax(); got != 1000 {
+	if got := cfg2.Pipeline.MaxBatchSize(); got != 1000 {
 		t.Errorf("BatchSizeMax() = %d, want 1000 (clamped to batchSize)", got)
 	}
 }
@@ -335,8 +338,8 @@ pipeline:
   batchSize: 1000
   batchSizeMin: 1500
 `)
-	if cfg.BatchSizeMin() != 1000 {
-		t.Errorf("BatchSizeMin() = %d, want 1000 (clamped)", cfg.BatchSizeMin())
+	if cfg.Pipeline.MinBatchSize() != 1000 {
+		t.Errorf("BatchSizeMin() = %d, want 1000 (clamped)", cfg.Pipeline.MinBatchSize())
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("Validate() unexpected error: %v", err)
@@ -349,8 +352,8 @@ pipeline:
   batchSize: 1000
   batchSizeMax: 500
 `)
-	if cfg2.BatchSizeMax() != 1000 {
-		t.Errorf("BatchSizeMax() = %d, want 1000 (clamped)", cfg2.BatchSizeMax())
+	if cfg2.Pipeline.MaxBatchSize() != 1000 {
+		t.Errorf("BatchSizeMax() = %d, want 1000 (clamped)", cfg2.Pipeline.MaxBatchSize())
 	}
 	if err := cfg2.Validate(); err != nil {
 		t.Errorf("Validate() unexpected error: %v", err)
@@ -366,10 +369,10 @@ pipeline:
   batchSizeMin: 0
   batchSizeMax: 0
 `)
-	if got := cfg.BatchSizeMin(); got != 1 {
+	if got := cfg.Pipeline.MinBatchSize(); got != 1 {
 		t.Errorf("BatchSizeMin() = %d, want 1 (minimum 1)", got)
 	}
-	if got := cfg.BatchSizeMax(); got != 2 {
+	if got := cfg.Pipeline.MaxBatchSize(); got != 2 {
 		t.Errorf("BatchSizeMax() = %d, want 2 (BatchSize*2)", got)
 	}
 }

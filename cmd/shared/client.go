@@ -40,7 +40,7 @@ func GatewayConfig(cmd *cobra.Command) (config.ClientConfig, error) {
 func BuildClient(cmd *cobra.Command, cc config.ClientConfig, extra ...sdk.Option) (*sdk.Client, error) {
 	opts := append([]sdk.Option{
 		sdk.WithURI(cc.Mongo.URI),
-		sdk.WithMaxElapsedTime(cc.Mongo.MaxElapsedTime),
+		sdk.WithMaxElapsedTime(cc.Store.MaxElapsedTime),
 	}, extra...)
 	return sdk.New(cmd.Context(), opts...)
 }

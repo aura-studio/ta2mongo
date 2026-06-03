@@ -17,7 +17,6 @@ import (
 
 	"github.com/hpcloud/tail"
 
-	"rocket-nano/tools/tango/config"
 	"rocket-nano/tools/tango/internal/log"
 )
 
@@ -212,7 +211,7 @@ const defaultMaxLineSize = 1 << 20 // 1 MiB
 type Tailer struct {
 	patterns       []string
 	rescanInterval time.Duration
-	tailMode       string // config.TailModePoll or config.TailModeEvent
+	tailMode       string // TailModePoll or TailModeEvent
 
 	pollInterval time.Duration // EOF re-read cadence (poll/hybrid modes)
 	maxLineSize  int           // scanner buffer cap per line
@@ -222,12 +221,12 @@ type Tailer struct {
 }
 
 // New creates a Tailer that watches the given glob patterns.
-// tailMode selects the file-watching strategy: config.TailModePoll (default)
-// or config.TailModeEvent. Tuning (poll interval, max line size) defaults to
+// tailMode selects the file-watching strategy: TailModePoll (default)
+// or TailModeEvent. Tuning (poll interval, max line size) defaults to
 // sane values; override with WithTuning.
 func New(patterns []string, rescanInterval time.Duration, tailMode string) *Tailer {
 	if tailMode == "" {
-		tailMode = config.TailModePoll
+		tailMode = TailModePoll
 	}
 	return &Tailer{
 		patterns:       patterns,
@@ -305,9 +304,9 @@ func (t *Tailer) startFile(ctx context.Context, path string, out chan<- string) 
 	}).Info("tailer: discovered and tailing new file")
 
 	switch t.tailMode {
-	case config.TailModeEvent:
+	case TailModeEvent:
 		go t.tailFileEvent(ctx, path, out)
-	case config.TailModePoll:
+	case TailModePoll:
 		go t.tailFile(ctx, path, out)
 	default: // hybrid
 		go t.tailFileHybrid(ctx, path, out)

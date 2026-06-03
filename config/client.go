@@ -1,14 +1,24 @@
 package config
 
-import "rocket-nano/tools/tango/internal/dao/mongo"
+import (
+	"time"
+
+	"rocket-nano/tools/tango/internal/dao/mongo"
+	"rocket-nano/tools/tango/internal/dao/store"
+	"rocket-nano/tools/tango/internal/log"
+	"rocket-nano/tools/tango/internal/parser/filter"
+	"rocket-nano/tools/tango/internal/process/pipeline"
+)
 
 // ClientConfig is the runtime configuration the client SDK / gateway service
 // consume. It is the projection target of the unified RoleConfig (see
 // RoleConfig.Client in role.go): its functionality is the upload sections plus
-// an HTTP server block for the gateway face.
+// an HTTP server block for the gateway face. Each section is a pointer to the
+// owning module's config struct.
 type ClientConfig struct {
-	Logging LoggingConfig `mapstructure:"logging"`
-	Mongo   mongo.Config  `mapstructure:"mongo"`
+	Logging *log.Config   `mapstructure:"logging"`
+	Mongo   *mongo.Config `mapstructure:"mongo"`
+	Store   *store.Config `mapstructure:"store"`
 
 	// StringUpload: single string ingest, no retransmission.
 	StringUpload StringUploadConfig `mapstructure:"stringUpload"`
@@ -20,16 +30,16 @@ type ClientConfig struct {
 
 // StringUploadConfig configures single-string ingest (no retransmission).
 type StringUploadConfig struct {
-	BatchSize int          `mapstructure:"batchSize"`
-	Filter    FilterConfig `mapstructure:"filter"`
+	BatchSize int            `mapstructure:"batchSize"`
+	Filter    *filter.Config `mapstructure:"filter"`
 }
 
 // FileUploadConfig configures file ingest with resume (retransmission).
 type FileUploadConfig struct {
-	LogPattern   []string       `mapstructure:"logPattern"`
-	MaxLineBytes int            `mapstructure:"maxLineBytes"`
-	Pipeline     PipelineConfig `mapstructure:"pipeline"`
-	Filter       FilterConfig   `mapstructure:"filter"`
+	LogPattern   []string         `mapstructure:"logPattern"`
+	MaxLineBytes int              `mapstructure:"maxLineBytes"`
+	Pipeline     *pipeline.Config `mapstructure:"pipeline"`
+	Filter       *filter.Config   `mapstructure:"filter"`
 	// CheckpointCollection stores per-file resume offsets so an interrupted
 	// upload restarts where it left off instead of re-reading from the top.
 	CheckpointCollection string `mapstructure:"checkpointCollection"`
@@ -48,14 +58,29 @@ const DefaultFileUploadCheckpointCollection = "_tango_fileupload"
 const DefaultServerAddr = ":8080"
 
 func (c *ClientConfig) applyDefaults() {
+	if c.Logging == nil {
+		c.Logging = &log.Config{}
+	}
 	if c.Logging.Level == "" {
 		c.Logging.Level = "info"
 	}
 	if c.Logging.Format == "" {
 		c.Logging.Format = "text"
 	}
+	if c.Mongo == nil {
+		c.Mongo = &mongo.Config{}
+	}
+	if c.Store == nil {
+		c.Store = &store.Config{}
+	}
+	if c.Store.MaxElapsedTime <= 0 {
+		c.Store.MaxElapsedTime = 10 * time.Second
+	}
 	if c.StringUpload.BatchSize <= 0 {
 		c.StringUpload.BatchSize = 1000
+	}
+	if c.FileUpload.Pipeline == nil {
+		c.FileUpload.Pipeline = &pipeline.Config{}
 	}
 	if c.FileUpload.MaxLineBytes <= 0 {
 		c.FileUpload.MaxLineBytes = 10 * 1024 * 1024

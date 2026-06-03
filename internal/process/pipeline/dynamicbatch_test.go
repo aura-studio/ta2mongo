@@ -1,4 +1,4 @@
-package dynamicbatch
+package pipeline
 
 import "testing"
 

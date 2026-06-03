@@ -1,7 +1,7 @@
-// Package report implements the report service runtime, orchestrating the
+// Package daemon implements the long-running report service (daemon mode), orchestrating the
 // tango pipeline: file tailing -> line parsing -> batch accumulation ->
 // MongoDB bulk writes.
-package report
+package daemon
 
 import (
 	"context"
@@ -10,13 +10,12 @@ import (
 	"time"
 
 	"rocket-nano/tools/tango/config"
-	"rocket-nano/tools/tango/internal/core/tailer"
 	"rocket-nano/tools/tango/internal/dao"
 	daomongo "rocket-nano/tools/tango/internal/dao/mongo"
 	"rocket-nano/tools/tango/internal/log"
-	"rocket-nano/tools/tango/internal/process/pipeline"
-	"rocket-nano/tools/tango/internal/process/processor"
-	"rocket-nano/tools/tango/internal/source"
+	"rocket-nano/tools/tango/internal/parser"
+	"rocket-nano/tools/tango/internal/process"
+	"rocket-nano/tools/tango/internal/source/tailer"
 )
 
 // statsReportInterval is how often the report service logs processing statistics.
@@ -26,7 +25,7 @@ const statsReportInterval = 60 * time.Second
 type Service struct {
 	cfg    config.Config
 	dao    *dao.Dao
-	source *source.Source
+	source *parser.Parser
 	mongo  *daomongo.MongoResource
 }
 
@@ -44,7 +43,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	}
 	da := dao.New(res.DB, cfg)
 
-	return &Service{cfg: cfg, dao: da, source: source.New(flt), mongo: res}, nil
+	return &Service{cfg: cfg, dao: da, source: parser.New(flt), mongo: res}, nil
 }
 
 // Shutdown disconnects the MongoDB client. It must be called after Run returns
@@ -84,7 +83,7 @@ func (d *Service) Run(ctx context.Context) error {
 	lineCh := t.Run(ctx)
 
 	// Create stats collector for periodic reporting.
-	stats := &processor.Counters{}
+	stats := &process.Counters{}
 	startTime := time.Now()
 
 	// Launch periodic stats reporter.
@@ -92,7 +91,7 @@ func (d *Service) Run(ctx context.Context) error {
 	go d.reportStats(ctx, stats, startTime, reportDone)
 
 	// Block until all workers finish.
-	pipeline.RunWorkers(ctx, d.cfg, d.dao.Store, d.source.Parser, d.source.Filter(), lineCh, stats, processor.WriteOptions{})
+	process.RunPipeline(ctx, d.cfg, d.dao, d.source, lineCh, stats, process.WriteOptions{})
 
 	// Wait for the reporter goroutine to exit.
 	<-reportDone
@@ -104,13 +103,13 @@ func (d *Service) Run(ctx context.Context) error {
 }
 
 // reportStats periodically logs processing statistics every statsReportInterval.
-func (d *Service) reportStats(ctx context.Context, stats *processor.Counters, startTime time.Time, done chan<- struct{}) {
+func (d *Service) reportStats(ctx context.Context, stats *process.Counters, startTime time.Time, done chan<- struct{}) {
 	defer close(done)
 
 	ticker := time.NewTicker(statsReportInterval)
 	defer ticker.Stop()
 
-	var prev processor.Snapshot
+	var prev process.Snapshot
 
 	for {
 		select {
@@ -154,7 +153,7 @@ func (d *Service) reportStats(ctx context.Context, stats *processor.Counters, st
 }
 
 // logFinalStats logs a final summary when the daemon is shutting down.
-func (d *Service) logFinalStats(stats *processor.Counters, startTime time.Time) {
+func (d *Service) logFinalStats(stats *process.Counters, startTime time.Time) {
 	cur := stats.Snapshot()
 
 	duration := time.Since(startTime).Round(time.Second)

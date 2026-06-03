@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"rocket-nano/tools/tango/config"
 )
 
 // ---------------------------------------------------------------------------
@@ -456,7 +454,7 @@ func TestRescan_PicksUpNewFiles(t *testing.T) {
 	}
 
 	pattern := dir + "/*.log"
-	tailer := New([]string{pattern}, 100*time.Millisecond, config.TailModeHybrid)
+	tailer := New([]string{pattern}, 100*time.Millisecond, TailModeHybrid)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -502,7 +500,7 @@ func TestRescan_DoesNotDuplicateExistingFiles(t *testing.T) {
 	}
 
 	pattern := dir + "/*.log"
-	tailer := New([]string{pattern}, 100*time.Millisecond, config.TailModeHybrid)
+	tailer := New([]string{pattern}, 100*time.Millisecond, TailModeHybrid)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -537,7 +535,7 @@ func TestContinuousWrite_TailerKeepsUp(t *testing.T) {
 	}
 
 	pattern := dir + "/*.log"
-	tailer := New([]string{pattern}, 30*time.Second, config.TailModeHybrid)
+	tailer := New([]string{pattern}, 30*time.Second, TailModeHybrid)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -608,7 +606,7 @@ func TestContinuousWrite_SlowConsumer(t *testing.T) {
 	}
 
 	pattern := dir + "/*.log"
-	tailer := New([]string{pattern}, 30*time.Second, config.TailModeHybrid)
+	tailer := New([]string{pattern}, 30*time.Second, TailModeHybrid)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -669,7 +667,7 @@ func TestRescan_StreamsNewLinesFromNewFile(t *testing.T) {
 	dir := t.TempDir()
 
 	pattern := dir + "/*.log"
-	tailer := New([]string{pattern}, 100*time.Millisecond, config.TailModeHybrid)
+	tailer := New([]string{pattern}, 100*time.Millisecond, TailModeHybrid)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

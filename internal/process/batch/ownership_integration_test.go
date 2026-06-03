@@ -1,4 +1,4 @@
-package ingest
+package batch
 
 import (
 	"context"
@@ -12,6 +12,7 @@ import (
 
 	"rocket-nano/tools/tango/config"
 	daomongo "rocket-nano/tools/tango/internal/dao/mongo"
+	"rocket-nano/tools/tango/internal/dao/store"
 )
 
 // TestNewFromClient_DoesNotOwnClient is the ownership regression for the
@@ -28,7 +29,10 @@ func TestNewFromClient_DoesNotOwnClient(t *testing.T) {
 	defer func() { _ = client.Disconnect(ctx) }()
 
 	dbName := fmt.Sprintf("tango_ingest_own_%d_%d", time.Now().UnixNano(), rand.Intn(10000))
-	cfg := config.Config{Mongo: daomongo.Config{URI: testMongoURI + "/" + dbName}}
+	cfg := config.Config{
+		Mongo: &daomongo.Config{URI: testMongoURI + "/" + dbName},
+		Store: &store.Config{MaxElapsedTime: 5 * time.Second},
+	}
 
 	ig, err := NewFromClient(client, cfg)
 	if err != nil {

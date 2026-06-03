@@ -31,7 +31,8 @@ import (
 	"rocket-nano/tools/tango/config"
 	daomongo "rocket-nano/tools/tango/internal/dao/mongo"
 	"rocket-nano/tools/tango/internal/dao/store"
-	"rocket-nano/tools/tango/internal/process/ingest"
+	"rocket-nano/tools/tango/internal/parser/filter"
+	"rocket-nano/tools/tango/internal/process"
 )
 
 // Options configures the Client connection and behavior.
@@ -94,7 +95,7 @@ func (o *Options) defaults() {
 // Client is a connection-pool-backed client for writing ThinkingData records
 // to MongoDB. It is safe for concurrent use.
 type Client struct {
-	ingester *ingest.Ingester
+	ingester *process.Ingester
 	client   *mongo.Client
 	store    *store.Store
 	opts     Options
@@ -143,23 +144,17 @@ func New(ctx context.Context, optFns ...Option) (*Client, error) {
 
 	db := mongoClient.Database(dbName)
 
-	// Build a minimal config for the store (only retry settings matter).
-	// We provide batch tuning defaults; ingest itself doesn't use the daemon batch flusher.
+	// Build a minimal config for the store/ingester (only retry + filter
+	// settings matter; the synchronous ingester does not use the daemon's batch
+	// flusher, so no pipeline section is needed).
 	cfg := config.Config{
-		Mongo: daomongo.Config{
-			URI:            opts.URI,
-			MaxElapsedTime: opts.MaxElapsedTime,
-		},
-		Pipeline: config.PipelineConfig{
-			BatchSize:     opts.BatchSize,
-			BatchWorkers:  1,
-			FlushInterval: time.Second,
-		},
-		Filter: config.FilterConfig{Include: opts.FilterInclude, Exclude: opts.FilterExclude},
+		Mongo:  &daomongo.Config{URI: opts.URI},
+		Store:  &store.Config{MaxElapsedTime: opts.MaxElapsedTime},
+		Filter: &filter.Config{Include: opts.FilterInclude, Exclude: opts.FilterExclude},
 	}
 
-	st := store.New(db, store.Config{MaxElapsedTime: opts.MaxElapsedTime})
-	ig, err := ingest.NewFromClient(mongoClient, cfg)
+	st := store.New(db, &store.Config{MaxElapsedTime: opts.MaxElapsedTime})
+	ig, err := process.NewIngesterFromClient(mongoClient, cfg)
 	if err != nil {
 		_ = mongoClient.Disconnect(ctx)
 		return nil, fmt.Errorf("client: %w", err)

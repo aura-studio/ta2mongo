@@ -14,8 +14,8 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"rocket-nano/tools/tango/config"
-	"rocket-nano/tools/tango/internal/core/tailer"
 	daomongo "rocket-nano/tools/tango/internal/dao/mongo"
+	"rocket-nano/tools/tango/internal/source/tailer"
 )
 
 // UploadRequest configures a file upload (function #2: file single upload with

@@ -7,18 +7,16 @@ import (
 	"time"
 )
 
-// Config configures the MongoDB connection and write-retry behaviour. It is the
-// mongo module's own configuration, owned here rather than in the top-level
-// config package so callers depend on this module for its settings. The
-// mapstructure tags let the config loader unmarshal the runtime.mongo.* keys
-// straight into it.
+// Config configures the MongoDB connection. It is the mongo module's own
+// configuration, owned here rather than in the top-level config package, so
+// callers depend on this module for its settings. The mapstructure tags let the
+// config loader unmarshal the runtime.mongo.* keys straight into it. Retry
+// budget (MaxElapsedTime) belongs to the store, not the connection — see
+// store.Config.
 type Config struct {
 	// URI is the MongoDB connection URI (required). The database name is taken
 	// from the URI path.
 	URI string `mapstructure:"uri"`
-	// MaxElapsedTime is the maximum total retry time for a single bulk write.
-	// Default 10s.
-	MaxElapsedTime time.Duration `mapstructure:"maxElapsedTime"`
 	// ConnectTimeout bounds the initial connection handshake. Default 10s.
 	ConnectTimeout time.Duration `mapstructure:"connectTimeout"`
 	// ServerSelectionTimeout bounds how long the driver waits for a suitable

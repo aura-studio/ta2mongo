@@ -3,7 +3,7 @@
 // pipeline, the synchronous ingest API, and backfill's event path, so the
 // rules (what becomes a user/event write, what is filtered, what goes to dead
 // letter) live in exactly one place.
-package processor
+package single
 
 // StatsCollector is an optional callback interface for recording processing
 // statistics. Implementations must be safe for concurrent use.

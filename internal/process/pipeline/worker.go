@@ -7,28 +7,26 @@ import (
 
 	"go.mongodb.org/mongo-driver/mongo"
 
-	"rocket-nano/tools/tango/config"
-	"rocket-nano/tools/tango/internal/core/dynamicbatch"
 	daostore "rocket-nano/tools/tango/internal/dao/store"
 	"rocket-nano/tools/tango/internal/log"
-	"rocket-nano/tools/tango/internal/process/processor"
-	"rocket-nano/tools/tango/internal/source/filter"
-	"rocket-nano/tools/tango/internal/source/talog"
+	"rocket-nano/tools/tango/internal/parser/filter"
+	"rocket-nano/tools/tango/internal/parser/talog"
+	"rocket-nano/tools/tango/internal/process/single"
 )
 
 // RunWorkers launches N workers with affinity-based dispatch and blocks
 // until all workers finish. A nil flt is treated as a no-op filter. flt is a
 // Holder so the active filter can be hot-swapped while workers run.
-func RunWorkers(ctx context.Context, cfg config.Config, st *daostore.Store,
+func RunWorkers(ctx context.Context, cfg *Config, st *daostore.Store,
 	parser *talog.Parser, flt *filter.Holder,
-	lineCh <-chan string, stats processor.StatsCollector, opts processor.WriteOptions,
+	lineCh <-chan string, stats single.StatsCollector, opts single.WriteOptions,
 ) {
 	if stats == nil {
-		stats = processor.NoopStats{}
+		stats = single.NoopStats{}
 	}
 
-	workerCount := cfg.Pipeline.BatchWorkers
-	chSize := cfg.BatchChannelSize()
+	workerCount := cfg.BatchWorkers
+	chSize := cfg.ChannelSize()
 
 	// Create per-worker channels for affinity-based routing.
 	workerChs := make([]chan string, workerCount)
@@ -53,21 +51,21 @@ func RunWorkers(ctx context.Context, cfg config.Config, st *daostore.Store,
 }
 
 // worker processes lines from a channel, batches them, and flushes to MongoDB.
-// Per-line parse/filter/identity/route rules live in processor.Processor; the
+// Per-line parse/filter/identity/route rules live in single.Processor; the
 // worker owns only batching, the dynamic flush cadence, and the affinity-local
 // dead-letter logging.
-func worker(ctx context.Context, cfg config.Config, st *daostore.Store,
+func worker(ctx context.Context, cfg *Config, st *daostore.Store,
 	parser *talog.Parser, flt *filter.Holder,
-	lineCh <-chan string, stats processor.StatsCollector, opts processor.WriteOptions,
+	lineCh <-chan string, stats single.StatsCollector, opts single.WriteOptions,
 ) {
-	proc := processor.NewProcessor(parser, flt, st, stats, opts)
+	proc := single.NewProcessor(parser, flt, st, stats, opts)
 
-	userBatch := NewBatch(cfg.BatchSizeMax())
-	eventBatch := NewBatch(cfg.BatchSizeMax())
-	deadBatch := NewBatch(cfg.Pipeline.DeadLetterCap)
+	userBatch := NewBatch(cfg.MaxBatchSize())
+	eventBatch := NewBatch(cfg.MaxBatchSize())
+	deadBatch := NewBatch(cfg.DeadLetterCap)
 
 	lastFlush := time.Now()
-	flushInterval := cfg.Pipeline.FlushInterval
+	flushInterval := cfg.FlushInterval
 	invalidCount := 0
 
 	// flush writes accumulated batches to MongoDB and resets them.
@@ -94,7 +92,7 @@ func worker(ctx context.Context, cfg config.Config, st *daostore.Store,
 
 			res := proc.Process(ctx, line)
 			switch res.Kind {
-			case processor.KindParseError:
+			case single.KindParseError:
 				invalidCount++
 				if invalidCount%1000 == 0 {
 					log.WithError(res.Err).Warnf("dropped invalid line (total invalid=%d)", invalidCount)
@@ -104,27 +102,27 @@ func worker(ctx context.Context, cfg config.Config, st *daostore.Store,
 					flush(ctx)
 				}
 				continue
-			case processor.KindIdentityError:
+			case single.KindIdentityError:
 				log.WithError(res.Err).Warn("identity resolve failed, sending to dead letter")
 				deadBatch.Add(res.Model)
 				continue
-			case processor.KindFiltered:
+			case single.KindFiltered:
 				continue
-			case processor.KindUser:
+			case single.KindUser:
 				userBatch.Add(res.Model)
-			case processor.KindEvent:
+			case single.KindEvent:
 				eventBatch.Add(res.Model)
 			}
 
 			// Flush on dynamic batch threshold (derived from current backlog)
 			// or time-interval triggers.
 			backlog := len(lineCh)
-			threshold := dynamicbatch.ComputeFlushThreshold(
-				cfg.BatchSizeMin(),
-				cfg.Pipeline.BatchSize,
-				cfg.BatchSizeMax(),
+			threshold := ComputeFlushThreshold(
+				cfg.MinBatchSize(),
+				cfg.BatchSize,
+				cfg.MaxBatchSize(),
 				backlog,
-				cfg.BatchChannelSize(),
+				cfg.ChannelSize(),
 			)
 			needFlush := userBatch.Len() >= threshold ||
 				eventBatch.Len() >= threshold ||
@@ -150,7 +148,7 @@ func worker(ctx context.Context, cfg config.Config, st *daostore.Store,
 
 // flushBatch writes a batch to the given collection (unordered) and resets it.
 func flushBatch(ctx context.Context, st *daostore.Store,
-	coll *mongo.Collection, b *Batch, stats processor.StatsCollector,
+	coll *mongo.Collection, b *Batch, stats single.StatsCollector,
 ) {
 	if b.Empty() {
 		return
@@ -166,7 +164,7 @@ func flushBatch(ctx context.Context, st *daostore.Store,
 // flushBatchOrdered writes a batch to the given collection with ordered writes
 // to guarantee that operations within the batch are applied sequentially.
 func flushBatchOrdered(ctx context.Context, st *daostore.Store,
-	coll *mongo.Collection, b *Batch, stats processor.StatsCollector,
+	coll *mongo.Collection, b *Batch, stats single.StatsCollector,
 ) {
 	if b.Empty() {
 		return

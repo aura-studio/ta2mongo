@@ -1,4 +1,4 @@
-package ingest
+package batch
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 
 	"rocket-nano/tools/tango/config"
 	daomongo "rocket-nano/tools/tango/internal/dao/mongo"
+	"rocket-nano/tools/tango/internal/dao/store"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -48,15 +49,8 @@ func testIngesterSetup(t *testing.T) (*Ingester, *mongo.Database, func()) {
 	uri := testMongoURI + "/" + dbName
 
 	cfg := config.Config{
-		Mongo: daomongo.Config{
-			URI:            uri,
-			MaxElapsedTime: 5 * time.Second,
-		},
-		Pipeline: config.PipelineConfig{
-			BatchSize:     100,
-			BatchWorkers:  2,
-			FlushInterval: 500 * time.Millisecond,
-		},
+		Mongo: &daomongo.Config{URI: uri},
+		Store: &store.Config{MaxElapsedTime: 5 * time.Second},
 	}
 
 	ctx := context.Background()
@@ -522,10 +516,8 @@ func TestNewFromClient(t *testing.T) {
 
 	dbName := fmt.Sprintf("tango_fromclient_test_%d", time.Now().UnixNano())
 	cfg := config.Config{
-		Mongo: daomongo.Config{
-			URI:            testMongoURI + "/" + dbName,
-			MaxElapsedTime: 5 * time.Second,
-		},
+		Mongo: &daomongo.Config{URI: testMongoURI + "/" + dbName},
+		Store: &store.Config{MaxElapsedTime: 5 * time.Second},
 	}
 
 	ig, err := NewFromClient(client, cfg)
