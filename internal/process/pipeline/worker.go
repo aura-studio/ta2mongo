@@ -11,7 +11,7 @@ import (
 	"rocket-nano/tools/tango/config"
 	"rocket-nano/tools/tango/internal/core/dynamicbatch"
 	"rocket-nano/tools/tango/internal/core/filter"
-	"rocket-nano/tools/tango/internal/core/store"
+	daostore "rocket-nano/tools/tango/internal/dao/store"
 	"rocket-nano/tools/tango/internal/core/talog"
 	"rocket-nano/tools/tango/internal/process/ingestion"
 )
@@ -19,7 +19,7 @@ import (
 // RunWorkers launches N workers with affinity-based dispatch and blocks
 // until all workers finish. A nil flt is treated as a no-op filter. flt is a
 // Holder so the active filter can be hot-swapped while workers run.
-func RunWorkers(ctx context.Context, cfg config.Config, st *store.Store,
+func RunWorkers(ctx context.Context, cfg config.Config, st *daostore.Store,
 	parser *talog.Parser, flt *filter.Holder, logger *logrus.Logger,
 	lineCh <-chan string, stats ingestion.StatsCollector, opts ingestion.WriteOptions,
 ) {
@@ -56,7 +56,7 @@ func RunWorkers(ctx context.Context, cfg config.Config, st *store.Store,
 // Per-line parse/filter/identity/route rules live in ingestion.Processor; the
 // worker owns only batching, the dynamic flush cadence, and the affinity-local
 // dead-letter logging.
-func worker(ctx context.Context, cfg config.Config, st *store.Store,
+func worker(ctx context.Context, cfg config.Config, st *daostore.Store,
 	parser *talog.Parser, flt *filter.Holder, logger *logrus.Logger,
 	lineCh <-chan string, stats ingestion.StatsCollector, opts ingestion.WriteOptions,
 ) {
@@ -149,7 +149,7 @@ func worker(ctx context.Context, cfg config.Config, st *store.Store,
 }
 
 // flushBatch writes a batch to the given collection (unordered) and resets it.
-func flushBatch(ctx context.Context, st *store.Store, logger *logrus.Logger,
+func flushBatch(ctx context.Context, st *daostore.Store, logger *logrus.Logger,
 	coll *mongo.Collection, b *Batch, stats ingestion.StatsCollector,
 ) {
 	if b.Empty() {
@@ -165,7 +165,7 @@ func flushBatch(ctx context.Context, st *store.Store, logger *logrus.Logger,
 
 // flushBatchOrdered writes a batch to the given collection with ordered writes
 // to guarantee that operations within the batch are applied sequentially.
-func flushBatchOrdered(ctx context.Context, st *store.Store, logger *logrus.Logger,
+func flushBatchOrdered(ctx context.Context, st *daostore.Store, logger *logrus.Logger,
 	coll *mongo.Collection, b *Batch, stats ingestion.StatsCollector,
 ) {
 	if b.Empty() {

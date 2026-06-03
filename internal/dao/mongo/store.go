@@ -5,7 +5,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 
 	"rocket-nano/tools/tango/config"
-	"rocket-nano/tools/tango/internal/core/store"
+	"rocket-nano/tools/tango/internal/dao/store"
 )
 
 // NewStore constructs the Store on the given database. It is a thin assembly

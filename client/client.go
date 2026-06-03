@@ -30,7 +30,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"rocket-nano/tools/tango/config"
-	"rocket-nano/tools/tango/internal/core/store"
+	"rocket-nano/tools/tango/internal/dao/store"
 	"rocket-nano/tools/tango/internal/process/ingest"
 )
 

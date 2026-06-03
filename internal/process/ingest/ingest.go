@@ -24,8 +24,8 @@ import (
 
 	"rocket-nano/tools/tango/config"
 	"rocket-nano/tools/tango/internal/core/filter"
-	coremongo "rocket-nano/tools/tango/internal/core/mongo"
-	"rocket-nano/tools/tango/internal/core/store"
+	daomongo "rocket-nano/tools/tango/internal/dao/mongo"
+	"rocket-nano/tools/tango/internal/dao/store"
 	"rocket-nano/tools/tango/internal/core/talog"
 	"rocket-nano/tools/tango/internal/process/ingestion"
 )
@@ -35,7 +35,7 @@ import (
 type Ingester struct {
 	proc   *ingestion.Processor
 	store  *store.Store
-	mongo  *coremongo.MongoResource
+	mongo  *daomongo.MongoResource
 	logger *logrus.Logger
 }
 
@@ -50,7 +50,7 @@ func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Ingest
 	if err != nil {
 		return nil, fmt.Errorf("ingest: %w", err)
 	}
-	res, err := coremongo.ConnectMongo(ctx, cfg.Mongo)
+	res, err := daomongo.ConnectMongo(ctx, cfg.Mongo)
 	if err != nil {
 		return nil, fmt.Errorf("ingest: %w", err)
 	}
@@ -66,15 +66,15 @@ func NewFromClient(client *drivermongo.Client, cfg config.Config, logger *logrus
 	if err != nil {
 		return nil, fmt.Errorf("ingest: %w", err)
 	}
-	res, err := coremongo.Borrow(client, cfg.Mongo.URI)
+	res, err := daomongo.Borrow(client, cfg.Mongo.URI)
 	if err != nil {
 		return nil, fmt.Errorf("ingest: %w", err)
 	}
 	return newIngester(res, flt, cfg, logger), nil
 }
 
-func newIngester(res *coremongo.MongoResource, flt *filter.Filter, cfg config.Config, logger *logrus.Logger) *Ingester {
-	st := coremongo.NewStore(res.DB, cfg, logger)
+func newIngester(res *daomongo.MongoResource, flt *filter.Filter, cfg config.Config, logger *logrus.Logger) *Ingester {
+	st := daomongo.NewStore(res.DB, cfg, logger)
 	return &Ingester{
 		proc:   ingestion.NewProcessor(talog.NewParser(), filter.NewHolder(flt), st, ingestion.NoopStats{}, ingestion.WriteOptions{}),
 		store:  st,

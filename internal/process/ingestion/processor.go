@@ -6,7 +6,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 
 	"rocket-nano/tools/tango/internal/core/filter"
-	"rocket-nano/tools/tango/internal/core/store"
+	daostore "rocket-nano/tools/tango/internal/dao/store"
 	"rocket-nano/tools/tango/internal/core/talog"
 )
 
@@ -52,14 +52,14 @@ type Result struct {
 type Processor struct {
 	parser *talog.Parser
 	filter *filter.Holder
-	store  *store.Store
+	store  *daostore.Store
 	stats  StatsCollector
 	opts   WriteOptions
 }
 
 // NewProcessor builds a Processor. A nil filter holder is treated as "keep
 // everything"; a nil stats collector is treated as a no-op.
-func NewProcessor(parser *talog.Parser, flt *filter.Holder, st *store.Store, stats StatsCollector, opts WriteOptions) *Processor {
+func NewProcessor(parser *talog.Parser, flt *filter.Holder, st *daostore.Store, stats StatsCollector, opts WriteOptions) *Processor {
 	if stats == nil {
 		stats = NoopStats{}
 	}
@@ -77,7 +77,7 @@ func (p *Processor) Process(ctx context.Context, line string) Result {
 	if err != nil {
 		p.stats.OnParseError()
 		p.stats.OnDeadLetter()
-		return Result{Kind: KindParseError, Model: store.DeadLetterModel(line, err), Err: err}
+		return Result{Kind: KindParseError, Model: daostore.DeadLetterModel(line, err), Err: err}
 	}
 	p.stats.OnParseOK()
 
@@ -98,19 +98,19 @@ func (p *Processor) Process(ctx context.Context, line string) Result {
 	if err != nil {
 		p.stats.OnIdentityError()
 		p.stats.OnDeadLetter()
-		return Result{Kind: KindIdentityError, Model: store.DeadLetterModel(line, err), Err: err}
+		return Result{Kind: KindIdentityError, Model: daostore.DeadLetterModel(line, err), Err: err}
 	}
 
 	switch rec.Category() {
 	case talog.CategoryUser:
 		p.stats.OnUserWrite()
-		return Result{Kind: KindUser, Model: store.UserWriteModel(rec.Type, userID, rec.Doc)}
+		return Result{Kind: KindUser, Model: daostore.UserWriteModel(rec.Type, userID, rec.Doc)}
 	default: // talog.CategoryEvent
 		rec.Doc["#user_id"] = userID
 		p.stats.OnEventWrite()
 		if p.opts.ForceSkipExisting {
-			return Result{Kind: KindEvent, Model: store.EventWriteModelSkipExisting(rec.UUID, rec.Doc)}
+			return Result{Kind: KindEvent, Model: daostore.EventWriteModelSkipExisting(rec.UUID, rec.Doc)}
 		}
-		return Result{Kind: KindEvent, Model: store.EventWriteModel(rec.Type, rec.UUID, rec.Doc)}
+		return Result{Kind: KindEvent, Model: daostore.EventWriteModel(rec.Type, rec.UUID, rec.Doc)}
 	}
 }
