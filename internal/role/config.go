@@ -1,9 +1,3 @@
-// Package role is the runtime-role collection (daemon / gateway / cli / api).
-// role.Config aggregates the per-role configurations whose own packages define
-// config (file keys role.daemon.*, role.gateway.*). The cli and api roles take
-// their settings from the shared top-level modules and carry no role-specific
-// file config. Roles never re-host module configs (process / parser / source) —
-// those stay at their own top-level package paths and are shared.
 package role
 
 import (

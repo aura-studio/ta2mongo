@@ -27,6 +27,8 @@ daemon 是长驻的 pipeline 流水线。api 只作为库使用，没有对应�
    - `internal/process`（`process.go`）整合 `process/single` + `process/batch` + `process/pipeline`
    - `internal/role` 是运行模式集合：`daemon` / `gateway` / `cli` / `api`
    - `internal/source` 是数据来源集合：`source.Source` 契约（`Run(ctx) <-chan string`）+ `source/httpbody`（HTTP 请求体，gateway/api 用）/ `source/tailer`（文件追尾，daemon 用）/ `source/stdin`（控制台，cli 用）/ `source/taapi`（占位）
+   - 6 个根包统一文件形态：`<包名>.go`（主类型/逻辑/包文档）+ `config.go`（该领域的 `Config` 聚合）。
+     即 `logging/logging.go`、`dao/dao.go`、`parser/parser.go`、`source/source.go`、`process/process.go`、`role/role.go`，各配 `config.go`。
 2. **配置键路径 = 包路径，config 只做覆盖**：配置结构体下沉到各自模块并由领域根包聚合
    （`dao.Config` 聚合 `mongo`/`store`，`parser.Config` 聚合 `filter`，`process.Config` 聚合 `pipeline`，
    `source.Config` 聚合 `tailer`，`role.Config` 聚合 `gateway`）。统一 schema `config.Config` 用
@@ -130,7 +132,7 @@ config   -> 各模块 Config 类型（logging/dao/parser/source/process/role(→
 
 | 文件 | 职责 |
 |---|---|
-| `logging/log.go` | 进程级 logger：`Init`、`L`、`WithError`/`WithField`/`WithFields`、`Info`/`Warn`/...、`Fields` 别名 |
+| `logging/logging.go` | 进程级 logger：`Init`、`L`、`WithError`/`WithField`/`WithFields`、`Info`/`Warn`/...、`Fields` 别名 |
 | `logging/config.go` | `logging.Config`（level/format） |
 
 #### 解析层 `internal/parser`
@@ -192,6 +194,8 @@ config   -> 各模块 Config 类型（logging/dao/parser/source/process/role(→
 |---|---|
 | `role/api/api.go` | 可复用引擎库 `api.Client`：`New(ctx,dao,proc,filter)`/`Upload(mode,lines)`/`Run(mode,src)`/`EnsureIndexes`/`Close` + `Result` |
 | `role/daemon/report.go` | `daemon.Service`：tailer 源 → `process.New(ModePipeline).Run` → MongoDB；周期/最终统计日志 |
+| `role/role.go` | 角色集合包文档 + 角色名常量（`API`/`CLI`/`Daemon`/`Gateway`） |
+| `role/config.go` | `role.Config`：聚合 `daemon`/`gateway` 角色配置 + `ApplyDefaults`/`Validate`/`RegisterDefaults` |
 | `role/daemon/config.go` | `daemon.Config`（`role.daemon.*`，暂空，schema 对称用） |
 | `role/gateway/config.go` | `gateway.Config`（仅 `role.gateway.addr` + `defaultMode`）+ `ApplyDefaults`/`Validate`/`RegisterDefaults` |
 | `role/gateway/server.go` | gateway `Server`：内嵌 `*api.Client` + HTTP 面；`New(ctx,dao,process,filter,cfg)`/`Upload`/`EnsureIndexes`/`Close`/`Run`；`/healthz` + 单个 `/upload`（按 mode 选策略） |
