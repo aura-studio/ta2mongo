@@ -44,8 +44,11 @@ daemon 是长驻的 pipeline 流水线。api 只作为库使用，没有对应�
    不要把 `*logrus.Logger` 当对象到处透传。`logging.Init(level)` 在启动时配置一次。
 5. **MaxElapsedTime（bulk-write 重试预算）属于 store**，不属于 mongo 连接配置；
    配置文件键为 `dao.store.maxElapsedTime`。
-6. **配置与逻辑层级对齐**：网关相关配置（`gateway.Config`/`UploadConfig`）归属于 `internal/role/gateway/`，
-   文件键为 `role.gateway.*`（包路径），不放在顶层 `config/`。共享段 `logging.*`/`dao.*` 在顶层。
+6. **配置结构 = internal 包层级；角色不重复 host 模块配置**：模块配置都在各自包路径的顶层
+   （`logging.*`/`dao.*`/`parser.filter.*`/`source.tailer.*`/`process.*`），由需要的角色**共享复用**；
+   `role.<name>.*` 只放该角色**专属**的字段（如 `role.gateway.addr`/`role.gateway.defaultMode`）。
+   例如 gateway 的上传处理直接用顶层 `process.*` 与 `parser.filter.*`，不在 `role.gateway` 下再开
+   `process`/`filter`。`role.daemon` 暂为空（daemon 完全由顶层模块驱动）。
 7. **cmd 层独立调用**：`cmd/` 下各入口文件不引用共享胶水包（如 `cmdshared`）；
    每个 cmd 入口内联自己的配置解析、client 构建、服务启动逻辑。
 8. **cmdShared 做内联**：`internal/cmdshared/` 的逻辑已内联到 `cmd/daemon/` 和 `cmd/gateway/`，
@@ -189,8 +192,9 @@ config   -> 各模块 Config 类型（logging/dao/parser/source/process/role(→
 |---|---|
 | `role/api/api.go` | 可复用引擎库 `api.Client`：`New(ctx,dao,proc,filter)`/`Upload(mode,lines)`/`Run(mode,src)`/`EnsureIndexes`/`Close` + `Result` |
 | `role/daemon/report.go` | `daemon.Service`：tailer 源 → `process.New(ModePipeline).Run` → MongoDB；周期/最终统计日志 |
-| `role/gateway/config.go` | `gateway.Config`（`role.gateway.addr` + `UploadConfig`：mode/batchSize/pipeline/filter）+ `ApplyDefaults` |
-| `role/gateway/server.go` | gateway `Server`：内嵌 `*api.Client` + HTTP 面；`New(ctx,dao,cfg)`/`Upload`/`EnsureIndexes`/`Close`/`Run`；`/healthz` + 单个 `/upload`（按 mode 选策略） |
+| `role/daemon/config.go` | `daemon.Config`（`role.daemon.*`，暂空，schema 对称用） |
+| `role/gateway/config.go` | `gateway.Config`（仅 `role.gateway.addr` + `defaultMode`）+ `ApplyDefaults`/`Validate`/`RegisterDefaults` |
+| `role/gateway/server.go` | gateway `Server`：内嵌 `*api.Client` + HTTP 面；`New(ctx,dao,process,filter,cfg)`/`Upload`/`EnsureIndexes`/`Close`/`Run`；`/healthz` + 单个 `/upload`（按 mode 选策略） |
 | `role/cli/cli.go` | `cli.Run(ctx,dao,proc,filter,mode,in)`：内嵌 `api.Client` + `stdin.Source`，一次性上报 |
 
 ## 4. Daemon Service（daemon 模式）
@@ -211,7 +215,8 @@ POST /upload   # body: {mode?: single|batch|pipeline, line?, lines?[]}；mode �
 
 `/upload` 把请求体的日志数组包成 `httpbody.Source`，按 `mode` 选上传策略（single/batch/pipeline）
 运行，返回本次统计（行数/写入数/死信等）。gateway **只接 httpbody 源**。`Server` 内嵌 `api.Client`
-引擎；`cmd/gateway` 用 `config.Load` 取共享 `dao` + `role.gateway` 段构造 `gateway.New(ctx, dao, cfg)`。
+引擎；`cmd/gateway` 用 `config.Load` 取共享 `dao` + `process` + `parser.filter` + `role.gateway` 段，
+构造 `gateway.New(ctx, dao, process, filter, cfg)`（处理/过滤配置复用顶层共享模块）。
 
 ## 5.1 API 库 / CLI（api / cli 角色）
 

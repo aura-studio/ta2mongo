@@ -72,12 +72,12 @@ func TestLoad_Gateway(t *testing.T) {
 dao:
   mongo:
     uri: "mongodb://localhost/gw"
+process:
+  batchSize: 250
 role:
   gateway:
     addr: ":9090"
-    upload:
-      defaultMode: pipeline
-      batchSize: 250
+    defaultMode: pipeline
 `
 	c, err := Load(writeFile(t, "tango.yaml", yaml), nil)
 	if err != nil {
@@ -89,10 +89,10 @@ role:
 	if c.Role.Gateway.Addr != ":9090" {
 		t.Errorf("role.gateway.addr = %q", c.Role.Gateway.Addr)
 	}
-	if c.Role.Gateway.Upload.DefaultMode != "pipeline" {
-		t.Errorf("role.gateway.upload.defaultMode = %q", c.Role.Gateway.Upload.DefaultMode)
+	if c.Role.Gateway.DefaultMode != "pipeline" {
+		t.Errorf("role.gateway.defaultMode = %q", c.Role.Gateway.DefaultMode)
 	}
-	if c.Role.Gateway.Upload.BatchSize != 250 {
-		t.Errorf("role.gateway.upload.batchSize = %d", c.Role.Gateway.Upload.BatchSize)
+	if c.Process.BatchSize != 250 {
+		t.Errorf("process.batchSize = %d", c.Process.BatchSize)
 	}
 }

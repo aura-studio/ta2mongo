@@ -8,20 +8,22 @@
     },
     "store": { "maxElapsedTime": "10s" }
   },
+  "parser": {
+    "filter": { "include": [], "exclude": [] }
+  },
+  "process": {
+    "batchSize": 1000,
+    "pipeline": {
+      "batchSize": 1000,
+      "batchWorkers": 2,
+      "flushInterval": "1s",
+      "deadLetterCap": 128
+    }
+  },
   "role": {
     "gateway": {
       "addr": ":8080",
-      "upload": {
-        "defaultMode": "batch",
-        "batchSize": 1000,
-        "filter": { "include": [], "exclude": [] },
-        "pipeline": {
-          "batchSize": 1000,
-          "batchWorkers": 2,
-          "flushInterval": "1s",
-          "deadLetterCap": 128
-        }
-      }
+      "defaultMode": "batch"
     }
   }
 }

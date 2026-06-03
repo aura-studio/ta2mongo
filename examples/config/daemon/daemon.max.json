@@ -35,19 +35,6 @@
     }
   },
   "role": {
-    "gateway": {
-      "addr": ":8080",
-      "upload": {
-        "defaultMode": "batch",
-        "batchSize": 1000,
-        "filter": { "include": [], "exclude": [] },
-        "pipeline": {
-          "batchSize": 1000,
-          "batchWorkers": 2,
-          "flushInterval": "1s",
-          "deadLetterCap": 128
-        }
-      }
-    }
+    "daemon": {}
   }
 }

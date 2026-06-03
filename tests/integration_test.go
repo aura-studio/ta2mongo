@@ -145,7 +145,7 @@ func TestRolesModes(t *testing.T) {
 						t.Fatalf("cli Run: %v", err)
 					}
 				case "gateway":
-					srv, err := gateway.New(ctx, daoCfg, gateway.Config{})
+					srv, err := gateway.New(ctx, daoCfg, nil, nil, gateway.Config{})
 					if err != nil {
 						t.Fatalf("gateway.New: %v", err)
 					}

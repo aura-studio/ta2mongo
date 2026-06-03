@@ -50,19 +50,6 @@ process:                          # internal/process
     channelBuffer: 0              # [optional]（默认 0 = 自动 batchSize*2）每 worker 通道缓冲
     deadLetterCap: 128            # [optional]（默认 128）每 worker 死信批容量
 
-# role 段属于统一 schema，但只被对应角色消费：daemon 运行时会忽略 role.gateway。
-# 这里列出仅为展示完整 schema（gateway 角色的字段说明见 ../gateway/gateway.max.yaml）。
 role:                             # internal/role
-  gateway:                        # internal/role/gateway（仅 `tango gateway` 使用）
-    addr: ":8080"                 # [optional]（默认 :8080）HTTP 监听地址
-    upload:
-      defaultMode: batch          # [optional]（默认 batch）single/batch/pipeline
-      batchSize: 1000             # [optional]（默认 1000）single/batch 批大小
-      filter:
-        include: []               # [optional]（默认 []）
-        exclude: []               # [optional]（默认 []）
-      pipeline:
-        batchSize: 1000           # [optional]（默认 1000）
-        batchWorkers: 2           # [optional]（默认 2）
-        flushInterval: 1s         # [optional]（默认 1s）
-        deadLetterCap: 128        # [optional]（默认 128）
+  daemon: {}                      # internal/role/daemon —— daemon 角色专属配置（暂无字段，
+                                  # 因为 daemon 完全由顶层 logging/dao/parser/source/process 驱动）

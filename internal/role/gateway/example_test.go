@@ -13,7 +13,7 @@ func ExampleServer_Upload() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	srv, err := New(ctx, &dao.Config{Mongo: &daomongo.Config{URI: "mongodb://localhost:27017/tango"}}, Config{})
+	srv, err := New(ctx, &dao.Config{Mongo: &daomongo.Config{URI: "mongodb://localhost:27017/tango"}}, nil, nil, Config{})
 	if err != nil {
 		return
 	}

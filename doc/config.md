@@ -12,7 +12,7 @@
 | 角色 | 命令 | 主要配置段 | `--config` 留空时默认读取 |
 |------|--------|--------|------|
 | Daemon | `tango daemon` | `logging` · `dao` · `parser` · `source` · `process` | `daemon.{yaml,yml,json}` |
-| Gateway | `tango gateway` | `logging` · `dao` · `role.gateway` | `gateway.{yaml,yml,json}` |
+| Gateway | `tango gateway` | `logging` · `dao` · `parser` · `process` · `role.gateway` | `gateway.{yaml,yml,json}` |
 | CLI | `tango cli` | `logging` · `dao` · `parser` · `process` | `cli.{yaml,yml,json}` |
 
 默认文件在**二进制同级目录**按 `yaml → yml → json` 取首个存在者。文件缺失或解析为空时静默跳过
@@ -86,15 +86,19 @@
 | `process.pipeline.channelBuffer` | optional | `0`(自动 = batchSize*2) | 每 worker 通道缓冲 |
 | `process.pipeline.deadLetterCap` | optional | `128` | 每 worker 死信批容量 |
 
+### role.daemon（daemon） → `internal/role/daemon`
+
+暂无字段：daemon 完全由顶层 `logging`/`dao`/`parser`/`source`/`process` 驱动。该段仅为 schema 对称保留。
+
 ### role.gateway（gateway） → `internal/role/gateway`
+
+只含 gateway 专属字段；上传的处理参数与过滤器复用顶层共享模块 `process.*` 与 `parser.filter.*`
+（与 daemon 同一套），不在 `role.gateway` 下重复定义。
 
 | 键 | required/optional | 默认 | 说明 |
 |----|----|----|----|
 | `role.gateway.addr` | optional | `:8080` | HTTP 监听地址；`--addr` 覆盖 |
-| `role.gateway.upload.defaultMode` | optional | `batch` | 请求未带 `mode` 时的策略：`single`/`batch`/`pipeline` |
-| `role.gateway.upload.batchSize` | optional | `1000` | single/batch 模式批大小 |
-| `role.gateway.upload.pipeline.*` | optional | 同 `process.pipeline.*` | pipeline 模式 worker 池参数 |
-| `role.gateway.upload.filter.{include,exclude}` | optional | `[]` | 作用于每行的上报 filter |
+| `role.gateway.defaultMode` | optional | `batch` | 请求未带 `mode` 时的策略：`single`/`batch`/`pipeline` |
 
 完整样例：[daemon](../examples/config/daemon/daemon.max.yaml)、
 [gateway](../examples/config/gateway/gateway.max.yaml)。
@@ -103,7 +107,7 @@
 
 ## 上报 filter
 
-上报 filter（`parser.filter` / `role.gateway.upload.filter`）维度为
+上报 filter（顶层 `parser.filter`，daemon 与 gateway 上传共享）维度为
 `#type` / `#event_name` / `properties.*`，用 `include` / `exclude`（expr-lang）
 表达式。示例（作用于扁平化记录，`#` 前缀字段可直接引用）：
 

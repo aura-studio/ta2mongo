@@ -19,7 +19,7 @@ tango cli       # 一次性：从 stdin 读日志数组上报（--mode 选策略
 | 角色命令 | 默认配置文件 | 主要配置段 |
 |---|---|---|
 | `tango daemon` | `daemon.{yaml,yml,json}` | `logging` · `dao` · `parser` · `source` · `process` |
-| `tango gateway` | `gateway.{yaml,yml,json}` | `logging` · `dao` · `role.gateway` |
+| `tango gateway` | `gateway.{yaml,yml,json}` | `logging` · `dao` · `parser` · `process` · `role.gateway` |
 | `tango cli` | `cli.{yaml,yml,json}` | `logging` · `dao` · `parser` · `process` |
 
 ## Daemon Service
@@ -44,7 +44,9 @@ tango daemon --dao.mongo.uri mongodb://localhost:27017/tango
 tango gateway --config gateway.yaml --addr :8080
 ```
 
-gateway 是常驻 HTTP 服务，读取 `logging` + `dao` + `role.gateway` 段。`--addr` 覆盖 `role.gateway.addr`。
+gateway 是常驻 HTTP 服务，读取共享段 `logging` + `dao` + `parser` + `process`，外加 gateway 专属的
+`role.gateway`（`addr` / `defaultMode`）。上传的批量/流水线参数与过滤器即顶层 `process.*` / `parser.filter.*`。
+`--addr` 覆盖 `role.gateway.addr`。
 
 | 方法 | 路径 | body | 功能 |
 |---|---|---|---|

@@ -69,7 +69,7 @@ func testServerSetup(t *testing.T) (*harness, func()) {
 	dbName := fmt.Sprintf("tango_gw_test_%d_%d", time.Now().UnixNano(), rand.Intn(10000))
 	uri := testMongoURI + "/" + dbName
 
-	srv, err := New(ctx, &dao.Config{Mongo: &daomongo.Config{URI: uri}}, Config{})
+	srv, err := New(ctx, &dao.Config{Mongo: &daomongo.Config{URI: uri}}, nil, nil, Config{})
 	if err != nil {
 		t.Fatalf("create server: %v", err)
 	}

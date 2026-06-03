@@ -10,6 +10,7 @@ import (
 
 	"rocket-nano/tools/tango/internal/dao"
 	"rocket-nano/tools/tango/internal/logging"
+	"rocket-nano/tools/tango/internal/parser/filter"
 	"rocket-nano/tools/tango/internal/process"
 	"rocket-nano/tools/tango/internal/role/api"
 )
@@ -17,19 +18,21 @@ import (
 // Server is the gateway runtime: the embedded api engine plus the HTTP face. It
 // is safe for concurrent use from multiple goroutines.
 type Server struct {
-	cfg    Config
-	engine *api.Client
+	defaultMode string
+	engine      *api.Client
 }
 
-// New builds a Server from the shared dao config and the gateway role config,
-// connecting to MongoDB via the api engine. The caller must Close it.
-func New(ctx context.Context, daoCfg *dao.Config, cfg Config) (*Server, error) {
+// New builds a Server, connecting to MongoDB via the api engine. It is wired
+// from the shared top-level module configs (dao, the process strategy config,
+// and the reporting filter) plus the gateway role config (addr / default mode).
+// The caller must Close it.
+func New(ctx context.Context, daoCfg *dao.Config, procCfg *process.Config, filterCfg *filter.Config, cfg Config) (*Server, error) {
 	cfg.ApplyDefaults()
-	eng, err := api.New(ctx, daoCfg, cfg.Upload.ProcessConfig(), cfg.Upload.Filter)
+	eng, err := api.New(ctx, daoCfg, procCfg, filterCfg)
 	if err != nil {
 		return nil, err
 	}
-	return &Server{cfg: cfg, engine: eng}, nil
+	return &Server{defaultMode: cfg.DefaultMode, engine: eng}, nil
 }
 
 // Close disconnects from MongoDB and releases all resources.
@@ -117,7 +120,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 
 	modeStr := req.Mode
 	if modeStr == "" {
-		modeStr = s.cfg.Upload.DefaultMode
+		modeStr = s.defaultMode
 	}
 	mode, err := process.ParseMode(modeStr)
 	if err != nil {

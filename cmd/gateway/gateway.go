@@ -28,7 +28,7 @@ func NewCommand() *cobra.Command {
 			}
 			logging.Init(c.Logging.Level)
 
-			srv, err := gateway.New(cmd.Context(), c.Dao, *c.Role.Gateway)
+			srv, err := gateway.New(cmd.Context(), c.Dao, c.Process, c.Parser.Filter, *c.Role.Gateway)
 			if err != nil {
 				return err
 			}
