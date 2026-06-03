@@ -72,3 +72,12 @@ func durationDecodeHook() viper.DecoderConfigOption {
 		mapstructure.StringToSliceHookFunc(","),
 	))
 }
+
+// weaklyTyped enables mapstructure's loose type coercion. Environment variables
+// always arrive as strings; without this an int field (e.g. pipeline.batchSize)
+// or bool field (e.g. remoteConfig.enabled) set via TANGO_* would fail to decode.
+// Weak typing coerces those strings to the target kind. YAML/JSON values are
+// already typed, so this is a no-op for them.
+func weaklyTyped() viper.DecoderConfigOption {
+	return func(c *mapstructure.DecoderConfig) { c.WeaklyTypedInput = true }
+}

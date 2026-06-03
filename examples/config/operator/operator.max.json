@@ -1,0 +1,53 @@
+{
+  "runtime": {
+    "logging": { "level": "info", "format": "text" },
+    "mongo": {
+      "uri": "mongodb://localhost:27017/tango",
+      "maxElapsedTime": "10s",
+      "connectTimeout": "10s",
+      "serverSelectionTimeout": "30s"
+    }
+  },
+  "upload": {
+    "string": {
+      "batchSize": 1000,
+      "filter": { "include": [], "exclude": [] }
+    },
+    "file": {
+      "logPattern": ["/var/log/ta/.*\\.log"],
+      "maxLineBytes": 10485760,
+      "filter": { "include": [], "exclude": [] },
+      "checkpointCollection": "_tango_fileupload"
+    }
+  },
+  "backfill": {
+    "apiBaseURL": "https://ta-receiver.example.com",
+    "token": "your-project-token",
+    "projectID": 35,
+    "runID": "backfill-2026-01",
+    "partDateRange": { "start": "2026-01-01", "end": "2026-01-07" },
+    "pageSize": 10000,
+    "paginate": true,
+    "pollInterval": "3s",
+    "pollTimeout": "30m",
+    "pageRetries": 3,
+    "progressCollection": "_backfill_progress",
+    "forceSkipExisting": true,
+    "skipLocalFilter": false,
+    "proxy": "",
+    "schemaPrefix": "",
+    "limit": 0
+  },
+  "backfillFilter": {
+    "table": "event",
+    "events": [],
+    "include": [],
+    "exclude": []
+  },
+  "sql": { "schemaPrefix": "" },
+  "tasks": {
+    "collection": "_tango_tasks",
+    "instancesCollection": "_tango_instances",
+    "instanceTTL": "90s"
+  }
+}

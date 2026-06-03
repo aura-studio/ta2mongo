@@ -1,0 +1,30 @@
+{
+  "runtime": {
+    "logging": { "level": "info", "format": "text" },
+    "mongo": {
+      "uri": "mongodb://localhost:27017/tango",
+      "maxElapsedTime": "10s",
+      "connectTimeout": "10s",
+      "serverSelectionTimeout": "30s"
+    }
+  },
+  "gateway": { "addr": ":8080" },
+  "upload": {
+    "string": {
+      "batchSize": 1000,
+      "filter": { "include": [], "exclude": [] }
+    },
+    "file": {
+      "logPattern": ["/var/log/ta/.*\\.log"],
+      "maxLineBytes": 10485760,
+      "filter": { "include": [], "exclude": [] },
+      "checkpointCollection": "_tango_fileupload"
+    }
+  },
+  "tasks": {
+    "collection": "_tango_tasks",
+    "instancesCollection": "_tango_instances",
+    "instanceTTL": "90s"
+  },
+  "backfillFilter": { "table": "event" }
+}

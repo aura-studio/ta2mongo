@@ -24,9 +24,12 @@ go.work.sum
 /standalone.yaml
 /standalone.yml
 /standalone.json
-/cluster.yaml
-/cluster.yml
-/cluster.json
+/agent.yaml
+/agent.yml
+/agent.json
+/client.yaml
+/client.yml
+/client.json
 /tango.yaml
 /tango.yml
 /tango.json

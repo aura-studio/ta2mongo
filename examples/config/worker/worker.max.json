@@ -1,0 +1,24 @@
+{
+  "runtime": {
+    "logging": { "level": "info", "format": "text" },
+    "mongo": {
+      "uri": "mongodb://localhost:27017/tango",
+      "maxElapsedTime": "10s",
+      "connectTimeout": "10s",
+      "serverSelectionTimeout": "30s"
+    }
+  },
+  "tasks": {
+    "instanceID": "worker-001",
+    "collection": "_tango_tasks",
+    "instancesCollection": "_tango_instances",
+    "pollInterval": "10s",
+    "leaseTTL": "5m",
+    "heartbeatInterval": "30s",
+    "instanceTTL": "90s"
+  },
+  "remoteConfig": {
+    "collection": "_tango_config",
+    "documentID": "default"
+  }
+}

@@ -13,9 +13,9 @@ import (
 // ResolveConfigPath returns the config file path to use. When flagVal is set
 // (the --config flag) it is returned verbatim. Otherwise the first of the
 // candidate filenames that exists in the binary's own directory is returned, so
-// each subcommand auto-detects its own default (e.g. standalone.yaml /
-// agent.yaml / client.yaml) regardless of the current working directory. When
-// none exist it returns "" and the loader falls back to defaults + env + flags.
+// each subcommand auto-detects its own default (e.g. report.yaml / worker.yaml /
+// gateway.yaml / operator.yaml) regardless of the current working directory.
+// When none exist it returns "" and the loader falls back to defaults + env + flags.
 func ResolveConfigPath(flagVal string, candidates ...string) string {
 	if flagVal != "" {
 		return flagVal

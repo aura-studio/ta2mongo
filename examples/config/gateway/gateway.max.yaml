@@ -1,0 +1,47 @@
+# gateway.max.yaml — `tango gateway serve` 全量配置（含每个字段说明）。
+#
+# 启动：tango gateway serve --config gateway.max.yaml --addr :8080
+#
+# gateway = 常驻 HTTP 服务，暴露 ingest / upload / backfill / sql / publish REST 接口，
+# 底层复用 client SDK。
+#
+# 标注：[required] 无默认值必须提供；[optional] 省略即走默认值（括号内为默认值）。
+# 环境变量覆盖如 runtime.mongo.uri → TANGO_RUNTIME_MONGO_URI、gateway.addr → TANGO_GATEWAY_ADDR。
+
+runtime:
+  logging:
+    level: info                  # [optional]（默认 info）debug / info / warn / error
+    format: text                 # [optional]（默认 text）text / json
+  mongo:
+    uri: mongodb://localhost:27017/tango  # [required] MongoDB 连接串；库名取自 URI 路径
+    maxElapsedTime: 10s          # [optional]（默认 10s）单次 bulk-write 退避重试总时长上限
+    connectTimeout: 10s          # [optional]（默认 10s）初次连接握手超时
+    serverSelectionTimeout: 30s  # [optional]（默认 30s）选择可用节点超时
+
+gateway:
+  addr: ":8080"                  # [optional]（默认 :8080）HTTP 监听地址；--addr 覆盖
+
+upload:
+  string:
+    batchSize: 1000              # [optional]（默认 1000）/ingest 批大小
+    filter:
+      include: []                # [optional]（默认 []）字符串上报 include
+      exclude: []                # [optional]（默认 []）字符串上报 exclude
+  file:
+    logPattern:                  # [optional]（默认 []）/upload 默认文件模式
+      - '/var/log/ta/.*\.log'
+    maxLineBytes: 10485760       # [optional]（默认 10485760 = 10MB）单行最大字节
+    filter:
+      include: []                # [optional]（默认 []）文件上报 include
+      exclude: []                # [optional]（默认 []）文件上报 exclude
+    checkpointCollection: _tango_fileupload  # [optional]（默认 _tango_fileupload）断点续传集合
+
+# /publish/* 路由发布到的任务队列。
+tasks:
+  collection: _tango_tasks       # [optional]（默认 _tango_tasks）任务队列集合
+  instancesCollection: _tango_instances  # [optional]（默认 _tango_instances）实例心跳集合
+  instanceTTL: 90s               # [optional]（默认 90s）目标实例在线判定 TTL
+
+# /backfill、/sql 直接执行与 /publish/sql 的默认选表。
+backfillFilter:
+  table: event                   # [optional]（默认 event）event / user

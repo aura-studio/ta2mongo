@@ -1,0 +1,34 @@
+# worker.max.yaml — `tango worker run` 全量配置（含每个字段说明）。
+#
+# 启动：tango worker run --config worker.max.yaml
+#
+# worker = 常驻任务服务：注册心跳 → 从 MongoDB 任务队列 claim → 续约 lease →
+# 执行 report-sync / backfill / sql → Complete/Fail/Reap。report-sync 只写入
+# remoteConfig 文档，由 report 服务各自 sync loop 应用。
+#
+# 标注：[required] 无默认值必须提供；[optional] 省略即走默认值（括号内为默认值）。
+# 环境变量覆盖如 tasks.instanceID → TANGO_TASKS_INSTANCEID；--instanceID 是简写别名。
+
+runtime:
+  logging:
+    level: info                  # [optional]（默认 info）debug / info / warn / error
+    format: text                 # [optional]（默认 text）text / json
+  mongo:
+    uri: mongodb://localhost:27017/tango  # [required] MongoDB 连接串；库名取自 URI 路径
+    maxElapsedTime: 10s          # [optional]（默认 10s）单次 bulk-write 退避重试总时长上限
+    connectTimeout: 10s          # [optional]（默认 10s）初次连接握手超时
+    serverSelectionTimeout: 30s  # [optional]（默认 30s）选择可用节点超时
+
+tasks:
+  instanceID: worker-001         # [required] worker 实例唯一标识；可用 --instanceID 简写覆盖
+  collection: _tango_tasks       # [optional]（默认 _tango_tasks）任务队列集合
+  instancesCollection: _tango_instances  # [optional]（默认 _tango_instances）实例心跳集合（TTL 过期）
+  pollInterval: 10s              # [optional]（默认 10s）轮询认领任务间隔
+  leaseTTL: 5m                   # [optional]（默认 5m）任务租约；超时未续可被其他 worker 回收
+  heartbeatInterval: 30s         # [optional]（默认 30s）心跳刷新间隔
+  instanceTTL: 90s               # [optional]（默认 90s）心跳超过此时长视为离线
+
+# report-sync 任务写入的远端配置文档；report 服务通过它收敛上报 filter。
+remoteConfig:
+  collection: _tango_config      # [optional]（默认 _tango_config）配置文档所在集合
+  documentID: default            # [optional]（默认 default）配置文档 _id

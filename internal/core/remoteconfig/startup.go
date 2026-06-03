@@ -5,10 +5,9 @@ import (
 	"fmt"
 
 	"github.com/sirupsen/logrus"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"rocket-nano/tools/tango/config"
+	"rocket-nano/tools/tango/internal/core/runtime"
 )
 
 // ApplyAtStartup performs a one-shot remote-config merge that every run mode
@@ -23,17 +22,13 @@ func ApplyAtStartup(ctx context.Context, cfg config.Config, logger *logrus.Logge
 		return cfg, nil
 	}
 
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(cfg.Mongo.URI).SetConnectTimeout(cfg.Mongo.ConnectTimeout).SetServerSelectionTimeout(cfg.Mongo.ServerSelectionTimeout))
-	if err != nil {
-		return cfg, fmt.Errorf("remoteconfig: connect: %w", err)
-	}
-	defer func() { _ = client.Disconnect(context.Background()) }()
-
-	dbName, err := config.MongoDBFromURI(cfg.Mongo.URI)
+	res, err := runtime.ConnectMongo(ctx, cfg.Mongo)
 	if err != nil {
 		return cfg, fmt.Errorf("remoteconfig: %w", err)
 	}
-	coll := client.Database(dbName).Collection(cfg.RemoteConfig.Collection)
+	defer func() { _ = res.Close() }()
+
+	coll := res.DB.Collection(cfg.RemoteConfig.Collection)
 
 	doc, err := Fetch(ctx, coll, cfg.RemoteConfig.DocumentID)
 	if err != nil {

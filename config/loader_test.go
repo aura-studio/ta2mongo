@@ -17,129 +17,214 @@ func writeFile(t *testing.T, name, content string) string {
 	return p
 }
 
-func TestLoadDaemon_ClusterMode(t *testing.T) {
+func TestLoadReport_Unified(t *testing.T) {
 	yaml := `
-generic:
+runtime:
   mongo:
-    uri: "mongodb://localhost/tango"
+    uri: "mongodb://localhost/report"
 report:
   source:
     logPattern: ["/tmp/.*\\.log"]
   filter:
-    local:
-      include: ['#type == "track"']
-    remote:
-      syncInterval: "2m"
+    include: ['#type == "track"']
+remoteConfig:
+  enabled: true
 `
-	_, rt, err := LoadDaemon(writeFile(t, "daemon.yaml", yaml), nil, DaemonModeCluster)
+	rc, rt, err := LoadReport(writeFile(t, "report.yaml", yaml), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Cluster mode turns on the remote-config sync switch.
-	if !rt.RemoteConfig.Enabled {
-		t.Errorf("cluster mode should enable remote-config sync")
-	}
-	if rt.RemoteConfig.SyncInterval.String() != "2m0s" {
-		t.Errorf("report.filter.remote.syncInterval = %v", rt.RemoteConfig.SyncInterval)
+	if rt.Mongo.URI != "mongodb://localhost/report" {
+		t.Errorf("LoadReport Mongo.URI = %q", rt.Mongo.URI)
 	}
 	if len(rt.Filter.Include) != 1 || rt.Filter.Include[0] != `#type == "track"` {
-		t.Errorf("report.filter.local -> runtime Filter = %v", rt.Filter.Include)
+		t.Errorf("report.filter -> runtime Filter = %v", rt.Filter.Include)
+	}
+	// The report loader never enables the task worker, regardless of file.
+	if rt.Worker.Enabled {
+		t.Error("LoadReport unexpectedly enabled task worker")
+	}
+	if !rt.RemoteConfig.Enabled {
+		t.Error("LoadReport did not honour remoteConfig.enabled")
+	}
+	if len(rc.Report.Source.LogPattern) != 1 {
+		t.Errorf("RoleConfig logPattern = %v", rc.Report.Source.LogPattern)
 	}
 }
 
-func TestLoadDaemon_StandaloneMode(t *testing.T) {
+func TestLoadReport_TypedEnvOverrides(t *testing.T) {
+	// Environment variables arrive as strings; the role loader must coerce them
+	// into int / bool fields (weak typing) as well as string / duration ones.
+	os.Setenv("TANGO_REPORT_PIPELINE_BATCHSIZE", "2500") // int
+	os.Setenv("TANGO_REMOTECONFIG_ENABLED", "true")      // bool
+	defer func() {
+		os.Unsetenv("TANGO_REPORT_PIPELINE_BATCHSIZE")
+		os.Unsetenv("TANGO_REMOTECONFIG_ENABLED")
+	}()
 	yaml := `
-generic:
+runtime:
   mongo:
-    uri: "mongodb://localhost/tango"
+    uri: "mongodb://localhost/report"
 report:
   source:
-    logPattern: ["/tmp/.*\\.log"]
+    logPattern: ["/tmp/x.log"]
+  pipeline:
+    batchSize: 1000
 `
-	_, rt, err := LoadDaemon(writeFile(t, "daemon.yaml", yaml), nil, DaemonModeStandalone)
+	_, rt, err := LoadReport(writeFile(t, "report.yaml", yaml), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Standalone keeps the control plane off.
-	if rt.RemoteConfig.Enabled {
-		t.Errorf("standalone should not enable remote-config sync")
+	if rt.Pipeline.BatchSize != 2500 {
+		t.Errorf("pipeline.batchSize via int env = %d, want 2500", rt.Pipeline.BatchSize)
+	}
+	if !rt.RemoteConfig.Enabled {
+		t.Error("remoteConfig.enabled via bool env did not take effect")
 	}
 }
 
-func TestLoadDaemon_RequiresLogPattern(t *testing.T) {
-	yaml := `
-generic:
-  mongo:
-    uri: "mongodb://localhost/tango"
-`
-	if _, _, err := LoadDaemon(writeFile(t, "daemon.yaml", yaml), nil, DaemonModeStandalone); err == nil {
-		t.Fatal("expected error: standalone without logPattern")
+func TestLoadReport_RequiresLogPattern(t *testing.T) {
+	yaml := "runtime:\n  mongo:\n    uri: \"mongodb://localhost/report\"\n"
+	if _, _, err := LoadReport(writeFile(t, "report.yaml", yaml), nil); err == nil {
+		t.Fatal("expected error: report without logPattern")
 	}
 }
 
-func TestLoadDaemon_RequiresMongoURI(t *testing.T) {
-	yaml := `
-report:
-  source:
-    logPattern: ["/tmp/.*\\.log"]
-`
-	if _, _, err := LoadDaemon(writeFile(t, "daemon.yaml", yaml), nil, DaemonModeStandalone); err == nil {
-		t.Fatal("expected error: missing generic.mongo.uri")
-	}
-}
-
-func TestLoadDaemon_UnknownMode(t *testing.T) {
-	if _, _, err := LoadDaemon("", nil, "bogus"); err == nil {
-		t.Fatal("expected error: unknown daemon mode")
-	}
-}
-
-// TestLoadDaemon_HierarchicalFlags verifies viper-native flag binding: a flag
-// named after the full config key sets that key directly (no alias table), and
-// the --config flag is not treated as a config key.
-func TestLoadDaemon_HierarchicalFlags(t *testing.T) {
-	fs := pflag.NewFlagSet("daemon", pflag.ContinueOnError)
-	fs.String("config", "", "")
-	fs.String("generic.mongo.uri", "", "")
-	fs.String("generic.logging.level", "", "")
-	if err := fs.Parse([]string{
-		"--config", "/ignored",
-		"--generic.mongo.uri", "mongodb://flag/db",
-		"--generic.logging.level", "debug",
-	}); err != nil {
+func TestLoadWorker_Unified(t *testing.T) {
+	// runtime.mongo.uri via a hierarchical flag; instanceID via the convenience
+	// alias that maps onto tasks.instanceID.
+	fs := pflag.NewFlagSet("worker", pflag.ContinueOnError)
+	fs.String("runtime.mongo.uri", "", "")
+	fs.String("instanceID", "", "")
+	if err := fs.Parse([]string{"--runtime.mongo.uri", "mongodb://flag/worker", "--instanceID", "worker-1"}); err != nil {
 		t.Fatal(err)
 	}
-	// report.source.logPattern can't come from a flag, so supply it via a file.
-	path := writeFile(t, "daemon.yaml", "report:\n  source:\n    logPattern: [\"/tmp/x.log\"]\n")
-	_, rt, err := LoadDaemon(path, fs, DaemonModeStandalone)
+	rc, rt, err := LoadWorker("", fs)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rt.Mongo.URI != "mongodb://flag/db" {
-		t.Errorf("generic.mongo.uri flag = %q", rt.Mongo.URI)
+	if rt.Mongo.URI != "mongodb://flag/worker" {
+		t.Errorf("LoadWorker Mongo.URI = %q", rt.Mongo.URI)
 	}
-	if rt.Logging.Level != "debug" {
-		t.Errorf("generic.logging.level flag = %q", rt.Logging.Level)
+	if rt.InstanceID != "worker-1" || rc.Tasks.InstanceID != "worker-1" {
+		t.Errorf("LoadWorker InstanceID = %q (tasks=%q)", rt.InstanceID, rc.Tasks.InstanceID)
+	}
+	if !rt.Worker.Enabled || !rt.RemoteConfig.Enabled {
+		t.Errorf("worker switches: worker=%v remoteConfig=%v", rt.Worker.Enabled, rt.RemoteConfig.Enabled)
 	}
 }
 
-// TestExampleDaemonConfigsLoad ensures the shipped daemon examples parse and
-// validate under their respective run mode (full, minimal, and JSON variants).
-func TestExampleDaemonConfigsLoad(t *testing.T) {
-	cases := []struct{ path, mode string }{
-		{"../examples/config/standalone/standalone.min.yaml", DaemonModeStandalone},
-		{"../examples/config/standalone/standalone.max.yaml", DaemonModeStandalone},
-		{"../examples/config/standalone/standalone.min.json", DaemonModeStandalone},
-		{"../examples/config/standalone/standalone.max.json", DaemonModeStandalone},
-		{"../examples/config/cluster/cluster.min.yaml", DaemonModeCluster},
-		{"../examples/config/cluster/cluster.max.yaml", DaemonModeCluster},
-		{"../examples/config/cluster/cluster.min.json", DaemonModeCluster},
-		{"../examples/config/cluster/cluster.max.json", DaemonModeCluster},
+func TestLoadWorker_RequiresInstanceID(t *testing.T) {
+	yaml := "runtime:\n  mongo:\n    uri: \"mongodb://localhost/worker\"\n"
+	if _, _, err := LoadWorker(writeFile(t, "worker.yaml", yaml), nil); err == nil {
+		t.Fatal("expected error: worker without tasks.instanceID")
 	}
-	for _, c := range cases {
-		t.Run(c.path, func(t *testing.T) {
-			if _, _, err := LoadDaemon(c.path, nil, c.mode); err != nil {
-				t.Fatalf("LoadDaemon(%s, %s): %v", c.path, c.mode, err)
+}
+
+func TestLoadGateway_Unified(t *testing.T) {
+	yaml := `
+runtime:
+  mongo:
+    uri: "mongodb://localhost/gw"
+gateway:
+  addr: ":9090"
+upload:
+  string:
+    batchSize: 250
+tasks:
+  collection: custom_tasks
+`
+	_, cc, err := LoadGateway(writeFile(t, "gateway.yaml", yaml), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cc.Mongo.URI != "mongodb://localhost/gw" {
+		t.Errorf("gateway Mongo.URI = %q", cc.Mongo.URI)
+	}
+	if cc.Server.Addr != ":9090" {
+		t.Errorf("gateway addr = %q", cc.Server.Addr)
+	}
+	if cc.StringUpload.BatchSize != 250 {
+		t.Errorf("upload.string.batchSize = %d", cc.StringUpload.BatchSize)
+	}
+	if cc.Publish.TasksCollection != "custom_tasks" {
+		t.Errorf("tasks.collection -> publish = %q", cc.Publish.TasksCollection)
+	}
+}
+
+func TestLoadOperator_Unified(t *testing.T) {
+	yaml := `
+runtime:
+  mongo:
+    uri: "mongodb://localhost/op"
+backfillFilter:
+  table: user
+`
+	_, cc, err := LoadOperator(writeFile(t, "operator.yaml", yaml), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cc.BackfillFilter.Table != "user" {
+		t.Errorf("backfillFilter.table = %q", cc.BackfillFilter.Table)
+	}
+	// Publish defaults must be filled even when tasks is omitted.
+	if cc.Publish.TasksCollection != DefaultTasksCollection {
+		t.Errorf("publish default = %q", cc.Publish.TasksCollection)
+	}
+}
+
+// TestExampleRoleConfigsLoad ensures every shipped role example (max + min, in
+// both YAML and JSON) parses and validates under its loader.
+func TestExampleRoleConfigsLoad(t *testing.T) {
+	report := []string{
+		"../examples/config/report/report.max.yaml",
+		"../examples/config/report/report.min.yaml",
+		"../examples/config/report/report.max.json",
+		"../examples/config/report/report.min.json",
+	}
+	for _, p := range report {
+		t.Run(p, func(t *testing.T) {
+			if _, _, err := LoadReport(p, nil); err != nil {
+				t.Fatalf("LoadReport(%s): %v", p, err)
+			}
+		})
+	}
+	worker := []string{
+		"../examples/config/worker/worker.max.yaml",
+		"../examples/config/worker/worker.min.yaml",
+		"../examples/config/worker/worker.max.json",
+		"../examples/config/worker/worker.min.json",
+	}
+	for _, p := range worker {
+		t.Run(p, func(t *testing.T) {
+			if _, _, err := LoadWorker(p, nil); err != nil {
+				t.Fatalf("LoadWorker(%s): %v", p, err)
+			}
+		})
+	}
+	gateway := []string{
+		"../examples/config/gateway/gateway.max.yaml",
+		"../examples/config/gateway/gateway.min.yaml",
+		"../examples/config/gateway/gateway.max.json",
+		"../examples/config/gateway/gateway.min.json",
+	}
+	for _, p := range gateway {
+		t.Run(p, func(t *testing.T) {
+			if _, _, err := LoadGateway(p, nil); err != nil {
+				t.Fatalf("LoadGateway(%s): %v", p, err)
+			}
+		})
+	}
+	operator := []string{
+		"../examples/config/operator/operator.max.yaml",
+		"../examples/config/operator/operator.min.yaml",
+		"../examples/config/operator/operator.max.json",
+		"../examples/config/operator/operator.min.json",
+	}
+	for _, p := range operator {
+		t.Run(p, func(t *testing.T) {
+			if _, _, err := LoadOperator(p, nil); err != nil {
+				t.Fatalf("LoadOperator(%s): %v", p, err)
 			}
 		})
 	}
