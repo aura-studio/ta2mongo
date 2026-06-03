@@ -58,8 +58,8 @@ func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Servic
 		logger:   logger,
 		client:   mc,
 		db:       db,
-		queue:    taskqueue.NewQueue(db.Collection(cfg.Agent.TasksCollection)),
-		registry: taskqueue.NewRegistry(db.Collection(cfg.Agent.InstancesCollection), cfg.Agent.InstanceTTL),
+		queue:    taskqueue.NewQueue(db.Collection(cfg.Worker.TasksCollection)),
+		registry: taskqueue.NewRegistry(db.Collection(cfg.Worker.InstancesCollection), cfg.Worker.InstanceTTL),
 		hostname: hostname,
 	}, nil
 }
@@ -84,10 +84,10 @@ func (a *Service) EnsureIndexes(ctx context.Context) error {
 func (a *Service) Run(ctx context.Context) error {
 	a.logger.WithFields(logrus.Fields{
 		"instanceID":    a.cfg.InstanceID,
-		"tasks":         a.cfg.Agent.TasksCollection,
-		"instances":     a.cfg.Agent.InstancesCollection,
-		"poll_interval": a.cfg.Agent.PollInterval,
-		"lease":         a.cfg.Agent.LeaseDuration,
+		"tasks":         a.cfg.Worker.TasksCollection,
+		"instances":     a.cfg.Worker.InstancesCollection,
+		"poll_interval": a.cfg.Worker.PollInterval,
+		"lease":         a.cfg.Worker.LeaseDuration,
 	}).Info("worker: started")
 
 	// Register immediately so targeting fail-fast works without waiting for
@@ -97,12 +97,12 @@ func (a *Service) Run(ctx context.Context) error {
 	a.initialHeartbeat(ctx)
 	go a.heartbeatLoop(ctx)
 
-	poll := time.NewTicker(a.cfg.Agent.PollInterval)
+	poll := time.NewTicker(a.cfg.Worker.PollInterval)
 	defer poll.Stop()
 
 	for {
 		// Drain as many tasks as are available before sleeping.
-		task, err := a.queue.Claim(ctx, a.cfg.InstanceID, a.cfg.Agent.LeaseDuration)
+		task, err := a.queue.Claim(ctx, a.cfg.InstanceID, a.cfg.Worker.LeaseDuration)
 		switch {
 		case err == nil:
 			a.runTask(ctx, task)
@@ -145,7 +145,7 @@ func (a *Service) initialHeartbeat(ctx context.Context) {
 // expired + attempts exhausted) and targeted tasks whose target is offline past
 // the instance TTL grace window. Errors are logged, not fatal.
 func (a *Service) reap(ctx context.Context) {
-	n, err := a.queue.Reap(ctx, a.registry, a.cfg.Agent.InstanceTTL)
+	n, err := a.queue.Reap(ctx, a.registry, a.cfg.Worker.InstanceTTL)
 	if err != nil {
 		a.logger.WithError(err).Debug("worker: reap failed")
 		return
@@ -156,7 +156,7 @@ func (a *Service) reap(ctx context.Context) {
 }
 
 func (a *Service) heartbeatLoop(ctx context.Context) {
-	t := time.NewTicker(a.cfg.Agent.HeartbeatInterval)
+	t := time.NewTicker(a.cfg.Worker.HeartbeatInterval)
 	defer t.Stop()
 	for {
 		select {
@@ -221,7 +221,7 @@ func (a *Service) runTask(ctx context.Context, task *taskqueue.Task) {
 // On a failed renewal it cancels the execution context (the lease was lost).
 func (a *Service) startLeaseRenewer(ctx context.Context, cancel context.CancelFunc, taskID string) <-chan struct{} {
 	done := make(chan struct{})
-	interval := a.cfg.Agent.LeaseDuration / 3
+	interval := a.cfg.Worker.LeaseDuration / 3
 	if interval <= 0 {
 		interval = time.Second
 	}
@@ -234,7 +234,7 @@ func (a *Service) startLeaseRenewer(ctx context.Context, cancel context.CancelFu
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				if err := a.queue.RenewLease(context.Background(), taskID, a.cfg.InstanceID, a.cfg.Agent.LeaseDuration); err != nil {
+				if err := a.queue.RenewLease(context.Background(), taskID, a.cfg.InstanceID, a.cfg.Worker.LeaseDuration); err != nil {
 					a.logger.WithError(err).WithField("taskID", taskID).
 						Warn("worker: lease renewal failed; abandoning task")
 					cancel()

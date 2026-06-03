@@ -41,7 +41,7 @@ remoteConfig:
 		t.Errorf("report.filter -> runtime Filter = %v", rt.Filter.Include)
 	}
 	// The report loader never enables the task worker, regardless of file.
-	if rt.Agent.Enabled {
+	if rt.Worker.Enabled {
 		t.Error("LoadReport unexpectedly enabled task worker")
 	}
 	if !rt.RemoteConfig.Enabled {
@@ -49,6 +49,37 @@ remoteConfig:
 	}
 	if len(rc.Report.Source.LogPattern) != 1 {
 		t.Errorf("RoleConfig logPattern = %v", rc.Report.Source.LogPattern)
+	}
+}
+
+func TestLoadReport_TypedEnvOverrides(t *testing.T) {
+	// Environment variables arrive as strings; the role loader must coerce them
+	// into int / bool fields (weak typing) as well as string / duration ones.
+	os.Setenv("TANGO_REPORT_PIPELINE_BATCHSIZE", "2500") // int
+	os.Setenv("TANGO_REMOTECONFIG_ENABLED", "true")      // bool
+	defer func() {
+		os.Unsetenv("TANGO_REPORT_PIPELINE_BATCHSIZE")
+		os.Unsetenv("TANGO_REMOTECONFIG_ENABLED")
+	}()
+	yaml := `
+runtime:
+  mongo:
+    uri: "mongodb://localhost/report"
+report:
+  source:
+    logPattern: ["/tmp/x.log"]
+  pipeline:
+    batchSize: 1000
+`
+	_, rt, err := LoadReport(writeFile(t, "report.yaml", yaml), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.Pipeline.BatchSize != 2500 {
+		t.Errorf("pipeline.batchSize via int env = %d, want 2500", rt.Pipeline.BatchSize)
+	}
+	if !rt.RemoteConfig.Enabled {
+		t.Error("remoteConfig.enabled via bool env did not take effect")
 	}
 }
 
@@ -78,8 +109,8 @@ func TestLoadWorker_Unified(t *testing.T) {
 	if rt.InstanceID != "worker-1" || rc.Tasks.InstanceID != "worker-1" {
 		t.Errorf("LoadWorker InstanceID = %q (tasks=%q)", rt.InstanceID, rc.Tasks.InstanceID)
 	}
-	if !rt.Agent.Enabled || !rt.RemoteConfig.Enabled {
-		t.Errorf("worker switches: agent=%v remoteConfig=%v", rt.Agent.Enabled, rt.RemoteConfig.Enabled)
+	if !rt.Worker.Enabled || !rt.RemoteConfig.Enabled {
+		t.Errorf("worker switches: worker=%v remoteConfig=%v", rt.Worker.Enabled, rt.RemoteConfig.Enabled)
 	}
 }
 

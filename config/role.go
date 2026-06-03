@@ -111,7 +111,7 @@ func (r RoleConfig) WorkerRuntime() Config {
 		Logging:      r.Runtime.Logging,
 		Mongo:        r.Runtime.Mongo,
 		RemoteConfig: r.RemoteConfig,
-		Agent: AgentConfig{
+		Worker: WorkerConfig{
 			TasksCollection:     r.Tasks.Collection,
 			InstancesCollection: r.Tasks.InstancesCollection,
 			PollInterval:        r.Tasks.PollInterval,
@@ -168,7 +168,7 @@ func loadRole(path string, flags *pflag.FlagSet) (RoleConfig, error) {
 	applyRoleAliases(v)
 
 	var rc RoleConfig
-	if err := v.Unmarshal(&rc, durationDecodeHook()); err != nil {
+	if err := v.Unmarshal(&rc, durationDecodeHook(), weaklyTyped()); err != nil {
 		return RoleConfig{}, fmt.Errorf("unmarshal role config: %w", err)
 	}
 	return rc, nil
@@ -183,7 +183,7 @@ func LoadReport(path string, flags *pflag.FlagSet) (RoleConfig, Config, error) {
 	}
 	rt := rc.ReportRuntime()
 	applyDefaults(&rt)
-	rt.Agent.Enabled = false
+	rt.Worker.Enabled = false
 
 	if err := rt.Validate(); err != nil {
 		return RoleConfig{}, Config{}, err
@@ -206,7 +206,7 @@ func LoadWorker(path string, flags *pflag.FlagSet) (RoleConfig, Config, error) {
 	applyDefaults(&rt)
 	rt.Mode = ModeWorker
 	rt.RemoteConfig.Enabled = true
-	rt.Agent.Enabled = true
+	rt.Worker.Enabled = true
 
 	if rc.Tasks.InstanceID == "" {
 		return RoleConfig{}, Config{}, fmt.Errorf("config: tasks.instanceID is required for the worker service")
@@ -267,8 +267,11 @@ func setRoleDefaults(v *viper.Viper) {
 	v.SetDefault("report.source.pollInterval", "200ms")
 	v.SetDefault("report.source.maxLineBytes", 10*1024*1024)
 	v.SetDefault("report.pipeline.batchSize", 1000)
+	v.SetDefault("report.pipeline.batchSizeMin", 0)
+	v.SetDefault("report.pipeline.batchSizeMax", 0)
 	v.SetDefault("report.pipeline.batchWorkers", 2)
 	v.SetDefault("report.pipeline.flushInterval", "1s")
+	v.SetDefault("report.pipeline.channelBuffer", 0)
 	v.SetDefault("report.pipeline.deadLetterCap", 128)
 	v.SetDefault("report.filter.include", []string{})
 	v.SetDefault("report.filter.exclude", []string{})
@@ -281,8 +284,8 @@ func setRoleDefaults(v *viper.Viper) {
 	v.SetDefault("tasks.instanceID", "")
 	v.SetDefault("tasks.collection", DefaultTasksCollection)
 	v.SetDefault("tasks.instancesCollection", DefaultInstancesCollection)
-	v.SetDefault("tasks.pollInterval", DefaultAgentPollInterval)
-	v.SetDefault("tasks.leaseTTL", DefaultAgentLeaseDuration)
+	v.SetDefault("tasks.pollInterval", DefaultWorkerPollInterval)
+	v.SetDefault("tasks.leaseTTL", DefaultWorkerLeaseDuration)
 	v.SetDefault("tasks.heartbeatInterval", DefaultHeartbeatInterval)
 	v.SetDefault("tasks.instanceTTL", DefaultInstanceTTL)
 	// gateway
@@ -292,6 +295,15 @@ func setRoleDefaults(v *viper.Viper) {
 	v.SetDefault("upload.file.logPattern", []string{})
 	v.SetDefault("upload.file.maxLineBytes", 10*1024*1024)
 	v.SetDefault("upload.file.checkpointCollection", DefaultFileUploadCheckpointCollection)
+	// backfill execution (registered so TANGO_BACKFILL_* env binds; the
+	// tri-state *bool flags paginate/forceSkipExisting are intentionally left
+	// unregistered so their nil-means-default semantics survive — set them via
+	// file or flag, not env).
+	v.SetDefault("backfill.projectID", 0)
+	v.SetDefault("backfill.pageSize", 0)
+	v.SetDefault("backfill.pageRetries", 0)
+	v.SetDefault("backfill.limit", 0)
+	v.SetDefault("backfill.skipLocalFilter", false)
 	// backfill selection
 	v.SetDefault("backfillFilter.table", BackfillTableEvent)
 }

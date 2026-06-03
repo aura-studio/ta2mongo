@@ -57,12 +57,12 @@ const (
 	DefaultRemoteConfigInterval   = time.Hour
 )
 
-// Agent / task-queue defaults.
+// Worker / task-queue defaults.
 const (
 	DefaultTasksCollection     = "_tango_tasks"
 	DefaultInstancesCollection = "_tango_instances"
-	DefaultAgentPollInterval   = 10 * time.Second
-	DefaultAgentLeaseDuration  = 5 * time.Minute
+	DefaultWorkerPollInterval  = 10 * time.Second
+	DefaultWorkerLeaseDuration = 5 * time.Minute
 	DefaultHeartbeatInterval   = 30 * time.Second
 	DefaultInstanceTTL         = 90 * time.Second
 )
@@ -138,11 +138,11 @@ type Config struct {
 	// itself) are never overridable remotely — they must come from the local file.
 	RemoteConfig RemoteConfig `mapstructure:"remoteConfig"`
 
-	// Agent holds the task-queue runtime settings (projected from the tasks
+	// Worker holds the task-queue runtime settings (projected from the tasks
 	// config section). The worker service registers a heartbeat, claims tasks
 	// from a shared MongoDB queue, executes them (report-sync / backfill / sql),
 	// and reports results.
-	Agent AgentConfig `mapstructure:"agent"`
+	Worker WorkerConfig `mapstructure:"worker"`
 }
 
 // LoggingConfig configures log output.
@@ -259,8 +259,8 @@ type FilterConfig struct {
 	Exclude []string `mapstructure:"exclude"`
 }
 
-// AgentConfig holds the task-queue runtime settings for the worker service.
-type AgentConfig struct {
+// WorkerConfig holds the task-queue runtime settings for the worker service.
+type WorkerConfig struct {
 	// Enabled turns the task worker on (set by the worker loader).
 	Enabled bool `mapstructure:"enabled"`
 
@@ -519,10 +519,10 @@ func applyDefaults(c *Config) {
 	applyBackfillDefaults(&c.Backfill)
 	applyBackfillFilterDefaults(&c.BackfillFilter)
 	applyRemoteConfigDefaults(&c.RemoteConfig)
-	applyAgentDefaults(&c.Agent)
+	applyWorkerDefaults(&c.Worker)
 }
 
-func applyAgentDefaults(a *AgentConfig) {
+func applyWorkerDefaults(a *WorkerConfig) {
 	if a.TasksCollection == "" {
 		a.TasksCollection = DefaultTasksCollection
 	}
@@ -530,10 +530,10 @@ func applyAgentDefaults(a *AgentConfig) {
 		a.InstancesCollection = DefaultInstancesCollection
 	}
 	if a.PollInterval <= 0 {
-		a.PollInterval = DefaultAgentPollInterval
+		a.PollInterval = DefaultWorkerPollInterval
 	}
 	if a.LeaseDuration <= 0 {
-		a.LeaseDuration = DefaultAgentLeaseDuration
+		a.LeaseDuration = DefaultWorkerLeaseDuration
 	}
 	if a.HeartbeatInterval <= 0 {
 		a.HeartbeatInterval = DefaultHeartbeatInterval
