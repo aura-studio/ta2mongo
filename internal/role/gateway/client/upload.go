@@ -13,9 +13,12 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
-	"rocket-nano/tools/tango/config"
 	"rocket-nano/tools/tango/internal/source/tailer"
 )
+
+// DefaultFileUploadCheckpointCollection is where file-upload resume offsets are
+// stored when not overridden.
+const DefaultFileUploadCheckpointCollection = "_tango_fileupload"
 
 // UploadRequest configures a file upload (function #2: file single upload with
 // retransmission). Files matching Patterns are read line-by-line and ingested
@@ -28,7 +31,7 @@ type UploadRequest struct {
 	// BatchSize is the number of lines per confirmed bulk write. Default 1000.
 	BatchSize int
 	// CheckpointCollection stores resume offsets. Defaults to
-	// config.DefaultFileUploadCheckpointCollection.
+	// DefaultFileUploadCheckpointCollection.
 	CheckpointCollection string
 }
 
@@ -60,7 +63,7 @@ func (c *Client) UploadFiles(ctx context.Context, req UploadRequest) (UploadResu
 	}
 	collName := req.CheckpointCollection
 	if collName == "" {
-		collName = config.DefaultFileUploadCheckpointCollection
+		collName = DefaultFileUploadCheckpointCollection
 	}
 	ckpt := c.dao.Mongo.DB.Collection(collName)
 

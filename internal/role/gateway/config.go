@@ -1,20 +1,23 @@
-package config
+// Package gateway implements the HTTP gateway role: a long-running HTTP
+// server exposing ingest and upload APIs.
+package gateway
 
 import (
 	"rocket-nano/tools/tango/internal/dao"
+	"rocket-nano/tools/tango/internal/logging"
 	"rocket-nano/tools/tango/internal/parser"
 	"rocket-nano/tools/tango/internal/parser/filter"
 	"rocket-nano/tools/tango/internal/process/pipeline"
+	sdk "rocket-nano/tools/tango/internal/role/gateway/client"
 )
 
 // GatewayRuntimeConfig is the runtime configuration the gateway role consumes.
 // It is the projection target of the unified RoleConfig (see
-// RoleConfig.GatewayRuntime in role.go): its functionality is the upload
-// sections plus an HTTP server block for the gateway face. Each section is a
-// pointer to the owning module's config struct.
+// config.RoleConfig.GatewayRuntime in the config package): its functionality is
+// the upload sections plus an HTTP server block for the gateway face.
 type GatewayRuntimeConfig struct {
-	Dao     *dao.Config    `mapstructure:"dao"`
-	Runtime *RuntimeConfig `mapstructure:"runtime"`
+	Dao     *dao.Config     `mapstructure:"dao"`
+	Logging *logging.Config `mapstructure:"logging"`
 
 	// StringUpload: single string ingest, no retransmission.
 	StringUpload StringUploadConfig `mapstructure:"stringUpload"`
@@ -46,22 +49,19 @@ type GatewayServerConfig struct {
 	Addr string `mapstructure:"addr"`
 }
 
-// DefaultFileUploadCheckpointCollection is where file-upload resume offsets are
-// stored when not overridden.
-const DefaultFileUploadCheckpointCollection = "_tango_fileupload"
-
 // DefaultServerAddr is the default HTTP listen address for `tango gateway`.
 const DefaultServerAddr = ":8080"
 
-func (c *GatewayRuntimeConfig) applyDefaults() {
-	if c.Runtime == nil {
-		c.Runtime = &RuntimeConfig{}
-	}
-	c.Runtime.ApplyDefaults()
+// ApplyDefaults fills unset options with sensible defaults.
+func (c *GatewayRuntimeConfig) ApplyDefaults() {
 	if c.Dao == nil {
 		c.Dao = &dao.Config{}
 	}
 	c.Dao.ApplyDefaults()
+	if c.Logging == nil {
+		c.Logging = &logging.Config{}
+	}
+	c.Logging.ApplyDefaults()
 	c.StringUpload.ApplyDefaults()
 	c.FileUpload.ApplyDefaults()
 	c.Server.ApplyDefaults()
@@ -84,7 +84,7 @@ func (c *FileUploadConfig) ApplyDefaults() {
 		c.MaxLineBytes = 10 * 1024 * 1024
 	}
 	if c.CheckpointCollection == "" {
-		c.CheckpointCollection = DefaultFileUploadCheckpointCollection
+		c.CheckpointCollection = sdk.DefaultFileUploadCheckpointCollection
 	}
 }
 
@@ -95,6 +95,7 @@ func (c *GatewayServerConfig) ApplyDefaults() {
 	}
 }
 
-func parserConfigFromFilter(fc *filter.Config) *parser.Config {
+// ParserConfigFromFilter builds a parser config from a filter config.
+func ParserConfigFromFilter(fc *filter.Config) *parser.Config {
 	return &parser.Config{Filter: fc}
 }

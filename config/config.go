@@ -2,10 +2,10 @@
 //
 // The single file-facing schema is RoleConfig (role.go): the unified
 // daemon/gateway config file. Its loaders project it onto the shared
-// runtime Config in this file (daemon) and onto GatewayRuntimeConfig
-// (gateway.go, the gateway runtime projection). The internal service packages
-// (daemon/gateway) consume those. loader.go holds the shared YAML/JSON +
-// TANGO_* env + flag loading helpers.
+// runtime Config in this file (daemon) and onto gateway.GatewayRuntimeConfig
+// (internal/role/gateway, the gateway runtime projection). The internal
+// service packages (daemon/gateway) consume those. loader.go holds the shared
+// YAML/JSON + TANGO_* env + flag loading helpers.
 //
 // Each runtime concern owns its own config struct in its module (dao.Config,
 // parser.Config, process.Config, role.Config, tailer.Config); the top-level

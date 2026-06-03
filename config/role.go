@@ -10,10 +10,12 @@ import (
 	"rocket-nano/tools/tango/internal/dao/mongo"
 	"rocket-nano/tools/tango/internal/dao/store"
 	"rocket-nano/tools/tango/internal/logging"
+	"rocket-nano/tools/tango/internal/parser"
 	"rocket-nano/tools/tango/internal/parser/filter"
 	"rocket-nano/tools/tango/internal/process"
 	"rocket-nano/tools/tango/internal/process/pipeline"
 	"rocket-nano/tools/tango/internal/role"
+	"rocket-nano/tools/tango/internal/role/gateway"
 	"rocket-nano/tools/tango/internal/source/tailer"
 )
 
@@ -111,25 +113,30 @@ func (r RoleConfig) DaemonRuntime() Config {
 
 // GatewayRuntime projects the unified config onto the GatewayRuntimeConfig
 // consumed by the gateway role.
-func (r RoleConfig) GatewayRuntime() GatewayRuntimeConfig {
-	cc := GatewayRuntimeConfig{
+func (r RoleConfig) GatewayRuntime() gateway.GatewayRuntimeConfig {
+	cc := gateway.GatewayRuntimeConfig{
 		Dao:     r.Runtime.Dao(),
-		Runtime: &r.Runtime,
-		StringUpload: StringUploadConfig{
+		Logging: r.Runtime.Logging,
+		StringUpload: gateway.StringUploadConfig{
 			BatchSize: r.Upload.String.BatchSize,
 			Filter:    r.Upload.String.Filter,
 		},
-		FileUpload: FileUploadConfig{
+		FileUpload: gateway.FileUploadConfig{
 			LogPattern:           r.Upload.File.LogPattern,
 			MaxLineBytes:         r.Upload.File.MaxLineBytes,
 			Pipeline:             r.Upload.File.Pipeline,
 			Filter:               r.Upload.File.Filter,
 			CheckpointCollection: r.Upload.File.CheckpointCollection,
 		},
-		Server: GatewayServerConfig{Addr: r.Gateway.Addr},
+		Server: gateway.GatewayServerConfig{Addr: r.Gateway.Addr},
 	}
-	cc.applyDefaults()
+	cc.ApplyDefaults()
 	return cc
+}
+
+// parserConfigFromFilter builds a parser config from a filter config.
+func parserConfigFromFilter(fc *filter.Config) *parser.Config {
+	return &parser.Config{Filter: fc}
 }
 
 // loadRole reads the unified RoleConfig from path (+ env + flags). Env vars
@@ -173,10 +180,10 @@ func LoadDaemon(path string, flags *pflag.FlagSet) (RoleConfig, Config, error) {
 
 // LoadGateway loads the unified gateway-service config and projects it onto the
 // GatewayRuntimeConfig the HTTP server runs on.
-func LoadGateway(path string, flags *pflag.FlagSet) (RoleConfig, GatewayRuntimeConfig, error) {
+func LoadGateway(path string, flags *pflag.FlagSet) (RoleConfig, gateway.GatewayRuntimeConfig, error) {
 	rc, err := loadRole(path, flags)
 	if err != nil {
-		return RoleConfig{}, GatewayRuntimeConfig{}, err
+		return RoleConfig{}, gateway.GatewayRuntimeConfig{}, err
 	}
 	return rc, rc.GatewayRuntime(), nil
 }

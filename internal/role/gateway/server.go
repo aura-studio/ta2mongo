@@ -8,17 +8,16 @@ import (
 	"net/http"
 	"time"
 
-	"rocket-nano/tools/tango/config"
 	"rocket-nano/tools/tango/internal/logging"
 	sdk "rocket-nano/tools/tango/internal/role/gateway/client"
 )
 
 type Server struct {
-	cc  config.GatewayRuntimeConfig
+	cc  GatewayRuntimeConfig
 	cli *sdk.Client
 }
 
-func New(cc config.GatewayRuntimeConfig, cli *sdk.Client) *Server {
+func New(cc GatewayRuntimeConfig, cli *sdk.Client) *Server {
 	return &Server{cc: cc, cli: cli}
 }
 

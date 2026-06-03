@@ -23,16 +23,22 @@
    - `internal/process`（`process.go`）整合 `process/single` + `process/batch` + `process/pipeline`
    - `internal/role` 是运行模式集合：`daemon` / `gateway` / `cli` / `api`
    - `internal/source` 是数据来源集合：目前 `source/tailer`（未来 sql、console）
-2. **每个模块自管配置**：配置结构体下沉到各自模块并由领域根包聚合（`dao.Config` 聚合 `mongo.Config` + `store.Config`，`parser.Config` 聚合 filter 配置，另有 `tailer.Config`、`pipeline.Config`、`log.Config`），顶层
+2. **每个模块自管配置**：配置结构体下沉到各自模块并由领域根包聚合（`dao.Config` 聚合 `mongo.Config` + `store.Config`，`parser.Config` 聚合 filter 配置，另有 `tailer.Config`、`pipeline.Config`、`logging.Config`），顶层
    `config.Config` 用**指针字段**引用领域根包配置。叶子模块**不得 import 顶层 `config` 包**
    （否则成环）。依赖方向：`config` → 各模块；各模块 ↛ `config`。
 3. **`process` 是三种处理方式的唯一对外入口**：`single`（单条）/`batch`（同步批量）/
    `pipeline`（异步流水线）不被外部直接 import；engine 与 client SDK 只用 `process` 的
    `NewIngester*` / `RunPipeline` / `Counters`/`Snapshot`/`WriteOptions`。
-4. **日志是全局底层**：统一用 `internal/log` 的包级函数（`log.WithError`、`log.Info`…），
-   不要把 `*logrus.Logger` 当对象到处透传。`log.Init(level)` 在启动时配置一次。
+4. **日志是全局底层**：统一用 `internal/logging` 的包级函数（`logging.WithError`、`logging.Info`…），
+   不要把 `*logrus.Logger` 当对象到处透传。`logging.Init(level)` 在启动时配置一次。
 5. **MaxElapsedTime（bulk-write 重试预算）属于 store**，不属于 mongo 连接配置；
    配置文件键为 `runtime.store.maxElapsedTime`。
+6. **配置与逻辑层级对齐**：网关相关配置（`GatewayRuntimeConfig` 及子类型）归属于 `internal/role/gateway/`，
+   不放在顶层 `config/` 中。`config/gateway.go` 文件不应存在。
+7. **cmd 层独立调用**：`cmd/` 下各入口文件不引用共享胶水包（如 `cmdshared`）；
+   每个 cmd 入口内联自己的配置解析、client 构建、服务启动逻辑。
+8. **cmdShared 做内联**：`internal/cmdshared/` 的逻辑已内联到 `cmd/daemon/` 和 `cmd/gateway/`，
+   不再保留为独立模块。
 
 ## 3. 目录结构
 
@@ -40,31 +46,29 @@
 .
 ├── main.go
 ├── cmd/
-│   ├── daemon/  # tango daemon
-│   ├── gateway/     # tango gateway
-│   └── shared/      # cmd glue: 配置解析、client 构建、service runner
-├── config/          # 统一 RoleConfig 文件 schema + 角色加载器；顶层 Config / GatewayRuntimeConfig（指针引用各模块 Config）
+│   ├── daemon/  # tango daemon（内联配置解析 + 服务启动）
+│   └── gateway/ # tango gateway（内联配置解析 + client 构建 + HTTP 启动）
+├── config/      # 统一 RoleConfig 文件 schema + 角色加载器；顶层 Config（指针引用各模块 Config）
 ├── doc/ examples/
 └── internal/
-    ├── log/         # 全局 logger + log.Config
-    ├── core/        # cli（仅配置路径解析 helper）
-    ├── parser/      # parser.go 整合 talog + filter（日志解析层，原 source 包改名而来）
+    ├── logging/    # 全局 logger + logging.Config
+    ├── parser/     # parser.go 整合 talog + filter（日志解析层）
     │   ├── config.go # parser.Config：聚合 parser 子模块配置
     │   ├── talog/    # TA JSON 行解析 -> Record
     │   └── filter/   # expr-lang include/exclude 上报过滤器 + filter.Config
-    ├── source/      # 数据来源集合
-    │   └── tailer/  # 文件追尾来源（来源1）+ tailer.Config / TailMode 常量
-    ├── dao/         # dao.go 整合 store + mongo
+    ├── source/     # 数据来源集合
+    │   └── tailer/  # 文件追尾来源 + tailer.Config / TailMode 常量
+    ├── dao/        # dao.go 整合 store + mongo
     │   ├── config.go # dao.Config：聚合 mongo.Config + store.Config
     │   ├── store/    # MongoDB 持久化 + store.Config
     │   └── mongo/    # 连接装配 + mongo.Config + MongoDBFromURI
-    ├── process/     # process.go 统一管理三种处理方式（唯一对外入口）
-    │   ├── single/  # 单条 parse→filter→identity→写模型（原 processor 包）
-    │   ├── batch/   # 同步单条/批量 Ingester（原 ingest 包）
+    ├── process/    # process.go 统一管理三种处理方式（唯一对外入口）
+    │   ├── single/  # 单条 parse→filter→identity→写模型
+    │   ├── batch/   # 同步单条/批量 Ingester
     │   └── pipeline/# 异步 N-worker 流水线 + pipeline.Config + dynamicbatch
-    └── role/        # 运行角色
-        ├── daemon/  # daemon 常驻服务（report.Service，原 service/report）
-        ├── gateway/ # HTTP gateway 运行时
+    └── role/       # 运行角色
+        ├── daemon/  # daemon 常驻服务（report.Service）
+        ├── gateway/ # HTTP gateway 运行时 + GatewayRuntimeConfig + client SDK
         ├── cli/     # 命令行模式（占位，空）
         └── api/     # API 模式（占位，空）
 ```
@@ -72,12 +76,13 @@
 依赖方向：
 
 ```text
-cmd     -> config + role
-role    -> process + parser + dao + source + config + log
+cmd     -> config + role + gateway + logging
+role    -> process + parser + dao + source + config + logging
 process -> single/batch/pipeline + dao + parser + config
 parser  -> talog + filter
 dao     -> store + mongo
-config  -> 各领域根包/模块的 Config 类型（dao/parser/tailer/pipeline/log）
+config  -> 各领域根包/模块的 Config 类型（dao/parser/tailer/pipeline/logging）+ gateway（GatewayRuntimeConfig）
+gateway -> dao + logging + parser + pipeline + client
 各叶子模块 ↛ config
 ```
 
@@ -88,18 +93,15 @@ config  -> 各领域根包/模块的 Config 类型（dao/parser/tailer/pipeline/
 | 文件 | 职责 |
 |---|---|
 | `main.go` | 根 cobra 命令，挂载 daemon / gateway |
-| `cmd/daemon/daemon.go` | `tango daemon`；解析 `daemon.yaml`，委托 `shared.RunDaemonService` |
-| `cmd/gateway/gateway.go` | `tango gateway`；解析 `gateway.yaml`，启动 HTTP gateway |
-| `internal/cmdshared/client.go` | `ConfigFlag`、`GatewayConfig` 加载器、`BuildClient`/`ConnectClient`、`ClientLoader` |
-| `internal/cmdshared/service.go` | `RunDaemonService`/`runReport`、`MaskURI`；`log.Init` |
+| `cmd/daemon/daemon.go` | `tango daemon`；内联 configFlag、resolveConfigPath、runDaemonService、runReport、maskURI |
+| `cmd/gateway/gateway.go` | `tango gateway`；内联 configFlag、resolveConfigPath、gatewayConfig、buildClient、connectClient |
 
 #### 配置层 `config/`（顶层用指针引用各模块 Config）
 
 | 文件 | 职责 |
 |---|---|
 | `config/config.go` | 顶层 `Config`（指针字段）+ `ModeDaemon` + `Validate` |
-| `config/role.go` | 统一 `RoleConfig` schema + `LoadDaemon/LoadGateway` + 投影 + `setRoleDefaults` |
-| `config/gateway.go` | `GatewayRuntimeConfig`（gateway/SDK 投影）+ `applyDefaults` |
+| `config/role.go` | 统一 `RoleConfig` schema + `LoadDaemon`/`LoadGateway` + 投影 + `setRoleDefaults` + `parserConfigFromFilter` |
 | `config/defaults.go` | `applyDefaults`：分配 nil 指针段并委托子模块默认值 |
 | `config/loader.go` | viper 装配 helper |
 
@@ -107,8 +109,8 @@ config  -> 各领域根包/模块的 Config 类型（dao/parser/tailer/pipeline/
 
 | 文件 | 职责 |
 |---|---|
-| `logging/log.go` | 进程级 logger：`Init`、`L`、`WithError/WithField/WithFields`、`Info/Warn/...`、`Fields` 别名 |
-| `logging/config.go` | `log.Config`（level/format） |
+| `logging/log.go` | 进程级 logger：`Init`、`L`、`WithError`/`WithField`/`WithFields`、`Info`/`Warn`/...、`Fields` 别名 |
+| `logging/config.go` | `logging.Config`（level/format） |
 
 #### 解析层 `internal/parser`
 
@@ -126,7 +128,7 @@ config  -> 各领域根包/模块的 Config 类型（dao/parser/tailer/pipeline/
 | 文件 | 职责 |
 |---|---|
 | `source/tailer/tailer.go` | `Tailer`：glob 发现文件、追尾、rescan，输出 line channel（hybrid/poll/event） |
-| `source/tailer/config.go` | `tailer.Config` + `TailModeHybrid/Poll/Event` 常量 |
+| `source/tailer/config.go` | `tailer.Config` + `TailModeHybrid`/`Poll`/`Event` 常量 |
 
 #### 数据访问 `internal/dao`
 
@@ -162,7 +164,10 @@ config  -> 各领域根包/模块的 Config 类型（dao/parser/tailer/pipeline/
 | 文件 | 职责 |
 |---|---|
 | `role/daemon/report.go` | `daemon.Service`：tailer → `process.RunPipeline` → MongoDB；周期/最终统计日志 |
+| `role/gateway/config.go` | `GatewayRuntimeConfig`（gateway 运行时投影）+ `StringUploadConfig`/`FileUploadConfig`/`GatewayServerConfig` + `ApplyDefaults` |
 | `role/gateway/server.go` | gateway HTTP `Server`：`/healthz` `/ingest` `/upload`（转 SDK 调用） |
+| `role/gateway/client/client.go` | Go SDK client：连接池管理、`Ingest`/`IngestBatch`/`EnsureIndexes` |
+| `role/gateway/client/upload.go` | 文件上传（断点续传）+ `DefaultFileUploadCheckpointCollection` |
 | `role/cli/cli.go` | 命令行模式占位（空包） |
 | `role/api/api.go` | API 模式占位（空包） |
 
@@ -173,7 +178,7 @@ Tailer -> Dispatcher(按用户亲和性路由) -> Worker[i](Parse -> Filter -> I
 ```
 
 `role/daemon` 用 `process.RunPipeline(ctx, cfg, dao, parser, lineCh, stats, opts)` 驱动流水线；
-命令层 `cmd/daemon` 只做参数与配置加载。
+命令层 `cmd/daemon` 内联配置解析与 daemon 服务启动逻辑。
 
 ## 5. HTTP Gateway Service（gateway 模式）
 
@@ -183,7 +188,7 @@ POST /ingest
 POST /upload
 ```
 
-`role/gateway` 使用 GatewayRuntimeConfig 和 Go SDK；`cmd/gateway` 只做参数与配置加载。
+`role/gateway` 使用自有 `GatewayRuntimeConfig` 和 Go SDK；`cmd/gateway` 内联配置解析与 client 构建逻辑。
 
 ## 6. 上报 filter
 
