@@ -1,23 +1,18 @@
 package config
 
 import (
-	"time"
-
 	"rocket-nano/tools/tango/internal/dao"
-	"rocket-nano/tools/tango/internal/dao/mongo"
-	"rocket-nano/tools/tango/internal/dao/store"
-	"rocket-nano/tools/tango/internal/logging"
 	"rocket-nano/tools/tango/internal/parser"
 	"rocket-nano/tools/tango/internal/parser/filter"
 	"rocket-nano/tools/tango/internal/process/pipeline"
 )
 
-// ClientConfig is the runtime configuration the client SDK / gateway service
-// consume. It is the projection target of the unified RoleConfig (see
-// RoleConfig.Client in role.go): its functionality is the upload sections plus
-// an HTTP server block for the gateway face. Each section is a pointer to the
-// owning module's config struct.
-type ClientConfig struct {
+// GatewayRuntimeConfig is the runtime configuration the gateway role consumes.
+// It is the projection target of the unified RoleConfig (see
+// RoleConfig.GatewayRuntime in role.go): its functionality is the upload
+// sections plus an HTTP server block for the gateway face. Each section is a
+// pointer to the owning module's config struct.
+type GatewayRuntimeConfig struct {
 	Dao     *dao.Config    `mapstructure:"dao"`
 	Runtime *RuntimeConfig `mapstructure:"runtime"`
 
@@ -26,7 +21,7 @@ type ClientConfig struct {
 	// FileUpload: file ingest with resume/retransmission.
 	FileUpload FileUploadConfig `mapstructure:"fileUpload"`
 	// Server configures the HTTP/REST face (`tango gateway`).
-	Server ServerConfig `mapstructure:"server"`
+	Server GatewayServerConfig `mapstructure:"server"`
 }
 
 // StringUploadConfig configures single-string ingest (no retransmission).
@@ -46,8 +41,8 @@ type FileUploadConfig struct {
 	CheckpointCollection string `mapstructure:"checkpointCollection"`
 }
 
-// ServerConfig configures the HTTP/REST face.
-type ServerConfig struct {
+// GatewayServerConfig configures the HTTP/REST face.
+type GatewayServerConfig struct {
 	Addr string `mapstructure:"addr"`
 }
 
@@ -58,45 +53,45 @@ const DefaultFileUploadCheckpointCollection = "_tango_fileupload"
 // DefaultServerAddr is the default HTTP listen address for `tango gateway`.
 const DefaultServerAddr = ":8080"
 
-func (c *ClientConfig) applyDefaults() {
+func (c *GatewayRuntimeConfig) applyDefaults() {
 	if c.Runtime == nil {
 		c.Runtime = &RuntimeConfig{}
 	}
-	if c.Runtime.Logging == nil {
-		c.Runtime.Logging = &logging.Config{}
-	}
-	if c.Runtime.Logging.Level == "" {
-		c.Runtime.Logging.Level = "info"
-	}
-	if c.Runtime.Logging.Format == "" {
-		c.Runtime.Logging.Format = "text"
-	}
+	c.Runtime.ApplyDefaults()
 	if c.Dao == nil {
 		c.Dao = &dao.Config{}
 	}
-	if c.Dao.Mongo == nil {
-		c.Dao.Mongo = &mongo.Config{}
+	c.Dao.ApplyDefaults()
+	c.StringUpload.ApplyDefaults()
+	c.FileUpload.ApplyDefaults()
+	c.Server.ApplyDefaults()
+}
+
+// ApplyDefaults fills unset string-upload options.
+func (c *StringUploadConfig) ApplyDefaults() {
+	if c.BatchSize <= 0 {
+		c.BatchSize = 1000
 	}
-	if c.Dao.Store == nil {
-		c.Dao.Store = &store.Config{}
+}
+
+// ApplyDefaults fills unset file-upload options.
+func (c *FileUploadConfig) ApplyDefaults() {
+	if c.Pipeline == nil {
+		c.Pipeline = &pipeline.Config{}
 	}
-	if c.Dao.Store.MaxElapsedTime <= 0 {
-		c.Dao.Store.MaxElapsedTime = 10 * time.Second
+	c.Pipeline.ApplyDefaults()
+	if c.MaxLineBytes <= 0 {
+		c.MaxLineBytes = 10 * 1024 * 1024
 	}
-	if c.StringUpload.BatchSize <= 0 {
-		c.StringUpload.BatchSize = 1000
+	if c.CheckpointCollection == "" {
+		c.CheckpointCollection = DefaultFileUploadCheckpointCollection
 	}
-	if c.FileUpload.Pipeline == nil {
-		c.FileUpload.Pipeline = &pipeline.Config{}
-	}
-	if c.FileUpload.MaxLineBytes <= 0 {
-		c.FileUpload.MaxLineBytes = 10 * 1024 * 1024
-	}
-	if c.FileUpload.CheckpointCollection == "" {
-		c.FileUpload.CheckpointCollection = DefaultFileUploadCheckpointCollection
-	}
-	if c.Server.Addr == "" {
-		c.Server.Addr = DefaultServerAddr
+}
+
+// ApplyDefaults fills unset server options.
+func (c *GatewayServerConfig) ApplyDefaults() {
+	if c.Addr == "" {
+		c.Addr = DefaultServerAddr
 	}
 }
 

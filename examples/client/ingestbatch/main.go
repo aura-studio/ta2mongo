@@ -6,7 +6,7 @@ import (
 	"log"
 	"time"
 
-	"rocket-nano/tools/tango/client"
+	"rocket-nano/tools/tango/internal/role/gateway/client"
 )
 
 func main() {

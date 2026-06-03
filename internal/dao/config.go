@@ -11,3 +11,15 @@ type Config struct {
 	Mongo *mongo.Config `mapstructure:"mongo"`
 	Store *store.Config `mapstructure:"store"`
 }
+
+// ApplyDefaults allocates child configs and lets them own their defaults.
+func (c *Config) ApplyDefaults() {
+	if c.Mongo == nil {
+		c.Mongo = &mongo.Config{}
+	}
+	c.Mongo.ApplyDefaults()
+	if c.Store == nil {
+		c.Store = &store.Config{}
+	}
+	c.Store.ApplyDefaults()
+}

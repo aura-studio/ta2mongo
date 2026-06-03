@@ -8,6 +8,13 @@ type Config struct {
 	Filter *filter.Config `mapstructure:"filter"`
 }
 
+// ApplyDefaults allocates child configs and lets them own their defaults.
+func (c *Config) ApplyDefaults() {
+	if c.Filter == nil {
+		c.Filter = &filter.Config{}
+	}
+}
+
 // Build compiles the configured filter and returns a ready parser.
 func (c *Config) Build() (*Parser, error) {
 	var fc *filter.Config

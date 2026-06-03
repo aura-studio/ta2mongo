@@ -7,7 +7,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"rocket-nano/tools/tango/cmd/shared"
-	"rocket-nano/tools/tango/internal/engine/gateway"
+	"rocket-nano/tools/tango/internal/role/gateway"
 )
 
 // NewCommand builds the `tango gateway` command. It loads the unified gateway

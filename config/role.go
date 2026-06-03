@@ -20,7 +20,7 @@ import (
 // RoleConfig is the unified, role-oriented config file schema. One schema backs
 // every role-named config file — standalone.yaml, gateway.yaml — and each role
 // loader projects the sections it needs onto the internal runtime Config /
-// ClientConfig. Sections:
+// GatewayRuntimeConfig. Sections:
 //
 //   - runtime: process-wide logging + MongoDB connection + store (every role).
 //   - report:  the reporting pipeline (standalone service).
@@ -28,7 +28,7 @@ import (
 //   - upload:  string + file upload settings (gateway + SDK).
 //
 // It is the only file-facing schema; standalone projects onto the runtime
-// Config, gateway onto ClientConfig (client.go).
+// Config, gateway onto GatewayRuntimeConfig (gateway.go).
 type RoleConfig struct {
 	Runtime RuntimeConfig    `mapstructure:"runtime"`
 	Report  RoleReportConfig `mapstructure:"report"`
@@ -45,6 +45,22 @@ type RuntimeConfig struct {
 
 func (r RuntimeConfig) Dao() *dao.Config {
 	return &dao.Config{Mongo: r.Mongo, Store: r.Store}
+}
+
+// ApplyDefaults allocates child configs and lets them own their defaults.
+func (r *RuntimeConfig) ApplyDefaults() {
+	if r.Logging == nil {
+		r.Logging = &logging.Config{}
+	}
+	r.Logging.ApplyDefaults()
+	if r.Mongo == nil {
+		r.Mongo = &mongo.Config{}
+	}
+	r.Mongo.ApplyDefaults()
+	if r.Store == nil {
+		r.Store = &store.Config{}
+	}
+	r.Store.ApplyDefaults()
 }
 
 // RoleReportConfig is the reporting pipeline block for the standalone service.
@@ -93,10 +109,10 @@ func (r RoleConfig) ReportRuntime() Config {
 	}
 }
 
-// Client projects the unified config onto the ClientConfig consumed by the
-// gateway service (which drives the client SDK).
-func (r RoleConfig) Client() ClientConfig {
-	cc := ClientConfig{
+// GatewayRuntime projects the unified config onto the GatewayRuntimeConfig
+// consumed by the gateway role.
+func (r RoleConfig) GatewayRuntime() GatewayRuntimeConfig {
+	cc := GatewayRuntimeConfig{
 		Dao:     r.Runtime.Dao(),
 		Runtime: &r.Runtime,
 		StringUpload: StringUploadConfig{
@@ -110,7 +126,7 @@ func (r RoleConfig) Client() ClientConfig {
 			Filter:               r.Upload.File.Filter,
 			CheckpointCollection: r.Upload.File.CheckpointCollection,
 		},
-		Server: ServerConfig{Addr: r.Gateway.Addr},
+		Server: GatewayServerConfig{Addr: r.Gateway.Addr},
 	}
 	cc.applyDefaults()
 	return cc
@@ -156,46 +172,53 @@ func LoadStandalone(path string, flags *pflag.FlagSet) (RoleConfig, Config, erro
 }
 
 // LoadGateway loads the unified gateway-service config and projects it onto the
-// ClientConfig the HTTP server runs on.
-func LoadGateway(path string, flags *pflag.FlagSet) (RoleConfig, ClientConfig, error) {
+// GatewayRuntimeConfig the HTTP server runs on.
+func LoadGateway(path string, flags *pflag.FlagSet) (RoleConfig, GatewayRuntimeConfig, error) {
 	rc, err := loadRole(path, flags)
 	if err != nil {
-		return RoleConfig{}, ClientConfig{}, err
+		return RoleConfig{}, GatewayRuntimeConfig{}, err
 	}
-	return rc, rc.Client(), nil
+	return rc, rc.GatewayRuntime(), nil
 }
 
 // setRoleDefaults registers viper defaults for every unified key so AutomaticEnv
 // binding works and unset values are sane. Post-unmarshal, the projected
-// Config/ClientConfig run their own applyDefaults for final normalisation.
+// Config/GatewayRuntimeConfig run their own applyDefaults for final normalisation.
 func setRoleDefaults(v *viper.Viper) {
 	// runtime
-	v.SetDefault("runtime.logging.level", "info")
-	v.SetDefault("runtime.logging.format", "text")
+	v.SetDefault("runtime.logging.level", "")
+	v.SetDefault("runtime.logging.format", "")
 	v.SetDefault("runtime.mongo.uri", "")
-	v.SetDefault("runtime.mongo.connectTimeout", "10s")
-	v.SetDefault("runtime.mongo.serverSelectionTimeout", "30s")
-	v.SetDefault("runtime.store.maxElapsedTime", "10s")
+	v.SetDefault("runtime.mongo.connectTimeout", "0s")
+	v.SetDefault("runtime.mongo.serverSelectionTimeout", "0s")
+	v.SetDefault("runtime.store.maxElapsedTime", "0s")
 	// report
 	v.SetDefault("report.source.logPattern", []string{})
-	v.SetDefault("report.source.tailMode", tailer.TailModeHybrid)
-	v.SetDefault("report.source.rescanInterval", "30s")
-	v.SetDefault("report.source.pollInterval", "200ms")
-	v.SetDefault("report.source.maxLineBytes", 10*1024*1024)
-	v.SetDefault("report.pipeline.batchSize", 1000)
+	v.SetDefault("report.source.tailMode", "")
+	v.SetDefault("report.source.rescanInterval", "0s")
+	v.SetDefault("report.source.pollInterval", "0s")
+	v.SetDefault("report.source.maxLineBytes", 0)
+	v.SetDefault("report.pipeline.batchSize", 0)
 	v.SetDefault("report.pipeline.batchSizeMin", 0)
 	v.SetDefault("report.pipeline.batchSizeMax", 0)
-	v.SetDefault("report.pipeline.batchWorkers", 2)
-	v.SetDefault("report.pipeline.flushInterval", "1s")
+	v.SetDefault("report.pipeline.batchWorkers", 0)
+	v.SetDefault("report.pipeline.flushInterval", "0s")
 	v.SetDefault("report.pipeline.channelBuffer", 0)
-	v.SetDefault("report.pipeline.deadLetterCap", 128)
+	v.SetDefault("report.pipeline.deadLetterCap", 0)
 	v.SetDefault("report.filter.include", []string{})
 	v.SetDefault("report.filter.exclude", []string{})
 	// gateway
-	v.SetDefault("gateway.addr", DefaultServerAddr)
+	v.SetDefault("gateway.addr", "")
 	// upload
-	v.SetDefault("upload.string.batchSize", 1000)
+	v.SetDefault("upload.string.batchSize", 0)
 	v.SetDefault("upload.file.logPattern", []string{})
-	v.SetDefault("upload.file.maxLineBytes", 10*1024*1024)
-	v.SetDefault("upload.file.checkpointCollection", DefaultFileUploadCheckpointCollection)
+	v.SetDefault("upload.file.maxLineBytes", 0)
+	v.SetDefault("upload.file.pipeline.batchSize", 0)
+	v.SetDefault("upload.file.pipeline.batchSizeMin", 0)
+	v.SetDefault("upload.file.pipeline.batchSizeMax", 0)
+	v.SetDefault("upload.file.pipeline.batchWorkers", 0)
+	v.SetDefault("upload.file.pipeline.flushInterval", "0s")
+	v.SetDefault("upload.file.pipeline.channelBuffer", 0)
+	v.SetDefault("upload.file.pipeline.deadLetterCap", 0)
+	v.SetDefault("upload.file.checkpointCollection", "")
 }

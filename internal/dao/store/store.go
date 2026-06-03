@@ -22,6 +22,13 @@ type Config struct {
 	MaxElapsedTime time.Duration
 }
 
+// ApplyDefaults fills unset store options.
+func (c *Config) ApplyDefaults() {
+	if c.MaxElapsedTime <= 0 {
+		c.MaxElapsedTime = 10 * time.Second
+	}
+}
+
 // WriteStats holds cumulative retry statistics for bulk writes.
 type WriteStats struct {
 	Retries atomic.Int64 // total retry attempts across all bulk writes

@@ -9,3 +9,13 @@ type Config struct {
 	// Format selects the log encoding: "text" (default) or "json".
 	Format string `mapstructure:"format"`
 }
+
+// ApplyDefaults fills unset logging options.
+func (c *Config) ApplyDefaults() {
+	if c.Level == "" {
+		c.Level = "info"
+	}
+	if c.Format == "" {
+		c.Format = "text"
+	}
+}

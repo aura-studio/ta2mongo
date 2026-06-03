@@ -36,3 +36,19 @@ type Config struct {
 	// MaxLineBytes caps a single log line's length. Default 10485760 (10 MB).
 	MaxLineBytes int `mapstructure:"maxLineBytes"`
 }
+
+// ApplyDefaults fills unset tailer options.
+func (c *Config) ApplyDefaults() {
+	if c.RescanInterval <= 0 {
+		c.RescanInterval = 30 * time.Second
+	}
+	if c.TailMode == "" {
+		c.TailMode = TailModeHybrid
+	}
+	if c.PollInterval <= 0 {
+		c.PollInterval = 200 * time.Millisecond
+	}
+	if c.MaxLineBytes <= 0 {
+		c.MaxLineBytes = 10 * 1024 * 1024
+	}
+}

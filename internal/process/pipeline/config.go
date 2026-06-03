@@ -27,6 +27,28 @@ type Config struct {
 	DeadLetterCap int `mapstructure:"deadLetterCap"`
 }
 
+// ApplyDefaults fills unset pipeline options and clamps explicit batch bounds.
+func (c *Config) ApplyDefaults() {
+	if c.BatchSize <= 0 {
+		c.BatchSize = 1000
+	}
+	if c.BatchSizeMin > 0 && c.BatchSizeMin > c.BatchSize {
+		c.BatchSizeMin = c.BatchSize
+	}
+	if c.BatchSizeMax > 0 && c.BatchSizeMax < c.BatchSize {
+		c.BatchSizeMax = c.BatchSize
+	}
+	if c.BatchWorkers <= 0 {
+		c.BatchWorkers = 2
+	}
+	if c.FlushInterval <= 0 {
+		c.FlushInterval = time.Second
+	}
+	if c.DeadLetterCap <= 0 {
+		c.DeadLetterCap = 128
+	}
+}
+
 // MinBatchSize returns the adaptive lower bound for batch sizing. When
 // BatchSizeMin is explicitly set (>0) it is used directly (clamped to
 // BatchSize); when 0 it is auto-derived as BatchSize/4 (minimum 1).

@@ -2,8 +2,8 @@
 //
 // The single file-facing schema is RoleConfig (role.go): the unified
 // standalone/gateway config file. Its loaders project it onto the shared
-// runtime Config in this file (standalone) and onto ClientConfig (client.go,
-// the gateway runtime projection). The internal service packages
+// runtime Config in this file (standalone) and onto GatewayRuntimeConfig
+// (client.go, the gateway runtime projection). The internal service packages
 // (daemon/gateway) consume those. loader.go holds the shared YAML/JSON +
 // TANGO_* env + flag loading helpers.
 //
@@ -30,7 +30,7 @@ import (
 // the command that built the Config.
 const (
 	// ModeReport is the report service runtime: tail logs -> filter -> Mongo.
-	ModeReport = "report"
+	ModeReport = role.ModeReport
 )
 
 // Config is the top-level runtime configuration for the report pipeline. Each

@@ -10,9 +10,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	sdk "rocket-nano/tools/tango/client"
 	"rocket-nano/tools/tango/config"
 	"rocket-nano/tools/tango/internal/logging"
+	sdk "rocket-nano/tools/tango/internal/role/gateway/client"
 )
 
 // ConfigFlag reads the inherited --config persistent flag (empty when unset).
@@ -44,17 +44,17 @@ func ResolveConfigPath(flagVal string, candidates ...string) string {
 	return ""
 }
 
-// ClientLoader resolves and loads the ClientConfig a client-driven command runs
+// ClientLoader resolves and loads the GatewayRuntimeConfig a gateway-driven command runs
 // on. It also initializes the shared logger from the config's logging level.
-type ClientLoader func(cmd *cobra.Command) (config.ClientConfig, error)
+type ClientLoader func(cmd *cobra.Command) (config.GatewayRuntimeConfig, error)
 
 // GatewayConfig loads gateway.{yaml,yml,json} via the unified RoleConfig schema
 // and initializes the shared logger from its logging level.
-func GatewayConfig(cmd *cobra.Command) (config.ClientConfig, error) {
+func GatewayConfig(cmd *cobra.Command) (config.GatewayRuntimeConfig, error) {
 	path := ResolveConfigPath(ConfigFlag(cmd), "gateway.yaml", "gateway.yml", "gateway.json")
 	_, cc, err := config.LoadGateway(path, cmd.Flags())
 	if err != nil {
-		return config.ClientConfig{}, err
+		return config.GatewayRuntimeConfig{}, err
 	}
 	logging.Init(cc.Runtime.Logging.Level)
 	return cc, nil
@@ -62,7 +62,7 @@ func GatewayConfig(cmd *cobra.Command) (config.ClientConfig, error) {
 
 // BuildClient constructs a connected client from the config, layering the given
 // functional options on top of the config-derived connection settings.
-func BuildClient(cmd *cobra.Command, cc config.ClientConfig, extra ...sdk.Option) (*sdk.Client, error) {
+func BuildClient(cmd *cobra.Command, cc config.GatewayRuntimeConfig, extra ...sdk.Option) (*sdk.Client, error) {
 	opts := append([]sdk.Option{
 		sdk.WithURI(cc.Dao.Mongo.URI),
 		sdk.WithMaxElapsedTime(cc.Dao.Store.MaxElapsedTime),
@@ -72,10 +72,10 @@ func BuildClient(cmd *cobra.Command, cc config.ClientConfig, extra ...sdk.Option
 
 // ConnectClient loads the config via the given loader and returns a connected
 // client. It is the common path for commands that need a plain client.
-func ConnectClient(cmd *cobra.Command, load ClientLoader, extra ...sdk.Option) (config.ClientConfig, *sdk.Client, error) {
+func ConnectClient(cmd *cobra.Command, load ClientLoader, extra ...sdk.Option) (config.GatewayRuntimeConfig, *sdk.Client, error) {
 	cc, err := load(cmd)
 	if err != nil {
-		return config.ClientConfig{}, nil, err
+		return config.GatewayRuntimeConfig{}, nil, err
 	}
 	c, err := BuildClient(cmd, cc, extra...)
 	if err != nil {

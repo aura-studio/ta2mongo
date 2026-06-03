@@ -24,6 +24,16 @@ type Config struct {
 	ServerSelectionTimeout time.Duration `mapstructure:"serverSelectionTimeout"`
 }
 
+// ApplyDefaults fills unset MongoDB connection options.
+func (c *Config) ApplyDefaults() {
+	if c.ConnectTimeout <= 0 {
+		c.ConnectTimeout = 10 * time.Second
+	}
+	if c.ServerSelectionTimeout <= 0 {
+		c.ServerSelectionTimeout = 30 * time.Second
+	}
+}
+
 // MongoDBFromURI extracts the database name from a MongoDB URI path.
 // Examples:
 //   - mongodb://host:27017/tango => "tango"
