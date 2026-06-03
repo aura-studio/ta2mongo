@@ -198,8 +198,8 @@ parser:
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("Validate: %v", err)
 	}
-	if _, err := cfg.BuildParser(); err != nil {
-		t.Errorf("BuildParser: %v", err)
+	if _, err := cfg.Parser.Build(); err != nil {
+		t.Errorf("Parser.Build: %v", err)
 	}
 }
 

@@ -30,7 +30,7 @@ type Service struct {
 // New connects to MongoDB and creates a ready-to-run Service.
 // The caller must call Shutdown after Run returns to disconnect from MongoDB.
 func New(ctx context.Context, cfg config.Config) (*Service, error) {
-	src, err := cfg.BuildParser()
+	src, err := cfg.Parser.Build()
 	if err != nil {
 		return nil, fmt.Errorf("report: %w", err)
 	}
