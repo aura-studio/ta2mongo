@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync/atomic"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -25,54 +24,6 @@ import (
 
 // statsReportInterval is how often the report service logs processing statistics.
 const statsReportInterval = 60 * time.Second
-
-// runStats tracks processing metrics for the report service.
-type runStats struct {
-	totalLines     atomic.Int64
-	parsedOK       atomic.Int64
-	parseErrors    atomic.Int64
-	identityErrors atomic.Int64
-	userWrites     atomic.Int64
-	eventWrites    atomic.Int64
-	deadLetters    atomic.Int64
-	writeErrors    atomic.Int64
-	filtered       atomic.Int64
-	filterErrors   atomic.Int64
-}
-
-func (s *runStats) OnLine()          { s.totalLines.Add(1) }
-func (s *runStats) OnParseOK()       { s.parsedOK.Add(1) }
-func (s *runStats) OnParseError()    { s.parseErrors.Add(1) }
-func (s *runStats) OnIdentityError() { s.identityErrors.Add(1) }
-func (s *runStats) OnUserWrite()     { s.userWrites.Add(1) }
-func (s *runStats) OnEventWrite()    { s.eventWrites.Add(1) }
-func (s *runStats) OnDeadLetter()    { s.deadLetters.Add(1) }
-func (s *runStats) OnWriteError()    { s.writeErrors.Add(1) }
-func (s *runStats) OnFiltered()      { s.filtered.Add(1) }
-func (s *runStats) OnFilterError()   { s.filterErrors.Add(1) }
-
-// runSnapshot is a point-in-time copy of counter values used for reporting.
-type runSnapshot struct {
-	totalLines, parsedOK, parseErrors, identityErrors int64
-	userWrites, eventWrites, deadLetters, writeErrors int64
-	filtered, filterErrors                            int64
-}
-
-// snapshot returns the current counter values for reporting.
-func (s *runStats) snapshot() runSnapshot {
-	return runSnapshot{
-		totalLines:     s.totalLines.Load(),
-		parsedOK:       s.parsedOK.Load(),
-		parseErrors:    s.parseErrors.Load(),
-		identityErrors: s.identityErrors.Load(),
-		userWrites:     s.userWrites.Load(),
-		eventWrites:    s.eventWrites.Load(),
-		deadLetters:    s.deadLetters.Load(),
-		writeErrors:    s.writeErrors.Load(),
-		filtered:       s.filtered.Load(),
-		filterErrors:   s.filterErrors.Load(),
-	}
-}
 
 // Service is the main runtime that connects all components together.
 type Service struct {
@@ -139,7 +90,7 @@ func (d *Service) Run(ctx context.Context) error {
 	lineCh := t.Run(ctx)
 
 	// Create stats collector for periodic reporting.
-	stats := &runStats{}
+	stats := &ingestion.Counters{}
 	startTime := time.Now()
 
 	// Launch periodic stats reporter.
@@ -225,48 +176,48 @@ func (d *Service) syncRemoteConfig(ctx context.Context) {
 }
 
 // reportStats periodically logs processing statistics every statsReportInterval.
-func (d *Service) reportStats(ctx context.Context, stats *runStats, startTime time.Time, done chan<- struct{}) {
+func (d *Service) reportStats(ctx context.Context, stats *ingestion.Counters, startTime time.Time, done chan<- struct{}) {
 	defer close(done)
 
 	ticker := time.NewTicker(statsReportInterval)
 	defer ticker.Stop()
 
-	var prev runSnapshot
+	var prev ingestion.Snapshot
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			cur := stats.snapshot()
+			cur := stats.Snapshot()
 
 			uptime := time.Since(startTime).Round(time.Second)
 
 			d.logger.WithFields(logrus.Fields{
 				"uptime":                uptime,
-				"interval_lines":        cur.totalLines - prev.totalLines,
-				"interval_parsed_ok":    cur.parsedOK - prev.parsedOK,
-				"interval_parse_err":    cur.parseErrors - prev.parseErrors,
-				"interval_identity_err": cur.identityErrors - prev.identityErrors,
-				"interval_user_writes":  cur.userWrites - prev.userWrites,
-				"interval_event_writes": cur.eventWrites - prev.eventWrites,
-				"interval_dead_letters": cur.deadLetters - prev.deadLetters,
-				"interval_write_err":    cur.writeErrors - prev.writeErrors,
-				"interval_filtered":     cur.filtered - prev.filtered,
-				"interval_filter_err":   cur.filterErrors - prev.filterErrors,
+				"interval_lines":        cur.TotalLines - prev.TotalLines,
+				"interval_parsed_ok":    cur.ParsedOK - prev.ParsedOK,
+				"interval_parse_err":    cur.ParseErrors - prev.ParseErrors,
+				"interval_identity_err": cur.IdentityErrors - prev.IdentityErrors,
+				"interval_user_writes":  cur.UserWrites - prev.UserWrites,
+				"interval_event_writes": cur.EventWrites - prev.EventWrites,
+				"interval_dead_letters": cur.DeadLetters - prev.DeadLetters,
+				"interval_write_err":    cur.WriteErrors - prev.WriteErrors,
+				"interval_filtered":     cur.Filtered - prev.Filtered,
+				"interval_filter_err":   cur.FilterErrors - prev.FilterErrors,
 			}).Info("report: periodic stats (last 60s)")
 
 			d.logger.WithFields(logrus.Fields{
-				"total_lines":        cur.totalLines,
-				"total_parsed_ok":    cur.parsedOK,
-				"total_parse_err":    cur.parseErrors,
-				"total_identity_err": cur.identityErrors,
-				"total_user_writes":  cur.userWrites,
-				"total_event_writes": cur.eventWrites,
-				"total_dead_letters": cur.deadLetters,
-				"total_write_err":    cur.writeErrors,
-				"total_filtered":     cur.filtered,
-				"total_filter_err":   cur.filterErrors,
+				"total_lines":        cur.TotalLines,
+				"total_parsed_ok":    cur.ParsedOK,
+				"total_parse_err":    cur.ParseErrors,
+				"total_identity_err": cur.IdentityErrors,
+				"total_user_writes":  cur.UserWrites,
+				"total_event_writes": cur.EventWrites,
+				"total_dead_letters": cur.DeadLetters,
+				"total_write_err":    cur.WriteErrors,
+				"total_filtered":     cur.Filtered,
+				"total_filter_err":   cur.FilterErrors,
 			}).Info("report: cumulative stats")
 
 			prev = cur
@@ -275,32 +226,32 @@ func (d *Service) reportStats(ctx context.Context, stats *runStats, startTime ti
 }
 
 // logFinalStats logs a final summary when the daemon is shutting down.
-func (d *Service) logFinalStats(stats *runStats, startTime time.Time) {
-	cur := stats.snapshot()
+func (d *Service) logFinalStats(stats *ingestion.Counters, startTime time.Time) {
+	cur := stats.Snapshot()
 
 	duration := time.Since(startTime).Round(time.Second)
 
 	d.logger.Info("report: ========== shutdown summary ==========")
 	d.logger.WithFields(logrus.Fields{
-		"total_lines":        cur.totalLines,
-		"total_parsed_ok":    cur.parsedOK,
-		"total_parse_errors": cur.parseErrors,
-		"total_identity_err": cur.identityErrors,
-		"total_user_writes":  cur.userWrites,
-		"total_event_writes": cur.eventWrites,
-		"total_dead_letters": cur.deadLetters,
-		"total_write_errors": cur.writeErrors,
-		"total_filtered":     cur.filtered,
-		"total_filter_err":   cur.filterErrors,
+		"total_lines":        cur.TotalLines,
+		"total_parsed_ok":    cur.ParsedOK,
+		"total_parse_errors": cur.ParseErrors,
+		"total_identity_err": cur.IdentityErrors,
+		"total_user_writes":  cur.UserWrites,
+		"total_event_writes": cur.EventWrites,
+		"total_dead_letters": cur.DeadLetters,
+		"total_write_errors": cur.WriteErrors,
+		"total_filtered":     cur.Filtered,
+		"total_filter_err":   cur.FilterErrors,
 		"uptime":             duration,
 	}).Info("report: final stats")
 
-	if cur.totalLines > 0 && duration.Seconds() > 0 {
-		lps := float64(cur.totalLines) / duration.Seconds()
+	if cur.TotalLines > 0 && duration.Seconds() > 0 {
+		lps := float64(cur.TotalLines) / duration.Seconds()
 		d.logger.WithField("lines_per_second", fmt.Sprintf("%.1f", lps)).Info("report: average throughput")
 	}
 
-	if cur.parseErrors > 0 || cur.identityErrors > 0 || cur.writeErrors > 0 {
+	if cur.ParseErrors > 0 || cur.IdentityErrors > 0 || cur.WriteErrors > 0 {
 		d.logger.Warn("report: ========== SHUTDOWN WITH ERRORS ==========")
 	} else {
 		d.logger.Info("report: ========== SHUTDOWN COMPLETE ==========")

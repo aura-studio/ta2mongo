@@ -26,7 +26,7 @@ func (r *Runner) fetchAndIngestEventPage(ctx context.Context, taskID string, pag
 	go func() {
 		defer close(workerDone)
 		pipeline.RunWorkers(ctx, r.cfg, r.store, r.parser, r.filter, r.logger,
-			lineCh, &statsCollector{s: &r.stats},
+			lineCh, &r.stats,
 			ingestion.WriteOptions{ForceSkipExisting: r.cfg.Backfill.ForceSkip()})
 	}()
 
