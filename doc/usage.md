@@ -3,7 +3,7 @@
 tango 是单一二进制，按运行角色划分为两种模式：
 
 ```bash
-tango standalone                 # 常驻采集上报服务：追尾日志 → 写 MongoDB
+tango daemon                 # 常驻采集上报服务：追尾日志 → 写 MongoDB
 tango gateway                    # 常驻 HTTP gateway：暴露 ingest / upload 上报接口
 ```
 
@@ -16,14 +16,14 @@ tango gateway                    # 常驻 HTTP gateway：暴露 ingest / upload 
 
 | 角色命令 | 默认配置文件 | 文件 schema（统一 RoleConfig 的子集） |
 |---|---|---|
-| `tango standalone` | `standalone.{yaml,yml,json}` | runtime + report |
+| `tango daemon` | `daemon.{yaml,yml,json}` | runtime + report |
 | `tango gateway` | `gateway.{yaml,yml,json}` | runtime + gateway + upload |
 
-## Standalone Service
+## Daemon Service
 
 ```bash
-tango standalone --config standalone.yaml
-tango standalone --runtime.mongo.uri mongodb://localhost:27017/tango
+tango daemon --config daemon.yaml
+tango daemon --runtime.mongo.uri mongodb://localhost:27017/tango
 ```
 
 职责：

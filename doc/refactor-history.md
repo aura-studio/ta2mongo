@@ -1,56 +1,46 @@
-# tango 重构蒸馏（供其他会话加载）
+# tango 重构摘要
 
-本文蒸馏近期一轮结构性重构的**决策、重命名映射、约定与迁移注意**，方便后续会话快速建立上下文。
-当前架构权威说明见 [arch.md](arch.md)，配置字段见 [config.md](config.md)。
+本文记录当前这一轮结构重构后的约定，方便后续会话快速恢复上下文。当前架构以 [arch.md](arch.md) 和 [config.md](config.md) 为准。
 
-## 1. 核心约定（必须遵守）
+## 核心约定
 
-1. **根包整合子包**：领域用一个根包对外，子包是实现细节。
-   `dao`→{store,mongo}、`parser`→{talog,filter}、`process`→{single,batch,pipeline}、
-   `engine`→{daemon,gateway,cli,api}、`source`→{tailer,…}。
-2. **每模块自管配置**：配置体下沉到各模块并由领域根包聚合（`dao.Config`→`mongo.Config`+`store.Config`，`parser.Config`→filter 配置，另有 `tailer.Config`/`pipeline.Config`/`log.Config`），顶层 `config.Config`/`ClientConfig`/`RuntimeConfig` 用**指针字段**引用领域根包配置。叶子模块**不 import 顶层 `config`**（防环）。
-3. **`process` 是三种处理方式唯一对外入口**：`single`/`batch`/`pipeline` 不被外部直接 import；
-   engine 与 client SDK 只用 `process.NewIngester*` / `RunPipeline` / `Counters|Snapshot|WriteOptions`。
-4. **日志全局化**：统一 `internal/log` 包级函数；不要透传 `*logrus.Logger`；`log.Init(level)` 启动配置一次。
-5. **配置归属语义**：连接相关在 `mongo.Config`；bulk-write 重试预算 `MaxElapsedTime` 在 `store.Config`；二者由 `dao.Config` 聚合。
+1. 领域包由根包对外聚合，子包承载实现细节：
+   `dao` 聚合 `mongo`/`store`，`parser` 聚合 `filter`，`process` 聚合 `pipeline`，`role` 聚合 `api`/`cli`/`daemon`/`gateway`。
+2. 各模块的默认值由各自 `Config.ApplyDefaults` 承担，顶层 `config` 只负责装配、投影和校验，不集中维护子模块默认值。
+3. `process` 是处理层对外入口，`pipeline` 配置作为 `process.Config` 的成员使用。
+4. 日志包统一为 `internal/logging`，配置层级为 `runtime.logging`，字段和实际代码结构保持一致。
+5. `client` 逻辑已经下放到 `internal/role/gateway/client`，作为 gateway 角色的紧密逻辑使用。
 
-## 2. 重命名 / 迁移映射（旧 → 新）
+## 当前命名
 
-| 旧路径/标识 | 新路径/标识 |
-|---|---|
-| `internal/source`（talog+filter 整合包，pkg `source`，类型 `Source`） | `internal/parser`（pkg `parser`，类型 `Parser`） |
-| `internal/core/tailer` | `internal/source/tailer`（数据来源1） |
-| `internal/process/processor`（pkg `processor`） | `internal/process/single`（pkg `single`） |
-| `internal/process/ingest`（pkg `ingest`） | `internal/process/batch`（pkg `batch`） |
-| `internal/core/dynamicbatch` | 并入 `internal/process/pipeline/dynamicbatch.go`（pkg `pipeline`） |
-| `internal/service` | `internal/engine` |
-| `internal/service/report`（pkg `report`） | `internal/engine/daemon`（pkg `daemon`，类型仍叫 `Service`） |
-| `internal/service/gateway` | `internal/engine/gateway` |
-| —（新增） | `internal/engine/cli`、`internal/engine/api`（占位空包） |
-| —（新增） | `internal/process/process.go`（pkg `process` 门面） |
-| `config.MongoConfig`（含 MaxElapsedTime） | `dao.Config` 聚合 `mongo.Config`（去掉 MaxElapsedTime）+ `store.Config`（持 MaxElapsedTime） |
-| `config.FilterConfig` / `PipelineConfig` / `SourceConfig` / `LoggingConfig` | `parser.Config`（聚合 filter 配置）/ `pipeline.Config` / `tailer.Config` / `log.Config` |
-| `config.MongoDBFromURI` | `mongo.MongoDBFromURI` |
-| `config.Config` 的 `BatchSizeMin/Max/BatchChannelSize` 方法 | `pipeline.Config` 的 `MinBatchSize/MaxBatchSize/ChannelSize` |
-| `cli.NewLogger` | 移除；改用 `log.Init` |
-| client SDK `WithLogger` 选项 | 移除（client 也走全局 logger） |
+- 角色层目录：`internal/role`
+- daemon 角色：`internal/role/daemon`
+- gateway 角色：`internal/role/gateway`
+- gateway 配置：`config/gateway.go` / `GatewayRuntimeConfig`
+- 日志包：`internal/logging`
 
-## 3. 配置文件 schema 变更（破坏性）
+## 命令和角色
 
-- `runtime.mongo.maxElapsedTime` → **`runtime.store.maxElapsedTime`**。旧配置文件需改键名，
-  否则该值被静默忽略（回落默认 10s）。其余键不变。
+命令以 role 为标准对齐，保留四个角色入口：
 
-## 4. 关键设计点 / 易错点
+- `api`
+- `cli`
+- `daemon`
+- `gateway`
 
-- 顶层 `config.Config` 各段是**指针**；`applyDefaults`/`ClientConfig.applyDefaults` 会分配 nil 段
-  并填默认值。**手工构造** `config.Config`（如 client SDK、集成测试）时必须自行分配需要用到的段
-  （尤其 `Dao.Store` 与 `Parser.Filter`）。
-- `parser.Parser` 内嵌 `*talog.Parser`，字段名即 `Parser`：访问解析器是 `p.Parser`，过滤器是 `p.Filter()`。
-- `process.RunPipeline(ctx, cfg, *dao.Dao, *parser.Parser, lineCh, *Counters, WriteOptions)`：
-  内部解包 `dao.Store` / `parser.Parser` / `parser.Filter()` 交给 `pipeline.RunWorkers`。
-- `mongo` 包导入名与 mongo driver 冲突时用别名 `daomongo`（见 client、各集成测试）。
-- 依赖方向：`config` → 各模块 Config 类型；各模块 ↛ `config`（编译保证无环）。
+其中 `daemon` 和 `gateway` 已有运行逻辑；`api` 和 `cli` 当前作为预留入口。
 
-## 5. 验证
+## 配置约定
 
-`go build ./...`、`go vet ./...` 全绿；单元 + 本地 MongoDB 集成测试全过。
+- `runtime.mongo.maxElapsedTime` 已迁移为 `runtime.store.maxElapsedTime`。
+- `runtime.logging` 对应 `internal/logging.Config`。
+- `report.pipeline` 投影为 `process.Config.Pipeline`。
+- `role.mode` 由 role 配置承载，daemon 运行时使用 `daemon`。
+
+## 验证
+
+本轮结构调整后应至少运行：
+
+```powershell
+go test ./...
+```

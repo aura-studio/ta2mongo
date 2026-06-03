@@ -1,7 +1,7 @@
-// Package standalone implements the long-running report service, orchestrating the
+// Package daemon implements the long-running report service, orchestrating the
 // tango pipeline: file tailing -> line parsing -> batch accumulation ->
 // MongoDB bulk writes.
-package standalone
+package daemon
 
 import (
 	"context"

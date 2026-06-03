@@ -15,7 +15,7 @@ func writeFile(t *testing.T, name, content string) string {
 	return p
 }
 
-func TestLoadStandalone_Unified(t *testing.T) {
+func TestLoadDaemon_Unified(t *testing.T) {
 	yaml := `
 runtime:
   mongo:
@@ -26,12 +26,12 @@ report:
   filter:
     include: ['#type == "track"']
 `
-	rc, rt, err := LoadStandalone(writeFile(t, "standalone.yaml", yaml), nil)
+	rc, rt, err := LoadDaemon(writeFile(t, "daemon.yaml", yaml), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if rt.Dao.Mongo.URI != "mongodb://localhost/report" {
-		t.Errorf("LoadStandalone Mongo.URI = %q", rt.Dao.Mongo.URI)
+		t.Errorf("LoadDaemon Mongo.URI = %q", rt.Dao.Mongo.URI)
 	}
 	if len(rt.Parser.Filter.Include) != 1 || rt.Parser.Filter.Include[0] != `#type == "track"` {
 		t.Errorf("report.filter -> runtime Filter = %v", rt.Parser.Filter.Include)
@@ -41,7 +41,7 @@ report:
 	}
 }
 
-func TestLoadStandalone_TypedEnvOverrides(t *testing.T) {
+func TestLoadDaemon_TypedEnvOverrides(t *testing.T) {
 	// Environment variables arrive as strings; the role loader must coerce them
 	// into int fields (weak typing) as well as string / duration ones.
 	os.Setenv("TANGO_REPORT_PIPELINE_BATCHSIZE", "2500") // int
@@ -56,7 +56,7 @@ report:
   pipeline:
     batchSize: 1000
 `
-	_, rt, err := LoadStandalone(writeFile(t, "standalone.yaml", yaml), nil)
+	_, rt, err := LoadDaemon(writeFile(t, "daemon.yaml", yaml), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,10 +65,10 @@ report:
 	}
 }
 
-func TestLoadStandalone_RequiresLogPattern(t *testing.T) {
+func TestLoadDaemon_RequiresLogPattern(t *testing.T) {
 	yaml := "runtime:\n  mongo:\n    uri: \"mongodb://localhost/report\"\n"
-	if _, _, err := LoadStandalone(writeFile(t, "standalone.yaml", yaml), nil); err == nil {
-		t.Fatal("expected error: standalone without logPattern")
+	if _, _, err := LoadDaemon(writeFile(t, "daemon.yaml", yaml), nil); err == nil {
+		t.Fatal("expected error: daemon without logPattern")
 	}
 }
 
@@ -106,16 +106,16 @@ upload:
 // TestExampleRoleConfigsLoad ensures every shipped role example (max + min, in
 // both YAML and JSON) parses and validates under its loader.
 func TestExampleRoleConfigsLoad(t *testing.T) {
-	standalone := []string{
-		"../examples/config/standalone/standalone.max.yaml",
-		"../examples/config/standalone/standalone.min.yaml",
-		"../examples/config/standalone/standalone.max.json",
-		"../examples/config/standalone/standalone.min.json",
+	daemon := []string{
+		"../examples/config/daemon/daemon.max.yaml",
+		"../examples/config/daemon/daemon.min.yaml",
+		"../examples/config/daemon/daemon.max.json",
+		"../examples/config/daemon/daemon.min.json",
 	}
-	for _, p := range standalone {
+	for _, p := range daemon {
 		t.Run(p, func(t *testing.T) {
-			if _, _, err := LoadStandalone(p, nil); err != nil {
-				t.Fatalf("LoadStandalone(%s): %v", p, err)
+			if _, _, err := LoadDaemon(p, nil); err != nil {
+				t.Fatalf("LoadDaemon(%s): %v", p, err)
 			}
 		})
 	}

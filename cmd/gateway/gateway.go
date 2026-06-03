@@ -6,7 +6,7 @@ package gateway
 import (
 	"github.com/spf13/cobra"
 
-	"rocket-nano/tools/tango/cmd/shared"
+	"rocket-nano/tools/tango/internal/cmdshared"
 	"rocket-nano/tools/tango/internal/role/gateway"
 )
 
@@ -18,7 +18,7 @@ func NewCommand() *cobra.Command {
 		Use:   "gateway",
 		Short: "HTTP gateway exposing the ingest and upload log-reporting APIs",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cc, cli, err := shared.ConnectClient(cmd, shared.GatewayConfig)
+			cc, cli, err := cmdshared.ConnectClient(cmd, cmdshared.GatewayConfig)
 			if err != nil {
 				return err
 			}

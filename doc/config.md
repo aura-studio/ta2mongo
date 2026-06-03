@@ -4,14 +4,14 @@
 [usage.md](usage.md)，设计与数据流见 [arch.md](arch.md)。完整可运行样例见
 [examples/config](../examples/config)。
 
-两个角色命令（standalone / gateway）共用**统一 RoleConfig schema**，每个角色只取
+两个角色命令（daemon / gateway）共用**统一 RoleConfig schema**，每个角色只取
 自己需要的段。
 
 ## 配置文件与角色命令
 
 | 角色 | 命令 | RoleConfig 子集 | `--config` 留空时默认读取 |
 |------|--------|--------|------|
-| standalone service | `tango standalone` | `runtime` + `report` | `standalone.{yaml,yml,json}` |
+| Daemon Service | `tango daemon` | `runtime` + `report` | `daemon.{yaml,yml,json}` |
 | gateway service | `tango gateway` | `runtime` + `gateway` + `upload` | `gateway.{yaml,yml,json}` |
 
 默认文件在**二进制同级目录**按 `yaml → yml → json` 取首个存在者；各命令只读自己的
@@ -54,7 +54,7 @@
 
 > 内部说明：文件 schema 仍保持 `runtime.mongo.*` 和 `runtime.store.*`；加载后会投影到 `dao.Config`。`report.filter.*` / `upload.*.filter.*` 会投影到 `parser.Config`。
 
-### report（standalone service）
+### report（Daemon Service）
 
 | 键 | required/optional | 默认 | 说明 |
 |----|----|----|----|
@@ -91,7 +91,7 @@
 | `upload.file.filter.{include,exclude}` | optional | `[]` | 文件上报的上报 filter |
 | `upload.file.checkpointCollection` | optional | `_tango_fileupload` | 断点续传偏移集合 |
 
-完整样例：[standalone](../examples/config/standalone/standalone.max.yaml)、
+完整样例：[daemon](../examples/config/daemon/daemon.max.yaml)、
 [gateway](../examples/config/gateway/gateway.max.yaml)。
 
 ---

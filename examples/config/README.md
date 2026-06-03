@@ -1,7 +1,7 @@
 # tango 配置样例
 
 tango 是**单一二进制**（用法见 [../../doc/usage.md](../../doc/usage.md)，字段参考见
-[../../doc/config.md](../../doc/config.md)）。命令按**运行角色**划分：standalone /
+[../../doc/config.md](../../doc/config.md)）。命令按**运行角色**划分：daemon /
 gateway 两种模式。两者共用同一套统一 RoleConfig schema：顶层分为 `runtime`
 （logging + mongo，进程级共享）、`report`、`gateway`、`upload` 等段，每个角色只取
 自己需要的段。
@@ -11,30 +11,30 @@ gateway 两种模式。两者共用同一套统一 RoleConfig schema：顶层分
 
 | 角色 | 命令 | 目录 | 默认配置名（二进制同级） | 主要配置段 |
 |------|--------|------|------|------|
-| standalone | `tango standalone` | [standalone/](standalone/) | `standalone.{yaml,yml,json}` | runtime · report |
+| daemon | `tango daemon` | [daemon/](daemon/) | `daemon.{yaml,yml,json}` | runtime · report |
 | gateway    | `tango gateway`    | [gateway/](gateway/)       | `gateway.{yaml,yml,json}`    | runtime · gateway · upload |
 
 ## 运行
 
 ```bash
 # 用脚本（内部 go run . <role> ...，默认读取同目录 <role>.max.yaml）：
-examples/config/standalone/start.sh
+examples/config/daemon/start.sh
 examples/config/gateway/start.sh --addr :8080
 
 # 或手动指定配置（max 全量 / min 最小皆可）：
-tango standalone --config examples/config/standalone/standalone.max.yaml
+tango daemon --config examples/config/daemon/daemon.max.yaml
 tango gateway    --config examples/config/gateway/gateway.max.yaml --addr :8080
 
 # 留空 --config 时，角色命令自动读取二进制同级目录的 <role>.{yaml,yml,json}。
 # flag 名即配置键（viper 原生层级）：
-tango standalone --runtime.mongo.uri mongodb://host/db
+tango daemon --runtime.mongo.uri mongodb://host/db
 # 环境变量同理用原始层级（runtime.mongo.uri → TANGO_RUNTIME_MONGO_URI）：
-TANGO_RUNTIME_MONGO_URI=mongodb://user:pass@host/db examples/config/standalone/start.sh
+TANGO_RUNTIME_MONGO_URI=mongodb://user:pass@host/db examples/config/daemon/start.sh
 ```
 
 ## required 字段速查
 
 | 角色 | required 字段 |
 |------|------|
-| standalone | `runtime.mongo.uri`、`report.source.logPattern` |
+| daemon | `runtime.mongo.uri`、`report.source.logPattern` |
 | gateway    | `runtime.mongo.uri` |

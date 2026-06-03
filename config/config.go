@@ -1,9 +1,9 @@
 // Package config defines tango's configuration.
 //
 // The single file-facing schema is RoleConfig (role.go): the unified
-// standalone/gateway config file. Its loaders project it onto the shared
-// runtime Config in this file (standalone) and onto GatewayRuntimeConfig
-// (client.go, the gateway runtime projection). The internal service packages
+// daemon/gateway config file. Its loaders project it onto the shared
+// runtime Config in this file (daemon) and onto GatewayRuntimeConfig
+// (gateway.go, the gateway runtime projection). The internal service packages
 // (daemon/gateway) consume those. loader.go holds the shared YAML/JSON +
 // TANGO_* env + flag loading helpers.
 //
@@ -29,8 +29,8 @@ import (
 // runtime distinction consumed only by Validate; the role loaders set it from
 // the command that built the Config.
 const (
-	// ModeReport is the report service runtime: tail logs -> filter -> Mongo.
-	ModeReport = role.ModeReport
+	// ModeDaemon is the daemon service runtime: tail logs -> filter -> Mongo.
+	ModeDaemon = role.ModeDaemon
 )
 
 // Config is the top-level runtime configuration for the report pipeline. Each
@@ -58,12 +58,12 @@ type Config struct {
 // Validate checks that required fields are present. It assumes applyDefaults has
 // run (so the section pointers are non-nil) but still guards them defensively.
 func (c *Config) Validate() error {
-	if c.Role == nil || c.Role.Mode != ModeReport {
+	if c.Role == nil || c.Role.Mode != ModeDaemon {
 		got := ""
 		if c.Role != nil {
 			got = c.Role.Mode
 		}
-		return fmt.Errorf("config: role.mode must be %q; got %q", ModeReport, got)
+		return fmt.Errorf("config: role.mode must be %q; got %q", ModeDaemon, got)
 	}
 	if c.Dao == nil || c.Dao.Mongo == nil || c.Dao.Mongo.URI == "" {
 		return fmt.Errorf("config: mongo.uri is required (set runtime.mongo.uri in the config file, via TANGO_RUNTIME_MONGO_URI, or via --runtime.mongo.uri)")

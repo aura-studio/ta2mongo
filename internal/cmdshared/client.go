@@ -1,8 +1,8 @@
-// Package shared holds the glue used by the role command packages (standalone,
+// Package cmdshared holds the glue used by the role command packages (daemon,
 // gateway): config-file resolution, client construction, and the long-running
-// standalone service runner. The cmd packages stay thin by delegating; argument
+// daemon service runner. The cmd packages stay thin by delegating; argument
 // parsing aside, all wiring lives here.
-package shared
+package cmdshared
 
 import (
 	"os"

@@ -18,21 +18,21 @@ import (
 )
 
 // RoleConfig is the unified, role-oriented config file schema. One schema backs
-// every role-named config file — standalone.yaml, gateway.yaml — and each role
+// every role-named config file — daemon.yaml, gateway.yaml — and each role
 // loader projects the sections it needs onto the internal runtime Config /
 // GatewayRuntimeConfig. Sections:
 //
 //   - runtime: process-wide logging + MongoDB connection + store (every role).
-//   - report:  the reporting pipeline (standalone service).
+//   - report:  the reporting pipeline (daemon service).
 //   - gateway: the HTTP gateway listen address (gateway service).
 //   - upload:  string + file upload settings (gateway + SDK).
 //
-// It is the only file-facing schema; standalone projects onto the runtime
+// It is the only file-facing schema; daemon projects onto the runtime
 // Config, gateway onto GatewayRuntimeConfig (gateway.go).
 type RoleConfig struct {
-	Runtime RuntimeConfig    `mapstructure:"runtime"`
-	Report  RoleReportConfig `mapstructure:"report"`
 	Gateway GatewayConfig    `mapstructure:"gateway"`
+	Report  RoleReportConfig `mapstructure:"report"`
+	Runtime RuntimeConfig    `mapstructure:"runtime"`
 	Upload  UploadConfig     `mapstructure:"upload"`
 }
 
@@ -63,11 +63,11 @@ func (r *RuntimeConfig) ApplyDefaults() {
 	r.Store.ApplyDefaults()
 }
 
-// RoleReportConfig is the reporting pipeline block for the standalone service.
+// RoleReportConfig is the reporting pipeline block for the daemon service.
 type RoleReportConfig struct {
-	Source   *tailer.Config   `mapstructure:"source"`
-	Pipeline *pipeline.Config `mapstructure:"pipeline"`
 	Filter   *filter.Config   `mapstructure:"filter"`
+	Pipeline *pipeline.Config `mapstructure:"pipeline"`
+	Source   *tailer.Config   `mapstructure:"source"`
 }
 
 // GatewayConfig is the HTTP gateway block.
@@ -77,8 +77,8 @@ type GatewayConfig struct {
 
 // UploadConfig groups the string + file upload settings.
 type UploadConfig struct {
-	String UploadStringConfig `mapstructure:"string"`
 	File   UploadFileConfig   `mapstructure:"file"`
+	String UploadStringConfig `mapstructure:"string"`
 }
 
 // UploadStringConfig configures single-string ingest (no retransmission).
@@ -89,21 +89,21 @@ type UploadStringConfig struct {
 
 // UploadFileConfig configures file ingest with resume (retransmission).
 type UploadFileConfig struct {
+	CheckpointCollection string           `mapstructure:"checkpointCollection"`
+	Filter               *filter.Config   `mapstructure:"filter"`
 	LogPattern           []string         `mapstructure:"logPattern"`
 	MaxLineBytes         int              `mapstructure:"maxLineBytes"`
 	Pipeline             *pipeline.Config `mapstructure:"pipeline"`
-	Filter               *filter.Config   `mapstructure:"filter"`
-	CheckpointCollection string           `mapstructure:"checkpointCollection"`
 }
 
-// ReportRuntime projects the unified config onto the runtime Config consumed by
-// the standalone report service.
-func (r RoleConfig) ReportRuntime() Config {
+// DaemonRuntime projects the unified config onto the runtime Config consumed by
+// the daemon report service.
+func (r RoleConfig) DaemonRuntime() Config {
 	return Config{
 		Dao:     r.Runtime.Dao(),
 		Parser:  parserConfigFromFilter(r.Report.Filter),
 		Process: &process.Config{Pipeline: r.Report.Pipeline},
-		Role:    &role.Config{Mode: ModeReport},
+		Role:    &role.Config{Mode: ModeDaemon},
 		Runtime: &r.Runtime,
 		Source:  r.Report.Source,
 	}
@@ -152,14 +152,14 @@ func loadRole(path string, flags *pflag.FlagSet) (RoleConfig, error) {
 	return rc, nil
 }
 
-// LoadStandalone loads the unified standalone-service config (runtime + report)
-// from a standalone.yaml-style file (+ env + flags).
-func LoadStandalone(path string, flags *pflag.FlagSet) (RoleConfig, Config, error) {
+// LoadDaemon loads the unified daemon-service config (runtime + report)
+// from a daemon.yaml-style file (+ env + flags).
+func LoadDaemon(path string, flags *pflag.FlagSet) (RoleConfig, Config, error) {
 	rc, err := loadRole(path, flags)
 	if err != nil {
 		return RoleConfig{}, Config{}, err
 	}
-	rt := rc.ReportRuntime()
+	rt := rc.DaemonRuntime()
 	applyDefaults(&rt)
 
 	if err := rt.Validate(); err != nil {

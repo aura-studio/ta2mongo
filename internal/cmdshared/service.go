@@ -1,4 +1,4 @@
-package shared
+package cmdshared
 
 import (
 	"context"
@@ -13,13 +13,13 @@ import (
 
 	"rocket-nano/tools/tango/config"
 	"rocket-nano/tools/tango/internal/logging"
-	"rocket-nano/tools/tango/internal/role/standalone"
+	"rocket-nano/tools/tango/internal/role/daemon"
 )
 
-// RunStandaloneService loads the standalone config from path and runs the
+// RunDaemonService loads the daemon config from path and runs the
 // report service (tail TA logs -> filter -> MongoDB).
-func RunStandaloneService(cmd *cobra.Command, path string) error {
-	_, rt, err := config.LoadStandalone(path, cmd.Flags())
+func RunDaemonService(cmd *cobra.Command, path string) error {
+	_, rt, err := config.LoadDaemon(path, cmd.Flags())
 	if err != nil {
 		return err
 	}
@@ -31,27 +31,27 @@ func RunStandaloneService(cmd *cobra.Command, path string) error {
 		"pid":       os.Getpid(),
 		"go_procs":  runtime.GOMAXPROCS(0),
 		"mongo_uri": MaskURI(rt.Dao.Mongo.URI),
-		"role":      "standalone",
-	}).Info("tango standalone: starting")
+		"role":      "daemon",
+	}).Info("tango daemon: starting")
 
 	return runReport(ctx, rt)
 }
 
 // runReport runs the reporting pipeline and blocks until ctx is cancelled.
 func runReport(ctx context.Context, rt config.Config) error {
-	svc, err := standalone.New(ctx, rt)
+	svc, err := daemon.New(ctx, rt)
 	if err != nil {
-		logging.WithError(err).Error("tango standalone: init failed")
+		logging.WithError(err).Error("tango daemon: init failed")
 		return err
 	}
 	defer func() {
 		if err := svc.Shutdown(); err != nil {
-			logging.WithError(err).Error("tango standalone: shutdown error")
+			logging.WithError(err).Error("tango daemon: shutdown error")
 		}
 	}()
 
 	if err := svc.EnsureIndexes(ctx); err != nil {
-		logging.WithError(err).Error("tango standalone: ensure indexes failed")
+		logging.WithError(err).Error("tango daemon: ensure indexes failed")
 		return err
 	}
 

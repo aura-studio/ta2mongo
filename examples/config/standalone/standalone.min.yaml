@@ -1,9 +1,0 @@
-# standalone.min.yaml — `tango standalone` 最精简配置：只含 required 字段。
-# 其余字段全部走默认值（详见同目录 standalone.max.yaml 的逐字段说明）。
-runtime:
-  mongo:
-    uri: mongodb://localhost:27017/tango   # [required]
-report:
-  source:
-    logPattern:                            # [required]
-      - '/var/log/ta/.*\.log'

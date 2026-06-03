@@ -1,8 +1,8 @@
-# standalone.max.yaml — `tango standalone` 全量配置（含每个字段说明）。
+﻿# daemon.max.yaml — `tango daemon` 全量配置（含每个字段说明）。
 #
-# 启动：tango standalone --config standalone.max.yaml
+# 启动：tango daemon --config daemon.max.yaml
 #
-# standalone = 常驻上报服务：追尾日志 → 解析 → 上报 filter → identity → 写入 MongoDB。
+# daemon = 常驻上报服务：追尾日志 → 解析 → 上报 filter → identity → 写入 MongoDB。
 #
 # 标注：[required] 无默认值必须提供；[optional] 省略即走默认值（括号内为默认值）。
 # 所有键也可用 TANGO_* 环境变量覆盖（嵌套键 . → _，如 runtime.mongo.uri → TANGO_RUNTIME_MONGO_URI）；
