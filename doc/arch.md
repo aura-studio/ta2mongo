@@ -82,7 +82,7 @@ process -> single/batch/pipeline + dao + parser + config
 parser  -> talog + filter
 dao     -> store + mongo
 config  -> 各领域根包/模块的 Config 类型（dao/parser/tailer/pipeline/logging）+ gateway（GatewayRuntimeConfig）
-gateway -> dao + logging + parser + pipeline + client
+gateway -> dao + logging + parser + pipeline + tailer
 各叶子模块 ↛ config
 ```
 
@@ -165,9 +165,9 @@ gateway -> dao + logging + parser + pipeline + client
 |---|---|
 | `role/daemon/report.go` | `daemon.Service`：tailer → `process.RunPipeline` → MongoDB；周期/最终统计日志 |
 | `role/gateway/config.go` | `GatewayRuntimeConfig`（gateway 运行时投影）+ `StringUploadConfig`/`FileUploadConfig`/`GatewayServerConfig` + `ApplyDefaults` |
-| `role/gateway/server.go` | gateway HTTP `Server`：`/healthz` `/ingest` `/upload`（转 SDK 调用） |
-| `role/gateway/client/client.go` | Go SDK client：连接池管理、`Ingest`/`IngestBatch`/`EnsureIndexes` |
-| `role/gateway/client/upload.go` | 文件上传（断点续传）+ `DefaultFileUploadCheckpointCollection` |
+| `role/gateway/server.go` | gateway HTTP `Server`：`/healthz` `/ingest` `/upload`（转 SDK 调用）；`NewServer` 构造函数 |
+| `role/gateway/client.go` | Go SDK client：连接池管理、`New`/`Ingest`/`IngestBatch`/`EnsureIndexes`/`Ping`/`Stats` |
+| `role/gateway/upload.go` | 文件上传（断点续传）+ `DefaultFileUploadCheckpointCollection` |
 | `role/cli/cli.go` | 命令行模式占位（空包） |
 | `role/api/api.go` | API 模式占位（空包） |
 

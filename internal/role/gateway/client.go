@@ -1,11 +1,12 @@
-// Package client provides a Redis-client-style API for writing ThinkingData
-// records to MongoDB. It manages connection pooling internally and exposes
-// simple, synchronous methods for ingesting JSON log lines.
+// Package gateway provides an HTTP gateway server and a Redis-client-style API
+// for writing ThinkingData records to MongoDB. The client manages connection
+// pooling internally and exposes simple, synchronous methods for ingesting
+// JSON log lines.
 //
 // Usage is similar to a Redis or database client library:
 //
-//	cli, err := client.New(ctx,
-//	    client.WithURI("mongodb://localhost:27017/tango"),
+//	cli, err := gateway.New(ctx,
+//	    gateway.WithURI("mongodb://localhost:27017/tango"),
 //	)
 //	if err != nil { ... }
 //	defer cli.Close()
@@ -18,7 +19,7 @@
 //
 // The Client is safe for concurrent use from multiple goroutines.
 // The underlying MongoDB driver manages a connection pool automatically.
-package client
+package gateway
 
 import (
 	"context"
@@ -103,9 +104,9 @@ New creates a Client, connecting to MongoDB and initializing the connection pool
 
 Example:
 
-	cli, err := client.New(ctx,
-	    client.WithURI("mongodb://localhost:27017/tango"),
-	    client.WithBatchSize(1000),
+	cli, err := gateway.New(ctx,
+	    gateway.WithURI("mongodb://localhost:27017/tango"),
+	    gateway.WithBatchSize(1000),
 	)
 
 The caller must call Close when done.
@@ -119,7 +120,7 @@ func New(ctx context.Context, optFns ...Option) (*Client, error) {
 	}
 
 	if opts.URI == "" {
-		return nil, fmt.Errorf("client: URI is required")
+		return nil, fmt.Errorf("gateway: URI is required")
 	}
 	opts.defaults()
 
@@ -131,7 +132,7 @@ func New(ctx context.Context, optFns ...Option) (*Client, error) {
 
 	ig, err := process.NewIngester(ctx, daoCfg, parserCfg)
 	if err != nil {
-		return nil, fmt.Errorf("client: %w", err)
+		return nil, fmt.Errorf("gateway: %w", err)
 	}
 
 	return &Client{

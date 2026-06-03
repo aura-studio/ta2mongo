@@ -1,4 +1,4 @@
-package client
+package gateway
 
 import (
 	"bufio"
@@ -55,7 +55,7 @@ type fileCheckpoint struct {
 // re-sends only the lines that were never confirmed.
 func (c *Client) UploadFiles(ctx context.Context, req UploadRequest) (UploadResult, error) {
 	if len(req.Patterns) == 0 {
-		return UploadResult{}, fmt.Errorf("client: UploadFiles: at least one pattern is required")
+		return UploadResult{}, fmt.Errorf("gateway: UploadFiles: at least one pattern is required")
 	}
 	batchSize := req.BatchSize
 	if batchSize <= 0 {
@@ -73,7 +73,7 @@ func (c *Client) UploadFiles(ctx context.Context, req UploadRequest) (UploadResu
 	for _, path := range files {
 		n, resumed, err := c.uploadOneFile(ctx, ckpt, path, batchSize)
 		if err != nil {
-			return res, fmt.Errorf("client: upload %q: %w", path, err)
+			return res, fmt.Errorf("gateway: upload %q: %w", path, err)
 		}
 		res.Lines += n
 		res.ResumedFrom += resumed

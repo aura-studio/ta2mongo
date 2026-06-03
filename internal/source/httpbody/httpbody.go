@@ -1,0 +1,44 @@
+// Package httpbody wraps HTTP request body data as a source of log lines.
+// It accepts pre-parsed lines (single string or batch) and emits them via a
+// channel, matching the source.Source contract used by the processing pipeline.
+//
+// Usage:
+//
+//	src := httpbody.New(lines)
+//	ch := src.Run(ctx)
+//	process.RunPipeline(ctx, pipelineCfg, dao, parser, ch, stats, opts)
+package httpbody
+
+import "context"
+
+// Source wraps pre-parsed HTTP request body lines as a line source.
+type Source struct {
+	lines []string
+}
+
+// New creates a Source from a slice of log lines. Empty lines are skipped
+// during emission. A nil or empty slice produces a source that immediately
+// closes its output channel (no lines emitted).
+func New(lines []string) *Source {
+	return &Source{lines: lines}
+}
+
+// Run sends all non-empty lines to the returned channel, then closes it.
+// It respects ctx cancellation.
+func (s *Source) Run(ctx context.Context) <-chan string {
+	out := make(chan string, len(s.lines)+1)
+	go func() {
+		defer close(out)
+		for _, line := range s.lines {
+			if line == "" {
+				continue
+			}
+			select {
+			case out <- line:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out
+}

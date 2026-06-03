@@ -12,7 +12,6 @@ import (
 	"rocket-nano/tools/tango/config"
 	"rocket-nano/tools/tango/internal/logging"
 	"rocket-nano/tools/tango/internal/role/gateway"
-	sdk "rocket-nano/tools/tango/internal/role/gateway/client"
 )
 
 // NewCommand builds the `tango gateway` command. It loads the unified gateway
@@ -34,7 +33,7 @@ func NewCommand() *cobra.Command {
 			if addr == "" {
 				addr = cc.Server.Addr
 			}
-			return gateway.New(cc, cli).Run(cmd.Context(), addr)
+			return gateway.NewServer(cc, cli).Run(cmd.Context(), addr)
 		},
 	}
 	cmd.Flags().String("runtime.mongo.uri", "", "MongoDB connection URI (config key runtime.mongo.uri)")
@@ -88,17 +87,17 @@ func gatewayConfig(cmd *cobra.Command) (gateway.GatewayRuntimeConfig, error) {
 
 // buildClient constructs a connected client from the config, layering the given
 // functional options on top of the config-derived connection settings.
-func buildClient(cmd *cobra.Command, cc gateway.GatewayRuntimeConfig, extra ...sdk.Option) (*sdk.Client, error) {
-	opts := append([]sdk.Option{
-		sdk.WithURI(cc.Dao.Mongo.URI),
-		sdk.WithMaxElapsedTime(cc.Dao.Store.MaxElapsedTime),
+func buildClient(cmd *cobra.Command, cc gateway.GatewayRuntimeConfig, extra ...gateway.Option) (*gateway.Client, error) {
+	opts := append([]gateway.Option{
+		gateway.WithURI(cc.Dao.Mongo.URI),
+		gateway.WithMaxElapsedTime(cc.Dao.Store.MaxElapsedTime),
 	}, extra...)
-	return sdk.New(cmd.Context(), opts...)
+	return gateway.New(cmd.Context(), opts...)
 }
 
 // connectClient loads the config via the given loader and returns a connected
 // client. It is the common path for commands that need a plain client.
-func connectClient(cmd *cobra.Command, load clientLoader, extra ...sdk.Option) (gateway.GatewayRuntimeConfig, *sdk.Client, error) {
+func connectClient(cmd *cobra.Command, load clientLoader, extra ...gateway.Option) (gateway.GatewayRuntimeConfig, *gateway.Client, error) {
 	cc, err := load(cmd)
 	if err != nil {
 		return gateway.GatewayRuntimeConfig{}, nil, err

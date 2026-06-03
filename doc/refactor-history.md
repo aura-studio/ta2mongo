@@ -9,9 +9,9 @@
 2. 各模块的默认值由各自 `Config.ApplyDefaults` 承担，顶层 `config` 只负责装配、投影和校验，不集中维护子模块默认值。
 3. `process` 是处理层对外入口，`pipeline` 配置作为 `process.Config` 的成员使用。
 4. 日志包统一为 `internal/logging`，配置层级为 `runtime.logging`，字段和实际代码结构保持一致。
-5. `client` 逻辑已经下放到 `internal/role/gateway/client`，作为 gateway 角色的紧密逻辑使用。
+5. `client` 逻辑已合并到 `internal/role/gateway/`（原为独立子包 `gateway/client/`，无外部消费者，不必要保持分离）。
 6. **配置与逻辑层级对齐**：网关相关配置（`GatewayRuntimeConfig` 及子类型）归属于 `internal/role/gateway/`，
-   不放在顶层 `config/` 中。`config/gateway.go` 已删除；`DefaultFileUploadCheckpointCollection` 归属于 `client/upload.go`。
+   不放在顶层 `config/` 中。`config/gateway.go` 已删除。
 7. **cmd 层独立调用**：`cmd/` 下各入口不引用共享胶水包。`internal/cmdshared/` 已删除，逻辑内联到 `cmd/daemon/daemon.go` 和 `cmd/gateway/gateway.go`。
 
 ## 当前命名

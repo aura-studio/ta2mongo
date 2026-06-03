@@ -1,4 +1,4 @@
-package client
+package gateway
 
 import (
 	"context"

@@ -9,15 +9,14 @@ import (
 	"time"
 
 	"rocket-nano/tools/tango/internal/logging"
-	sdk "rocket-nano/tools/tango/internal/role/gateway/client"
 )
 
 type Server struct {
 	cc  GatewayRuntimeConfig
-	cli *sdk.Client
+	cli *Client
 }
 
-func New(cc GatewayRuntimeConfig, cli *sdk.Client) *Server {
+func NewServer(cc GatewayRuntimeConfig, cli *Client) *Server {
 	return &Server{cc: cc, cli: cli}
 }
 
@@ -105,7 +104,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	if req.BatchSize == 0 {
 		req.BatchSize = s.cc.FileUpload.Pipeline.BatchSize
 	}
-	res, err := s.cli.UploadFiles(r.Context(), sdk.UploadRequest{
+	res, err := s.cli.UploadFiles(r.Context(), UploadRequest{
 		Patterns:             req.Patterns,
 		BatchSize:            req.BatchSize,
 		CheckpointCollection: s.cc.FileUpload.CheckpointCollection,

@@ -5,10 +5,8 @@ package gateway
 import (
 	"rocket-nano/tools/tango/internal/dao"
 	"rocket-nano/tools/tango/internal/logging"
-	"rocket-nano/tools/tango/internal/parser"
 	"rocket-nano/tools/tango/internal/parser/filter"
 	"rocket-nano/tools/tango/internal/process/pipeline"
-	sdk "rocket-nano/tools/tango/internal/role/gateway/client"
 )
 
 // GatewayRuntimeConfig is the runtime configuration the gateway role consumes.
@@ -84,7 +82,7 @@ func (c *FileUploadConfig) ApplyDefaults() {
 		c.MaxLineBytes = 10 * 1024 * 1024
 	}
 	if c.CheckpointCollection == "" {
-		c.CheckpointCollection = sdk.DefaultFileUploadCheckpointCollection
+		c.CheckpointCollection = DefaultFileUploadCheckpointCollection
 	}
 }
 
@@ -95,7 +93,4 @@ func (c *GatewayServerConfig) ApplyDefaults() {
 	}
 }
 
-// ParserConfigFromFilter builds a parser config from a filter config.
-func ParserConfigFromFilter(fc *filter.Config) *parser.Config {
-	return &parser.Config{Filter: fc}
-}
+
