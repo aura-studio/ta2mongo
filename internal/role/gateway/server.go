@@ -8,22 +8,46 @@ import (
 	"net/http"
 	"time"
 
+	"rocket-nano/tools/tango/internal/dao"
 	"rocket-nano/tools/tango/internal/logging"
+	"rocket-nano/tools/tango/internal/process"
+	"rocket-nano/tools/tango/internal/role/api"
 )
 
+// Server is the gateway runtime: the embedded api engine plus the HTTP face. It
+// is safe for concurrent use from multiple goroutines.
 type Server struct {
-	cc  GatewayRuntimeConfig
-	cli *Client
+	cfg    Config
+	engine *api.Client
 }
 
-func NewServer(cc GatewayRuntimeConfig, cli *Client) *Server {
-	return &Server{cc: cc, cli: cli}
+// New builds a Server from the shared dao config and the gateway role config,
+// connecting to MongoDB via the api engine. The caller must Close it.
+func New(ctx context.Context, daoCfg *dao.Config, cfg Config) (*Server, error) {
+	cfg.ApplyDefaults()
+	eng, err := api.New(ctx, daoCfg, cfg.Upload.ProcessConfig(), cfg.Upload.Filter)
+	if err != nil {
+		return nil, err
+	}
+	return &Server{cfg: cfg, engine: eng}, nil
 }
 
+// Close disconnects from MongoDB and releases all resources.
+func (s *Server) Close() error { return s.engine.Close() }
+
+// EnsureIndexes creates all required MongoDB indexes (idempotent).
+func (s *Server) EnsureIndexes(ctx context.Context) error { return s.engine.EnsureIndexes(ctx) }
+
+// Upload ingests lines with the given mode (the engine entry point, exposed for
+// programmatic/test use).
+func (s *Server) Upload(ctx context.Context, mode process.Mode, lines []string) (api.Result, error) {
+	return s.engine.Upload(ctx, mode, lines)
+}
+
+// Run starts the HTTP server and blocks until ctx is cancelled.
 func (s *Server) Run(ctx context.Context, addr string) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
-	mux.HandleFunc("/ingest", s.handleIngest)
 	mux.HandleFunc("/upload", s.handleUpload)
 
 	httpSrv := &http.Server{Addr: addr, Handler: mux}
@@ -71,44 +95,37 @@ func decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 	return true
 }
 
-func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
+// handleUpload ingests the request-body log lines through one of the three
+// upload strategies. The body carries an array of lines (and/or a single line)
+// plus an optional "mode" (single | batch | pipeline); an empty mode falls back
+// to the configured default. Both the array and the single line are wrapped as
+// one httpbody source.
+func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	var req struct {
+		Mode  string   `json:"mode"`
 		Line  string   `json:"line"`
 		Lines []string `json:"lines"`
 	}
 	if !decodeBody(w, r, &req) {
 		return
 	}
+
 	lines := req.Lines
 	if req.Line != "" {
 		lines = append(lines, req.Line)
 	}
-	if err := s.cli.IngestBatch(r.Context(), lines); err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ingested": len(lines)})
-}
 
-func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Patterns  []string `json:"patterns"`
-		BatchSize int      `json:"batchSize"`
+	modeStr := req.Mode
+	if modeStr == "" {
+		modeStr = s.cfg.Upload.DefaultMode
 	}
-	if !decodeBody(w, r, &req) {
+	mode, err := process.ParseMode(modeStr)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	if len(req.Patterns) == 0 {
-		req.Patterns = s.cc.FileUpload.LogPattern
-	}
-	if req.BatchSize == 0 {
-		req.BatchSize = s.cc.FileUpload.Pipeline.BatchSize
-	}
-	res, err := s.cli.UploadFiles(r.Context(), UploadRequest{
-		Patterns:             req.Patterns,
-		BatchSize:            req.BatchSize,
-		CheckpointCollection: s.cc.FileUpload.CheckpointCollection,
-	})
+
+	res, err := s.engine.Upload(r.Context(), mode, lines)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return

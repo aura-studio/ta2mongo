@@ -3,40 +3,32 @@ package gateway
 import (
 	"context"
 	"time"
+
+	"rocket-nano/tools/tango/internal/dao"
+	daomongo "rocket-nano/tools/tango/internal/dao/mongo"
+	"rocket-nano/tools/tango/internal/process"
 )
 
-func ExampleClient_Ingest() {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	cli, err := New(ctx, WithURI("mongodb://localhost:27017/tango"))
-	if err != nil {
-		return
-	}
-	defer cli.Close()
-
-	_ = cli.EnsureIndexes(ctx)
-	_ = cli.Ingest(ctx, `{"#type":"track","#event_name":"login","#time":"2024-01-01","#uuid":"u1","#account_id":"alice","#distinct_id":"dev123"}`)
-}
-
-func ExampleClient_IngestBatch() {
+func ExampleServer_Upload() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	cli, err := New(
-		ctx,
-		WithURI("mongodb://localhost:27017/tango"),
-		WithMaxElapsedTime(10*time.Second),
-		WithBatchSize(1000),
-	)
+	srv, err := New(ctx, &dao.Config{Mongo: &daomongo.Config{URI: "mongodb://localhost:27017/tango"}}, Config{})
 	if err != nil {
 		return
 	}
-	defer cli.Close()
+	defer srv.Close()
 
-	_ = cli.EnsureIndexes(ctx)
-	_ = cli.IngestBatch(ctx, []string{
+	_ = srv.EnsureIndexes(ctx)
+
+	// batch mode (an array of lines, flushed in bulk)
+	_, _ = srv.Upload(ctx, process.ModeBatch, []string{
 		`{"#type":"track","#event_name":"login","#time":"2024-01-01","#uuid":"u1","#account_id":"alice","#distinct_id":"dev123"}`,
 		`{"#type":"track","#event_name":"click","#time":"2024-01-02","#uuid":"u2","#account_id":"alice","#distinct_id":"dev123"}`,
+	})
+
+	// single mode (one line, written immediately)
+	_, _ = srv.Upload(ctx, process.ModeSingle, []string{
+		`{"#type":"track","#event_name":"logout","#time":"2024-01-03","#uuid":"u3","#account_id":"alice","#distinct_id":"dev123"}`,
 	})
 }

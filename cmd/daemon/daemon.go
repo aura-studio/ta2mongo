@@ -31,8 +31,8 @@ func NewCommand() *cobra.Command {
 			return runDaemonService(cmd, path)
 		},
 	}
-	cmd.Flags().String("runtime.mongo.uri", "", "MongoDB connection URI (config key runtime.mongo.uri)")
-	cmd.Flags().String("runtime.logging.level", "", "log level: debug, info, warn, error (config key runtime.logging.level)")
+	cmd.Flags().String("dao.mongo.uri", "", "MongoDB connection URI (config key dao.mongo.uri)")
+	cmd.Flags().String("logging.level", "", "log level: debug, info, warn, error (config key logging.level)")
 	return cmd
 }
 
@@ -68,27 +68,33 @@ func resolveConfigPath(flagVal string, candidates ...string) string {
 // runDaemonService loads the daemon config from path and runs the
 // report service (tail TA logs -> filter -> MongoDB).
 func runDaemonService(cmd *cobra.Command, path string) error {
-	_, rt, err := config.LoadDaemon(path, cmd.Flags())
+	c, err := config.Load(path, cmd.Flags())
 	if err != nil {
 		return err
 	}
-	logging.Init(rt.Runtime.Logging.Level)
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	if len(c.Source.Tailer.LogPattern) == 0 {
+		return fmt.Errorf("config: source.tailer.logPattern is required (at least one regex)")
+	}
+	logging.Init(c.Logging.Level)
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	logging.WithFields(logging.Fields{
 		"pid":       os.Getpid(),
 		"go_procs":  runtime.GOMAXPROCS(0),
-		"mongo_uri": maskURI(rt.Dao.Mongo.URI),
+		"mongo_uri": maskURI(c.Dao.Mongo.URI),
 		"role":      "daemon",
 	}).Info("tango daemon: starting")
 
-	return runReport(ctx, rt)
+	return runReport(ctx, c)
 }
 
 // runReport runs the reporting pipeline and blocks until ctx is cancelled.
-func runReport(ctx context.Context, rt config.Config) error {
-	svc, err := daemon.New(ctx, rt)
+func runReport(ctx context.Context, c *config.Config) error {
+	svc, err := daemon.New(ctx, c.Dao, c.Parser, c.Source.Tailer, c.Process)
 	if err != nil {
 		logging.WithError(err).Error("tango daemon: init failed")
 		return err

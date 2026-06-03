@@ -1,9 +1,9 @@
-﻿# daemon.min.yaml — `tango daemon` 最精简配置：只含 required 字段。
+# daemon.min.yaml — `tango daemon` 最精简配置：只含 required 字段。
 # 其余字段全部走默认值（详见同目录 daemon.max.yaml 的逐字段说明）。
-runtime:
+dao:
   mongo:
     uri: mongodb://localhost:27017/tango   # [required]
-report:
-  source:
-    logPattern:                            # [required]
+source:
+  tailer:
+    logPattern:                            # [required] 至少一条
       - '/var/log/ta/.*\.log'

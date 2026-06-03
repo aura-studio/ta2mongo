@@ -20,8 +20,14 @@ type Dao struct {
 }
 
 // New opens a MongoDB connection from cfg and constructs a Dao. The caller
-// must Close it.
+// must Close it. A nil or partially-populated cfg is defaulted so callers need
+// not pre-fill the mongo/store sub-configs.
 func New(ctx context.Context, cfg *Config) (*Dao, error) {
+	if cfg == nil {
+		cfg = &Config{}
+	}
+	cfg.ApplyDefaults()
+
 	res, err := daomongo.ConnectMongo(ctx, cfg.Mongo)
 	if err != nil {
 		return nil, err

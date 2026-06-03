@@ -1,16 +1,19 @@
 package gateway
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	daomongo "rocket-nano/tools/tango/internal/dao/mongo"
 )
 
 func TestDecodeBody_RequiresPOST(t *testing.T) {
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "/ingest", nil)
+	r := httptest.NewRequest(http.MethodGet, "/upload", nil)
 	var dst struct{}
 	if decodeBody(w, r, &dst) {
 		t.Fatal("decodeBody accepted a non-POST request")
@@ -22,7 +25,7 @@ func TestDecodeBody_RequiresPOST(t *testing.T) {
 
 func TestDecodeBody_BadJSON(t *testing.T) {
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/ingest", strings.NewReader("{not json"))
+	r := httptest.NewRequest(http.MethodPost, "/upload", strings.NewReader("{not json"))
 	var dst struct {
 		Line string `json:"line"`
 	}
@@ -37,7 +40,7 @@ func TestDecodeBody_BadJSON(t *testing.T) {
 func TestDecodeBody_ValidAndEmpty(t *testing.T) {
 	t.Run("valid", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		r := httptest.NewRequest(http.MethodPost, "/ingest", strings.NewReader(`{"line":"hello"}`))
+		r := httptest.NewRequest(http.MethodPost, "/upload", strings.NewReader(`{"line":"hello"}`))
 		var dst struct {
 			Line string `json:"line"`
 		}
@@ -79,5 +82,25 @@ func TestHealthzContract(t *testing.T) {
 	http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }).ServeHTTP(w, r)
 	if w.Code != http.StatusOK {
 		t.Errorf("healthz status = %d", w.Code)
+	}
+}
+
+func TestNew_ErrorsWhenURIEmpty(t *testing.T) {
+	_, err := New(context.Background(), nil, Config{})
+	if err == nil {
+		t.Fatalf("expected error for empty URI")
+	}
+	if !strings.Contains(err.Error(), "URI is required") {
+		t.Errorf("expected 'URI is required' error, got: %v", err)
+	}
+}
+
+func TestMongoDBFromURI_DefaultDBWhenURINoDBInPath(t *testing.T) {
+	db, err := daomongo.MongoDBFromURI("mongodb://localhost:27017")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if db != "tango" {
+		t.Fatalf("db=%q, want %q", db, "tango")
 	}
 }

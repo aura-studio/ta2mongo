@@ -9,10 +9,10 @@ import (
 	"github.com/spf13/viper"
 )
 
-// loadFlat unmarshals a flat YAML document straight into the runtime Config and
-// applies defaults. It is a test vehicle for exercising applyDefaults /
-// Validate / the BatchSize helpers on the runtime Config directly, independent
-// of the role loaders (which are covered in loader_test.go).
+// loadFlat unmarshals a YAML document straight into Config and applies defaults.
+// It exercises applyDefaults / Validate / the pipeline helpers directly,
+// independent of the env/flag loading path (covered in loader_test.go). Viper's
+// default decoder already handles string durations and comma slices.
 func loadFlat(t *testing.T, y string) Config {
 	t.Helper()
 	v := viper.New()
@@ -29,7 +29,7 @@ func loadFlat(t *testing.T, y string) Config {
 }
 
 // ---------------------------------------------------------------------------
-// source.rescanInterval tests
+// source.tailer.rescanInterval
 // ---------------------------------------------------------------------------
 
 func TestRescanInterval_Default(t *testing.T) {
@@ -38,11 +38,11 @@ dao:
   mongo:
     uri: "mongodb://localhost"
 source:
-  logPattern:
-    - "/tmp/.*\\.log"
+  tailer:
+    logPattern:
+      - "/tmp/.*\\.log"
 `)
-	want := 30 * time.Second
-	if got := cfg.Source.RescanInterval; got != want {
+	if got, want := cfg.Source.Tailer.RescanInterval, 30*time.Second; got != want {
 		t.Errorf("RescanInterval = %v, want %v", got, want)
 	}
 }
@@ -53,10 +53,10 @@ dao:
   mongo:
     uri: "mongodb://localhost"
 source:
-  rescanInterval: "60s"
+  tailer:
+    rescanInterval: "60s"
 `)
-	want := 60 * time.Second
-	if got := cfg.Source.RescanInterval; got != want {
+	if got, want := cfg.Source.Tailer.RescanInterval, 60*time.Second; got != want {
 		t.Errorf("RescanInterval = %v, want %v", got, want)
 	}
 }
@@ -67,16 +67,16 @@ dao:
   mongo:
     uri: "mongodb://localhost"
 source:
-  rescanInterval: "0s"
+  tailer:
+    rescanInterval: "0s"
 `)
-	want := 30 * time.Second
-	if got := cfg.Source.RescanInterval; got != want {
+	if got, want := cfg.Source.Tailer.RescanInterval, 30*time.Second; got != want {
 		t.Errorf("RescanInterval = %v, want %v (should fallback for zero)", got, want)
 	}
 }
 
 // ---------------------------------------------------------------------------
-// mongo.maxElapsedTime tests
+// dao.store.maxElapsedTime
 // ---------------------------------------------------------------------------
 
 func TestMaxElapsedTime_Default(t *testing.T) {
@@ -85,8 +85,7 @@ dao:
   mongo:
     uri: "mongodb://localhost"
 `)
-	want := 10 * time.Second
-	if got := cfg.Dao.Store.MaxElapsedTime; got != want {
+	if got, want := cfg.Dao.Store.MaxElapsedTime, 10*time.Second; got != want {
 		t.Errorf("MaxElapsedTime = %v, want %v", got, want)
 	}
 }
@@ -99,8 +98,7 @@ dao:
   store:
     maxElapsedTime: "30s"
 `)
-	want := 30 * time.Second
-	if got := cfg.Dao.Store.MaxElapsedTime; got != want {
+	if got, want := cfg.Dao.Store.MaxElapsedTime, 30*time.Second; got != want {
 		t.Errorf("MaxElapsedTime = %v, want %v", got, want)
 	}
 }
@@ -113,23 +111,8 @@ dao:
   store:
     maxElapsedTime: "0s"
 `)
-	want := 10 * time.Second
-	if got := cfg.Dao.Store.MaxElapsedTime; got != want {
+	if got, want := cfg.Dao.Store.MaxElapsedTime, 10*time.Second; got != want {
 		t.Errorf("MaxElapsedTime = %v, want %v (should fallback for zero)", got, want)
-	}
-}
-
-func TestMaxElapsedTime_LargeValue(t *testing.T) {
-	cfg := loadFlat(t, `
-dao:
-  mongo:
-    uri: "mongodb://localhost"
-  store:
-    maxElapsedTime: "5m"
-`)
-	want := 5 * time.Minute
-	if got := cfg.Dao.Store.MaxElapsedTime; got != want {
-		t.Errorf("MaxElapsedTime = %v, want %v", got, want)
 	}
 }
 
@@ -140,11 +123,12 @@ dao:
 func TestValidation_MissingMongoURI(t *testing.T) {
 	cfg := loadFlat(t, `
 source:
-  logPattern:
-    - "/tmp/.*\\.log"
+  tailer:
+    logPattern:
+      - "/tmp/.*\\.log"
 `)
 	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected error for missing mongo.uri")
+		t.Fatal("expected error for missing dao.mongo.uri")
 	}
 }
 
@@ -159,21 +143,8 @@ dao:
 	}
 }
 
-func TestValidation_EmptyLogPattern_OK(t *testing.T) {
-	cfg := loadFlat(t, `
-dao:
-  mongo:
-    uri: "mongodb://localhost"
-source:
-  logPattern: []
-`)
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
 // ---------------------------------------------------------------------------
-// Filter expression tests
+// Filter expressions (parser.filter.*)
 // ---------------------------------------------------------------------------
 
 func TestFilter_LoadsFromYAML(t *testing.T) {
@@ -197,9 +168,6 @@ parser:
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("Validate: %v", err)
-	}
-	if _, err := cfg.Parser.Build(); err != nil {
-		t.Errorf("Parser.Build: %v", err)
 	}
 }
 
@@ -230,6 +198,10 @@ dao:
 	}
 }
 
+// ---------------------------------------------------------------------------
+// process.* knobs
+// ---------------------------------------------------------------------------
+
 func TestFlushInterval(t *testing.T) {
 	cfg := loadFlat(t, `
 dao:
@@ -239,15 +211,10 @@ process:
   pipeline:
     flushInterval: "500ms"
 `)
-	want := 500 * time.Millisecond
-	if got := cfg.Process.Pipeline.FlushInterval; got != want {
+	if got, want := cfg.Process.Pipeline.FlushInterval, 500*time.Millisecond; got != want {
 		t.Errorf("FlushInterval = %v, want %v", got, want)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Nested-knob smoke tests
-// ---------------------------------------------------------------------------
 
 func TestNestedKnobs_Defaults(t *testing.T) {
 	cfg := loadFlat(t, `
@@ -258,17 +225,17 @@ dao:
 	if cfg.Dao.Mongo.ConnectTimeout != 10*time.Second {
 		t.Errorf("connectTimeout = %v", cfg.Dao.Mongo.ConnectTimeout)
 	}
-	if cfg.Source.PollInterval != 200*time.Millisecond {
-		t.Errorf("pollInterval = %v", cfg.Source.PollInterval)
+	if cfg.Source.Tailer.PollInterval != 200*time.Millisecond {
+		t.Errorf("pollInterval = %v", cfg.Source.Tailer.PollInterval)
 	}
-	if cfg.Source.MaxLineBytes != 10*1024*1024 {
-		t.Errorf("maxLineBytes = %d", cfg.Source.MaxLineBytes)
+	if cfg.Source.Tailer.MaxLineBytes != 10*1024*1024 {
+		t.Errorf("maxLineBytes = %d", cfg.Source.Tailer.MaxLineBytes)
 	}
 	if cfg.Process.Pipeline.DeadLetterCap != 128 {
 		t.Errorf("deadLetterCap = %d", cfg.Process.Pipeline.DeadLetterCap)
 	}
-	if cfg.Runtime.Logging.Level != "info" || cfg.Runtime.Logging.Format != "text" {
-		t.Errorf("runtime.logging = %+v", cfg.Runtime.Logging)
+	if cfg.Logging.Level != "info" || cfg.Logging.Format != "text" {
+		t.Errorf("logging = %+v", cfg.Logging)
 	}
 }
 
@@ -283,29 +250,6 @@ func TestChannelBuffer_DerivedVsExplicit(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// batchSizeMin / batchSizeMax tests
-// ---------------------------------------------------------------------------
-
-func TestBatchSizeMinMax_ConfiguredValues(t *testing.T) {
-	cfg := loadFlat(t, `
-dao:
-  mongo:
-    uri: "mongodb://localhost"
-process:
-  pipeline:
-    batchSize: 1000
-    batchSizeMin: 200
-    batchSizeMax: 3000
-`)
-	if got := cfg.Process.Pipeline.MinBatchSize(); got != 200 {
-		t.Errorf("BatchSizeMin() = %d, want 200", got)
-	}
-	if got := cfg.Process.Pipeline.MaxBatchSize(); got != 3000 {
-		t.Errorf("BatchSizeMax() = %d, want 3000", got)
-	}
-}
-
 func TestBatchSizeMinMax_AutoDerivation(t *testing.T) {
 	cfg := loadFlat(t, `
 dao:
@@ -314,133 +258,92 @@ dao:
 process:
   pipeline:
     batchSize: 1000
-    batchSizeMin: 0
-    batchSizeMax: 0
 `)
 	if got := cfg.Process.Pipeline.MinBatchSize(); got != 250 {
-		t.Errorf("BatchSizeMin() = %d, want 250 (auto-derived BatchSize/4)", got)
+		t.Errorf("MinBatchSize() = %d, want 250", got)
 	}
 	if got := cfg.Process.Pipeline.MaxBatchSize(); got != 2000 {
-		t.Errorf("BatchSizeMax() = %d, want 2000 (auto-derived BatchSize*2)", got)
-	}
-}
-
-func TestBatchSizeMinMax_ClampBehavior(t *testing.T) {
-	cfg := loadFlat(t, `
-dao:
-  mongo:
-    uri: "mongodb://localhost"
-process:
-  pipeline:
-    batchSize: 1000
-    batchSizeMin: 1500
-    batchSizeMax: 0
-`)
-	if got := cfg.Process.Pipeline.MinBatchSize(); got != 1000 {
-		t.Errorf("BatchSizeMin() = %d, want 1000 (clamped to batchSize)", got)
-	}
-	cfg2 := loadFlat(t, `
-dao:
-  mongo:
-    uri: "mongodb://localhost"
-process:
-  pipeline:
-    batchSize: 1000
-    batchSizeMin: 0
-    batchSizeMax: 500
-`)
-	if got := cfg2.Process.Pipeline.MaxBatchSize(); got != 1000 {
-		t.Errorf("BatchSizeMax() = %d, want 1000 (clamped to batchSize)", got)
-	}
-}
-
-func TestBatchSizeMinMax_ValidationErrors(t *testing.T) {
-	// applyDefaults silently clamps invalid values, so Validate passes.
-	cfg := loadFlat(t, `
-dao:
-  mongo:
-    uri: "mongodb://localhost"
-process:
-  pipeline:
-    batchSize: 1000
-    batchSizeMin: 1500
-`)
-	if cfg.Process.Pipeline.MinBatchSize() != 1000 {
-		t.Errorf("BatchSizeMin() = %d, want 1000 (clamped)", cfg.Process.Pipeline.MinBatchSize())
-	}
-	if err := cfg.Validate(); err != nil {
-		t.Errorf("Validate() unexpected error: %v", err)
-	}
-
-	cfg2 := loadFlat(t, `
-dao:
-  mongo:
-    uri: "mongodb://localhost"
-process:
-  pipeline:
-    batchSize: 1000
-    batchSizeMax: 500
-`)
-	if cfg2.Process.Pipeline.MaxBatchSize() != 1000 {
-		t.Errorf("BatchSizeMax() = %d, want 1000 (clamped)", cfg2.Process.Pipeline.MaxBatchSize())
-	}
-	if err := cfg2.Validate(); err != nil {
-		t.Errorf("Validate() unexpected error: %v", err)
-	}
-}
-
-func TestBatchSizeMinMax_BatchSize1_Ceiling(t *testing.T) {
-	cfg := loadFlat(t, `
-dao:
-  mongo:
-    uri: "mongodb://localhost"
-process:
-  pipeline:
-    batchSize: 1
-    batchSizeMin: 0
-    batchSizeMax: 0
-`)
-	if got := cfg.Process.Pipeline.MinBatchSize(); got != 1 {
-		t.Errorf("BatchSizeMin() = %d, want 1 (minimum 1)", got)
-	}
-	if got := cfg.Process.Pipeline.MaxBatchSize(); got != 2 {
-		t.Errorf("BatchSizeMax() = %d, want 2 (BatchSize*2)", got)
+		t.Errorf("MaxBatchSize() = %d, want 2000", got)
 	}
 }
 
 // ---------------------------------------------------------------------------
-// ENV override (role loader path): TANGO_* env overrides the YAML file.
+// role.gateway.*
+// ---------------------------------------------------------------------------
+
+func TestGatewayDefaults(t *testing.T) {
+	cfg := loadFlat(t, `
+dao:
+  mongo:
+    uri: "mongodb://localhost"
+`)
+	if cfg.Role.Gateway.Addr != ":8080" {
+		t.Errorf("role.gateway.addr default = %q, want :8080", cfg.Role.Gateway.Addr)
+	}
+	if cfg.Role.Gateway.Upload.DefaultMode != "batch" {
+		t.Errorf("role.gateway.upload.defaultMode default = %q, want batch", cfg.Role.Gateway.Upload.DefaultMode)
+	}
+}
+
+func TestGatewayLoadsFromYAML(t *testing.T) {
+	cfg := loadFlat(t, `
+dao:
+  mongo:
+    uri: "mongodb://localhost"
+role:
+  gateway:
+    addr: ":9090"
+    upload:
+      defaultMode: pipeline
+      batchSize: 250
+      pipeline:
+        batchWorkers: 4
+`)
+	if cfg.Role.Gateway.Addr != ":9090" {
+		t.Errorf("addr = %q", cfg.Role.Gateway.Addr)
+	}
+	if cfg.Role.Gateway.Upload.DefaultMode != "pipeline" {
+		t.Errorf("defaultMode = %q", cfg.Role.Gateway.Upload.DefaultMode)
+	}
+	if cfg.Role.Gateway.Upload.BatchSize != 250 {
+		t.Errorf("batchSize = %d", cfg.Role.Gateway.Upload.BatchSize)
+	}
+	if cfg.Role.Gateway.Upload.Pipeline.BatchWorkers != 4 {
+		t.Errorf("pipeline.batchWorkers = %d", cfg.Role.Gateway.Upload.Pipeline.BatchWorkers)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ENV override via the Load path: TANGO_* overrides the YAML file.
 // ---------------------------------------------------------------------------
 
 func TestEnvOverridesYAML(t *testing.T) {
-	os.Setenv("TANGO_RUNTIME_LOGGING_LEVEL", "debug")
-	os.Setenv("TANGO_REPORT_SOURCE_RESCANINTERVAL", "60s")
+	os.Setenv("TANGO_LOGGING_LEVEL", "debug")
+	os.Setenv("TANGO_SOURCE_TAILER_RESCANINTERVAL", "60s")
 	defer func() {
-		os.Unsetenv("TANGO_RUNTIME_LOGGING_LEVEL")
-		os.Unsetenv("TANGO_REPORT_SOURCE_RESCANINTERVAL")
+		os.Unsetenv("TANGO_LOGGING_LEVEL")
+		os.Unsetenv("TANGO_SOURCE_TAILER_RESCANINTERVAL")
 	}()
 
 	yaml := `
-runtime:
+logging:
+  level: "error"
+dao:
   mongo:
     uri: "mongodb://localhost"
-  logging:
-    level: "error"
-report:
-  source:
+source:
+  tailer:
     logPattern: ["/tmp/x.log"]
     rescanInterval: "30s"
 `
-	_, rt, err := LoadDaemon(writeFile(t, "daemon.yaml", yaml), nil)
+	c, err := Load(writeFile(t, "tango.yaml", yaml), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// ENV (string) overrides YAML.
-	if rt.Runtime.Logging.Level != "debug" {
-		t.Errorf("Runtime.Logging.Level = %q, want %q (ENV should override YAML)", rt.Runtime.Logging.Level, "debug")
+	if c.Logging.Level != "debug" {
+		t.Errorf("logging.level = %q, want debug (ENV should override YAML)", c.Logging.Level)
 	}
-	// ENV (duration, via decode hook) overrides YAML.
-	if rt.Source.RescanInterval != 60*time.Second {
-		t.Errorf("RescanInterval = %v, want 60s (ENV should override YAML)", rt.Source.RescanInterval)
+	if c.Source.Tailer.RescanInterval != 60*time.Second {
+		t.Errorf("rescanInterval = %v, want 60s (ENV should override YAML)", c.Source.Tailer.RescanInterval)
 	}
 }

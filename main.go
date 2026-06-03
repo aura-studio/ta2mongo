@@ -6,7 +6,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	apicmd "rocket-nano/tools/tango/cmd/api"
 	clicmd "rocket-nano/tools/tango/cmd/cli"
 	daemoncmd "rocket-nano/tools/tango/cmd/daemon"
 	gatewaycmd "rocket-nano/tools/tango/cmd/gateway"
@@ -27,7 +26,6 @@ func newRoot() *cobra.Command {
 		"path to config file (.yaml/.yml/.json); default: <role>.{yaml,yml,json} next to the binary; skipped if absent")
 
 	root.AddCommand(
-		apicmd.NewCommand(),
 		clicmd.NewCommand(),
 		daemoncmd.NewCommand(),
 		gatewaycmd.NewCommand(),

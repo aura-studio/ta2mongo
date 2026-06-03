@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"time"
 
-	"rocket-nano/tools/tango/config"
 	"rocket-nano/tools/tango/internal/dao"
 	"rocket-nano/tools/tango/internal/logging"
 	"rocket-nano/tools/tango/internal/parser"
@@ -20,27 +19,35 @@ import (
 // statsReportInterval is how often the report service logs processing statistics.
 const statsReportInterval = 60 * time.Second
 
-// Service is the main runtime that connects all components together.
+// Service is the main runtime that connects all components together. It is built
+// from the module configs the daemon needs (dao + parser + tailer source +
+// process), not from the top-level config package.
 type Service struct {
-	cfg    config.Config
 	dao    *dao.Dao
-	source *parser.Parser
+	parser *parser.Parser
+	src    *tailer.Config
+	proc   *process.Config
 }
 
-// New connects to MongoDB and creates a ready-to-run Service.
-// The caller must call Shutdown after Run returns to disconnect from MongoDB.
-func New(ctx context.Context, cfg config.Config) (*Service, error) {
-	src, err := cfg.Parser.Build()
+// New connects to MongoDB and creates a ready-to-run Service from the dao,
+// parser, tailer-source, and process module configs. The caller must call
+// Shutdown after Run returns to disconnect from MongoDB.
+func New(ctx context.Context, daoCfg *dao.Config, parserCfg *parser.Config, srcCfg *tailer.Config, procCfg *process.Config) (*Service, error) {
+	if srcCfg == nil {
+		return nil, fmt.Errorf("report: source.tailer configuration is required")
+	}
+
+	p, err := parserCfg.Build()
 	if err != nil {
 		return nil, fmt.Errorf("report: %w", err)
 	}
 
-	da, err := dao.New(ctx, cfg.Dao)
+	da, err := dao.New(ctx, daoCfg)
 	if err != nil {
 		return nil, fmt.Errorf("report: %w", err)
 	}
 
-	return &Service{cfg: cfg, dao: da, source: src}, nil
+	return &Service{dao: da, parser: p, src: srcCfg, proc: procCfg}, nil
 }
 
 // Shutdown disconnects the MongoDB client. It must be called after Run returns
@@ -63,21 +70,20 @@ func (d *Service) EnsureIndexes(ctx context.Context) error {
 // for the same user are processed sequentially by a single worker, preventing
 // out-of-order overwrites across workers.
 func (d *Service) Run(ctx context.Context) error {
-	if len(d.cfg.Source.LogPattern) == 0 {
-		return errors.New("report: ta.logPattern is required (at least one regex)")
+	if len(d.src.LogPattern) == 0 {
+		return errors.New("report: source.tailer.logPattern is required (at least one regex)")
 	}
 
 	logging.WithFields(logging.Fields{
-		"log_patterns":   d.cfg.Source.LogPattern,
-		"workers":        d.cfg.Process.Pipeline.BatchWorkers,
-		"batch_size":     d.cfg.Process.Pipeline.BatchSize,
-		"flush_interval": d.cfg.Process.Pipeline.FlushInterval,
-		"tail_mode":      d.cfg.Source.TailMode,
+		"log_patterns":   d.src.LogPattern,
+		"workers":        d.proc.Pipeline.BatchWorkers,
+		"batch_size":     d.proc.Pipeline.BatchSize,
+		"flush_interval": d.proc.Pipeline.FlushInterval,
+		"tail_mode":      d.src.TailMode,
 	}).Info("report: starting pipeline")
 
-	// Start the tailer; it returns a channel of log lines.
-	t := tailer.New(d.cfg.Source.LogPattern, d.cfg.Source.RescanInterval, d.cfg.Source.TailMode).WithTuning(d.cfg.Source.PollInterval, d.cfg.Source.MaxLineBytes)
-	lineCh := t.Run(ctx)
+	// Build the tailer source; the pipeline uploader runs it.
+	t := tailer.New(d.src.LogPattern, d.src.RescanInterval, d.src.TailMode).WithTuning(d.src.PollInterval, d.src.MaxLineBytes)
 
 	// Create stats collector for periodic reporting.
 	stats := &process.Counters{}
@@ -87,8 +93,15 @@ func (d *Service) Run(ctx context.Context) error {
 	reportDone := make(chan struct{})
 	go d.reportStats(ctx, stats, startTime, reportDone)
 
-	// Block until all workers finish.
-	process.RunPipeline(ctx, d.cfg.Process, d.dao, d.source, lineCh, stats, process.WriteOptions{})
+	// Drive the async pipeline strategy; it blocks until ctx is cancelled, then
+	// the workers flush and exit.
+	up, err := process.New(process.ModePipeline, d.proc, d.dao, d.parser, stats, process.WriteOptions{})
+	if err != nil {
+		return err
+	}
+	if err := up.Run(ctx, t); err != nil && !errors.Is(err, context.Canceled) {
+		return err
+	}
 
 	// Wait for the reporter goroutine to exit.
 	<-reportDone

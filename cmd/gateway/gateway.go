@@ -1,6 +1,5 @@
 // Package gateway implements the `tango gateway` command: a long-running HTTP
-// gateway exposing the log-reporting functions (ingest / upload) on top of a
-// connected client SDK.
+// gateway exposing the /upload log-reporting API.
 package gateway
 
 import (
@@ -14,31 +13,38 @@ import (
 	"rocket-nano/tools/tango/internal/role/gateway"
 )
 
-// NewCommand builds the `tango gateway` command. It loads the unified gateway
-// config (gateway.{yaml,yml,json}) and runs the HTTP server until interrupted.
+// NewCommand builds the `tango gateway` command. It loads the unified config
+// (gateway.{yaml,yml,json}) and runs the HTTP server until interrupted.
 func NewCommand() *cobra.Command {
 	var addr string
 	cmd := &cobra.Command{
 		Use:   "gateway",
-		Short: "HTTP gateway exposing the ingest and upload log-reporting APIs",
+		Short: "HTTP gateway exposing the /upload log-reporting API",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cc, cli, err := connectClient(cmd, gatewayConfig)
+			path := resolveConfigPath(configFlag(cmd), "gateway.yaml", "gateway.yml", "gateway.json")
+			c, err := config.Load(path, cmd.Flags())
 			if err != nil {
 				return err
 			}
-			defer cli.Close()
-			if err := cli.EnsureIndexes(cmd.Context()); err != nil {
+			logging.Init(c.Logging.Level)
+
+			srv, err := gateway.New(cmd.Context(), c.Dao, *c.Role.Gateway)
+			if err != nil {
+				return err
+			}
+			defer srv.Close()
+			if err := srv.EnsureIndexes(cmd.Context()); err != nil {
 				return err
 			}
 			if addr == "" {
-				addr = cc.Server.Addr
+				addr = c.Role.Gateway.Addr
 			}
-			return gateway.NewServer(cc, cli).Run(cmd.Context(), addr)
+			return srv.Run(cmd.Context(), addr)
 		},
 	}
-	cmd.Flags().String("runtime.mongo.uri", "", "MongoDB connection URI (config key runtime.mongo.uri)")
-	cmd.Flags().String("runtime.logging.level", "", "log level: debug, info, warn, error (config key runtime.logging.level)")
-	cmd.Flags().String("gateway.addr", "", "HTTP listen address (config key gateway.addr)")
+	cmd.Flags().String("dao.mongo.uri", "", "MongoDB connection URI (config key dao.mongo.uri)")
+	cmd.Flags().String("logging.level", "", "log level: debug, info, warn, error (config key logging.level)")
+	cmd.Flags().String("role.gateway.addr", "", "HTTP listen address (config key role.gateway.addr)")
 	cmd.Flags().StringVar(&addr, "addr", "", "HTTP listen address; overrides the config addr")
 	return cmd
 }
@@ -67,44 +73,4 @@ func resolveConfigPath(flagVal string, candidates ...string) string {
 		}
 	}
 	return ""
-}
-
-// clientLoader resolves and loads the GatewayRuntimeConfig a gateway-driven
-// command runs on.
-type clientLoader func(cmd *cobra.Command) (gateway.GatewayRuntimeConfig, error)
-
-// gatewayConfig loads gateway.{yaml,yml,json} via the unified RoleConfig schema
-// and initializes the shared logger from its logging level.
-func gatewayConfig(cmd *cobra.Command) (gateway.GatewayRuntimeConfig, error) {
-	path := resolveConfigPath(configFlag(cmd), "gateway.yaml", "gateway.yml", "gateway.json")
-	_, cc, err := config.LoadGateway(path, cmd.Flags())
-	if err != nil {
-		return gateway.GatewayRuntimeConfig{}, err
-	}
-	logging.Init(cc.Logging.Level)
-	return cc, nil
-}
-
-// buildClient constructs a connected client from the config, layering the given
-// functional options on top of the config-derived connection settings.
-func buildClient(cmd *cobra.Command, cc gateway.GatewayRuntimeConfig, extra ...gateway.Option) (*gateway.Client, error) {
-	opts := append([]gateway.Option{
-		gateway.WithURI(cc.Dao.Mongo.URI),
-		gateway.WithMaxElapsedTime(cc.Dao.Store.MaxElapsedTime),
-	}, extra...)
-	return gateway.New(cmd.Context(), opts...)
-}
-
-// connectClient loads the config via the given loader and returns a connected
-// client. It is the common path for commands that need a plain client.
-func connectClient(cmd *cobra.Command, load clientLoader, extra ...gateway.Option) (gateway.GatewayRuntimeConfig, *gateway.Client, error) {
-	cc, err := load(cmd)
-	if err != nil {
-		return gateway.GatewayRuntimeConfig{}, nil, err
-	}
-	c, err := buildClient(cmd, cc, extra...)
-	if err != nil {
-		return cc, nil, err
-	}
-	return cc, c, nil
 }

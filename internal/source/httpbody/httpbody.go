@@ -1,12 +1,13 @@
 // Package httpbody wraps HTTP request body data as a source of log lines.
 // It accepts pre-parsed lines (single string or batch) and emits them via a
-// channel, matching the source.Source contract used by the processing pipeline.
+// channel, satisfying the source.Source contract consumed by the process
+// uploaders. It is the only source the gateway role uses.
 //
 // Usage:
 //
 //	src := httpbody.New(lines)
-//	ch := src.Run(ctx)
-//	process.RunPipeline(ctx, pipelineCfg, dao, parser, ch, stats, opts)
+//	up, _ := process.New(mode, cfg, dao, parser, stats, opts)
+//	err := up.Run(ctx, src)
 package httpbody
 
 import "context"

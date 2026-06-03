@@ -2,37 +2,38 @@
 #
 # 启动：tango gateway --config gateway.max.yaml --addr :8080
 #
-# gateway = 常驻 HTTP 服务，暴露 ingest / upload 两个上报日志 REST 接口，
-# 底层复用 client SDK。
+# gateway = 常驻 HTTP 服务，暴露单个 /upload REST 接口（请求体携带日志数组 +
+# 可选 mode：single/batch/pipeline），底层把请求体包成 httpbody 源后复用 api 引擎。
+#
+# 配置键路径 = 消费它的包路径（internal/ 下）。共享段 logging/dao 在顶层；
+# gateway 自身配置在 role.gateway（internal/role/gateway）。
 #
 # 标注：[required] 无默认值必须提供；[optional] 省略即走默认值（括号内为默认值）。
-# 环境变量覆盖如 runtime.mongo.uri → TANGO_RUNTIME_MONGO_URI、gateway.addr → TANGO_GATEWAY_ADDR。
+# 环境变量覆盖如 dao.mongo.uri → TANGO_DAO_MONGO_URI、role.gateway.addr → TANGO_ROLE_GATEWAY_ADDR。
 
-runtime:
-  logging:
-    level: info                  # [optional]（默认 info）debug / info / warn / error
-    format: text                 # [optional]（默认 text）text / json
-  mongo:
+logging:                          # internal/logging
+  level: info                     # [optional]（默认 info）debug / info / warn / error
+  format: text                    # [optional]（默认 text）text / json
+
+dao:                              # internal/dao
+  mongo:                          # internal/dao/mongo
     uri: mongodb://localhost:27017/tango  # [required] MongoDB 连接串；库名取自 URI 路径
-    connectTimeout: 10s          # [optional]（默认 10s）初次连接握手超时
-    serverSelectionTimeout: 30s  # [optional]（默认 30s）选择可用节点超时
-  store:
-    maxElapsedTime: 10s          # [optional]（默认 10s）单次 bulk-write 退避重试总时长上限
+    connectTimeout: 10s           # [optional]（默认 10s）初次连接握手超时
+    serverSelectionTimeout: 30s   # [optional]（默认 30s）选择可用节点超时
+  store:                          # internal/dao/store
+    maxElapsedTime: 10s           # [optional]（默认 10s）单次 bulk-write 退避重试总时长上限
 
-gateway:
-  addr: ":8080"                  # [optional]（默认 :8080）HTTP 监听地址；--addr 覆盖
-
-upload:
-  string:
-    batchSize: 1000              # [optional]（默认 1000）/ingest 批大小
-    filter:
-      include: []                # [optional]（默认 []）字符串上报 include
-      exclude: []                # [optional]（默认 []）字符串上报 exclude
-  file:
-    logPattern:                  # [optional]（默认 []）/upload 默认文件模式
-      - '/var/log/ta/.*\.log'
-    maxLineBytes: 10485760       # [optional]（默认 10485760 = 10MB）单行最大字节
-    filter:
-      include: []                # [optional]（默认 []）文件上报 include
-      exclude: []                # [optional]（默认 []）文件上报 exclude
-    checkpointCollection: _tango_fileupload  # [optional]（默认 _tango_fileupload）断点续传集合
+role:                             # internal/role
+  gateway:                        # internal/role/gateway
+    addr: ":8080"                 # [optional]（默认 :8080）HTTP 监听地址；--addr 覆盖
+    upload:
+      defaultMode: batch          # [optional]（默认 batch）请求未带 mode 时的策略：single/batch/pipeline
+      batchSize: 1000             # [optional]（默认 1000）single/batch 模式 bulk-write 批大小
+      filter:                     # [optional] 上报 filter（作用于每行）
+        include: []               # [optional]（默认 []）
+        exclude: []               # [optional]（默认 []）
+      pipeline:                   # [optional] pipeline 模式的异步 worker 池
+        batchSize: 1000           # [optional]（默认 1000）目标批大小
+        batchWorkers: 2           # [optional]（默认 2）并发写 worker 数
+        flushInterval: 1s         # [optional]（默认 1s）部分批刷新间隔
+        deadLetterCap: 128        # [optional]（默认 128）每 worker 死信批容量

@@ -1,15 +1,20 @@
 // Package config defines tango's configuration.
 //
-// The single file-facing schema is RoleConfig (role.go): the unified
-// daemon/gateway config file. Its loaders project it onto the shared
-// runtime Config in this file (daemon) and onto gateway.GatewayRuntimeConfig
-// (internal/role/gateway, the gateway runtime projection). The internal
-// service packages (daemon/gateway) consume those. loader.go holds the shared
-// YAML/JSON + TANGO_* env + flag loading helpers.
+// There is a single, package-path-aligned schema (Config): every file key maps
+// to the package path that consumes it —
 //
-// Each runtime concern owns its own config struct in its module (dao.Config,
-// parser.Config, process.Config, role.Config, tailer.Config); the top-level
-// Config merely references them by pointer.
+//	logging.level                 -> internal/logging
+//	dao.mongo.uri                 -> internal/dao/mongo
+//	dao.store.maxElapsedTime      -> internal/dao/store
+//	parser.filter.include         -> internal/parser/filter
+//	source.tailer.logPattern      -> internal/source/tailer
+//	process.pipeline.batchSize    -> internal/process/pipeline
+//	role.gateway.addr             -> internal/role/gateway
+//
+// The config package owns no field definitions: it only aggregates each
+// module's own Config struct and runs the load/override mechanics (loader.go).
+// Specific configuration (fields, defaults, validation knobs) lives in the
+// internal sub-modules. Each role/command picks the sections it needs.
 //
 // Sources, in increasing priority: built-in defaults < config file (YAML or
 // JSON, by extension) < TANGO_* environment variables < CLI flags.
@@ -19,66 +24,42 @@ import (
 	"fmt"
 
 	"rocket-nano/tools/tango/internal/dao"
+	"rocket-nano/tools/tango/internal/logging"
 	"rocket-nano/tools/tango/internal/parser"
 	"rocket-nano/tools/tango/internal/process"
 	"rocket-nano/tools/tango/internal/role"
+	"rocket-nano/tools/tango/internal/source"
 	"rocket-nano/tools/tango/internal/source/tailer"
 )
 
-// Mode constants identify the runtime role a Config drives. Mode is an internal
-// runtime distinction consumed only by Validate; the role loaders set it from
-// the command that built the Config.
-const (
-	// ModeDaemon is the daemon service runtime: tail logs -> filter -> Mongo.
-	ModeDaemon = role.ModeDaemon
-)
-
-// Config is the top-level runtime configuration for the report pipeline. Each
-// section is a pointer to the owning module's config struct.
+// Config is the unified configuration schema. Each section is a pointer to the
+// owning module's own config struct, so the file key path equals the package
+// path under internal/.
 type Config struct {
-	// Dao configures data access: MongoDB connection and store write behaviour.
-	Dao *dao.Config `mapstructure:"dao"`
-
-	// Parser configures log parsing and reporting filters.
-	Parser *parser.Config `mapstructure:"parser"`
-
-	// Process configures ingestion processing.
+	Logging *logging.Config `mapstructure:"logging"`
+	Dao     *dao.Config     `mapstructure:"dao"`
+	Parser  *parser.Config  `mapstructure:"parser"`
+	Source  *source.Config  `mapstructure:"source"`
 	Process *process.Config `mapstructure:"process"`
-
-	// Role configures runtime role behavior.
-	Role *role.Config `mapstructure:"role"`
-
-	// Runtime configures process-wide settings loaded from runtime.* keys.
-	Runtime *RuntimeConfig `mapstructure:"runtime"`
-
-	// Source configures the file-tailing data source (internal/source/tailer).
-	Source *tailer.Config `mapstructure:"source"`
+	Role    *role.Config    `mapstructure:"role"`
 }
 
-// Validate checks that required fields are present. It assumes applyDefaults has
-// run (so the section pointers are non-nil) but still guards them defensively.
+// Validate checks fields required by the daemon report pipeline. It assumes
+// applyDefaults has run (section pointers non-nil) but guards defensively.
 func (c *Config) Validate() error {
-	if c.Role == nil || c.Role.Mode != ModeDaemon {
-		got := ""
-		if c.Role != nil {
-			got = c.Role.Mode
-		}
-		return fmt.Errorf("config: role.mode must be %q; got %q", ModeDaemon, got)
-	}
 	if c.Dao == nil || c.Dao.Mongo == nil || c.Dao.Mongo.URI == "" {
-		return fmt.Errorf("config: mongo.uri is required (set runtime.mongo.uri in the config file, via TANGO_RUNTIME_MONGO_URI, or via --runtime.mongo.uri)")
+		return fmt.Errorf("config: dao.mongo.uri is required (set it in the config file, via TANGO_DAO_MONGO_URI, or via --dao.mongo.uri)")
 	}
-	if c.Source == nil {
-		return fmt.Errorf("config: source configuration is required")
+	if c.Source == nil || c.Source.Tailer == nil {
+		return fmt.Errorf("config: source.tailer configuration is required")
 	}
-	switch c.Source.TailMode {
+	switch c.Source.Tailer.TailMode {
 	case tailer.TailModeHybrid, tailer.TailModePoll, tailer.TailModeEvent:
 		// valid
 	default:
-		return fmt.Errorf("config: source.tailMode must be %q, %q or %q; got %q",
-			tailer.TailModeHybrid, tailer.TailModePoll, tailer.TailModeEvent, c.Source.TailMode)
+		return fmt.Errorf("config: source.tailer.tailMode must be %q, %q or %q; got %q",
+			tailer.TailModeHybrid, tailer.TailModePoll, tailer.TailModeEvent, c.Source.Tailer.TailMode)
 	}
-	// Validate batch size constraints.
 	if c.Process != nil && c.Process.Pipeline != nil {
 		p := c.Process.Pipeline
 		if p.BatchSizeMin > 0 && p.BatchSizeMin > p.BatchSize {
@@ -90,8 +71,10 @@ func (c *Config) Validate() error {
 				p.BatchSize, p.BatchSizeMax)
 		}
 	}
-	if _, err := c.Parser.Build(); err != nil {
-		return fmt.Errorf("config: %w", err)
+	if c.Parser != nil {
+		if _, err := c.Parser.Build(); err != nil {
+			return fmt.Errorf("config: %w", err)
+		}
 	}
 	return nil
 }

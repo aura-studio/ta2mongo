@@ -19,7 +19,7 @@ import (
 // package. Callers (e.g. dao) project the loaded configuration onto it.
 type Config struct {
 	// MaxElapsedTime is the maximum total retry time for a single bulk write.
-	MaxElapsedTime time.Duration
+	MaxElapsedTime time.Duration `mapstructure:"maxElapsedTime"`
 }
 
 // ApplyDefaults fills unset store options.

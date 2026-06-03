@@ -2,33 +2,34 @@ package config
 
 import (
 	"rocket-nano/tools/tango/internal/dao"
+	"rocket-nano/tools/tango/internal/logging"
 	"rocket-nano/tools/tango/internal/parser"
 	"rocket-nano/tools/tango/internal/process"
 	"rocket-nano/tools/tango/internal/role"
-	"rocket-nano/tools/tango/internal/source/tailer"
+	"rocket-nano/tools/tango/internal/source"
 )
 
-// applyDefaults fills in zero-value fields with sensible defaults, allocating
-// any section pointer that is nil so callers can rely on every section being
-// present after this runs.
+// applyDefaults allocates any nil section pointer and delegates to each
+// module's own ApplyDefaults, so callers can rely on every section being
+// present and defaulted after this runs.
 func applyDefaults(c *Config) {
-	if c.Role == nil {
-		c.Role = &role.Config{}
+	if c.Logging == nil {
+		c.Logging = &logging.Config{}
 	}
-	c.Role.ApplyDefaults()
-
-	if c.Runtime == nil {
-		c.Runtime = &RuntimeConfig{}
-	}
-	c.Runtime.ApplyDefaults()
+	c.Logging.ApplyDefaults()
 
 	if c.Dao == nil {
 		c.Dao = &dao.Config{}
 	}
 	c.Dao.ApplyDefaults()
 
+	if c.Parser == nil {
+		c.Parser = &parser.Config{}
+	}
+	c.Parser.ApplyDefaults()
+
 	if c.Source == nil {
-		c.Source = &tailer.Config{}
+		c.Source = &source.Config{}
 	}
 	c.Source.ApplyDefaults()
 
@@ -37,8 +38,8 @@ func applyDefaults(c *Config) {
 	}
 	c.Process.ApplyDefaults()
 
-	if c.Parser == nil {
-		c.Parser = &parser.Config{}
+	if c.Role == nil {
+		c.Role = &role.Config{}
 	}
-	c.Parser.ApplyDefaults()
+	c.Role.ApplyDefaults()
 }

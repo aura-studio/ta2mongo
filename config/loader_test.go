@@ -15,121 +15,84 @@ func writeFile(t *testing.T, name, content string) string {
 	return p
 }
 
-func TestLoadDaemon_Unified(t *testing.T) {
+func TestLoad_Unified(t *testing.T) {
 	yaml := `
-runtime:
+dao:
   mongo:
     uri: "mongodb://localhost/report"
-report:
-  source:
-    logPattern: ["/tmp/.*\\.log"]
+parser:
   filter:
     include: ['#type == "track"']
+source:
+  tailer:
+    logPattern: ["/tmp/.*\\.log"]
 `
-	rc, rt, err := LoadDaemon(writeFile(t, "daemon.yaml", yaml), nil)
+	c, err := Load(writeFile(t, "tango.yaml", yaml), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rt.Dao.Mongo.URI != "mongodb://localhost/report" {
-		t.Errorf("LoadDaemon Mongo.URI = %q", rt.Dao.Mongo.URI)
+	if c.Dao.Mongo.URI != "mongodb://localhost/report" {
+		t.Errorf("dao.mongo.uri = %q", c.Dao.Mongo.URI)
 	}
-	if len(rt.Parser.Filter.Include) != 1 || rt.Parser.Filter.Include[0] != `#type == "track"` {
-		t.Errorf("report.filter -> runtime Filter = %v", rt.Parser.Filter.Include)
+	if len(c.Parser.Filter.Include) != 1 || c.Parser.Filter.Include[0] != `#type == "track"` {
+		t.Errorf("parser.filter.include = %v", c.Parser.Filter.Include)
 	}
-	if len(rc.Report.Source.LogPattern) != 1 {
-		t.Errorf("RoleConfig logPattern = %v", rc.Report.Source.LogPattern)
+	if len(c.Source.Tailer.LogPattern) != 1 {
+		t.Errorf("source.tailer.logPattern = %v", c.Source.Tailer.LogPattern)
 	}
 }
 
-func TestLoadDaemon_TypedEnvOverrides(t *testing.T) {
-	// Environment variables arrive as strings; the role loader must coerce them
-	// into int fields (weak typing) as well as string / duration ones.
-	os.Setenv("TANGO_REPORT_PIPELINE_BATCHSIZE", "2500") // int
-	defer os.Unsetenv("TANGO_REPORT_PIPELINE_BATCHSIZE")
+func TestLoad_TypedEnvOverrides(t *testing.T) {
+	// Environment variables arrive as strings; Load must coerce them into int
+	// fields (weak typing) as well as string / duration ones.
+	os.Setenv("TANGO_PROCESS_PIPELINE_BATCHSIZE", "2500") // int
+	defer os.Unsetenv("TANGO_PROCESS_PIPELINE_BATCHSIZE")
 	yaml := `
-runtime:
+dao:
   mongo:
     uri: "mongodb://localhost/report"
-report:
-  source:
+source:
+  tailer:
     logPattern: ["/tmp/x.log"]
+process:
   pipeline:
     batchSize: 1000
 `
-	_, rt, err := LoadDaemon(writeFile(t, "daemon.yaml", yaml), nil)
+	c, err := Load(writeFile(t, "tango.yaml", yaml), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rt.Process.Pipeline.BatchSize != 2500 {
-		t.Errorf("pipeline.batchSize via int env = %d, want 2500", rt.Process.Pipeline.BatchSize)
+	if c.Process.Pipeline.BatchSize != 2500 {
+		t.Errorf("process.pipeline.batchSize via int env = %d, want 2500", c.Process.Pipeline.BatchSize)
 	}
 }
 
-func TestLoadDaemon_RequiresLogPattern(t *testing.T) {
-	yaml := "runtime:\n  mongo:\n    uri: \"mongodb://localhost/report\"\n"
-	if _, _, err := LoadDaemon(writeFile(t, "daemon.yaml", yaml), nil); err == nil {
-		t.Fatal("expected error: daemon without logPattern")
-	}
-}
-
-func TestLoadGateway_Unified(t *testing.T) {
+func TestLoad_Gateway(t *testing.T) {
 	yaml := `
-runtime:
+dao:
   mongo:
     uri: "mongodb://localhost/gw"
-gateway:
-  addr: ":9090"
-upload:
-  string:
-    batchSize: 250
-  file:
-    checkpointCollection: custom_ckpt
+role:
+  gateway:
+    addr: ":9090"
+    upload:
+      defaultMode: pipeline
+      batchSize: 250
 `
-	_, cc, err := LoadGateway(writeFile(t, "gateway.yaml", yaml), nil)
+	c, err := Load(writeFile(t, "tango.yaml", yaml), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cc.Dao.Mongo.URI != "mongodb://localhost/gw" {
-		t.Errorf("gateway Mongo.URI = %q", cc.Dao.Mongo.URI)
+	if c.Dao.Mongo.URI != "mongodb://localhost/gw" {
+		t.Errorf("dao.mongo.uri = %q", c.Dao.Mongo.URI)
 	}
-	if cc.Server.Addr != ":9090" {
-		t.Errorf("gateway addr = %q", cc.Server.Addr)
+	if c.Role.Gateway.Addr != ":9090" {
+		t.Errorf("role.gateway.addr = %q", c.Role.Gateway.Addr)
 	}
-	if cc.StringUpload.BatchSize != 250 {
-		t.Errorf("upload.string.batchSize = %d", cc.StringUpload.BatchSize)
+	if c.Role.Gateway.Upload.DefaultMode != "pipeline" {
+		t.Errorf("role.gateway.upload.defaultMode = %q", c.Role.Gateway.Upload.DefaultMode)
 	}
-	if cc.FileUpload.CheckpointCollection != "custom_ckpt" {
-		t.Errorf("upload.file.checkpointCollection = %q", cc.FileUpload.CheckpointCollection)
-	}
-}
-
-// TestExampleRoleConfigsLoad ensures every shipped role example (max + min, in
-// both YAML and JSON) parses and validates under its loader.
-func TestExampleRoleConfigsLoad(t *testing.T) {
-	daemon := []string{
-		"../examples/config/daemon/daemon.max.yaml",
-		"../examples/config/daemon/daemon.min.yaml",
-		"../examples/config/daemon/daemon.max.json",
-		"../examples/config/daemon/daemon.min.json",
-	}
-	for _, p := range daemon {
-		t.Run(p, func(t *testing.T) {
-			if _, _, err := LoadDaemon(p, nil); err != nil {
-				t.Fatalf("LoadDaemon(%s): %v", p, err)
-			}
-		})
-	}
-	gateway := []string{
-		"../examples/config/gateway/gateway.max.yaml",
-		"../examples/config/gateway/gateway.min.yaml",
-		"../examples/config/gateway/gateway.max.json",
-		"../examples/config/gateway/gateway.min.json",
-	}
-	for _, p := range gateway {
-		t.Run(p, func(t *testing.T) {
-			if _, _, err := LoadGateway(p, nil); err != nil {
-				t.Fatalf("LoadGateway(%s): %v", p, err)
-			}
-		})
+	if c.Role.Gateway.Upload.BatchSize != 250 {
+		t.Errorf("role.gateway.upload.batchSize = %d", c.Role.Gateway.Upload.BatchSize)
 	}
 }

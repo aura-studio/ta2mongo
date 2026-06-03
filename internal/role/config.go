@@ -1,19 +1,22 @@
+// Package role is the runtime-role collection (daemon / gateway / cli / api).
+// role.Config aggregates the per-role configurations that are file-driven so
+// their schema keys map to the package path (e.g. role.gateway.*). The api and
+// cli roles take their settings programmatically / from shared top-level
+// sections and carry no role-specific file config.
 package role
 
-const (
-	// ModeDaemon is the daemon service runtime: tail logs -> filter -> Mongo.
-	ModeDaemon = "daemon"
-)
+import "rocket-nano/tools/tango/internal/role/gateway"
 
-// Config configures runtime role behavior.
+// Config aggregates role-specific configuration (file key role.*).
 type Config struct {
-	// Mode selects the runtime role. Only daemon is supported here.
-	Mode string `mapstructure:"mode"`
+	// Gateway is the HTTP gateway role config (file key role.gateway.*).
+	Gateway *gateway.Config `mapstructure:"gateway"`
 }
 
-// ApplyDefaults fills unset role options.
+// ApplyDefaults allocates child configs and lets them own their defaults.
 func (c *Config) ApplyDefaults() {
-	if c.Mode == "" {
-		c.Mode = ModeDaemon
+	if c.Gateway == nil {
+		c.Gateway = &gateway.Config{}
 	}
+	c.Gateway.ApplyDefaults()
 }

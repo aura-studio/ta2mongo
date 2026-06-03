@@ -1,6 +1,6 @@
 {
-  "runtime": {
-    "logging": { "level": "info", "format": "text" },
+  "logging": { "level": "info", "format": "text" },
+  "dao": {
     "mongo": {
       "uri": "mongodb://localhost:27017/tango",
       "connectTimeout": "10s",
@@ -8,17 +8,20 @@
     },
     "store": { "maxElapsedTime": "10s" }
   },
-  "gateway": { "addr": ":8080" },
-  "upload": {
-    "string": {
-      "batchSize": 1000,
-      "filter": { "include": [], "exclude": [] }
-    },
-    "file": {
-      "logPattern": ["/var/log/ta/.*\\.log"],
-      "maxLineBytes": 10485760,
-      "filter": { "include": [], "exclude": [] },
-      "checkpointCollection": "_tango_fileupload"
+  "role": {
+    "gateway": {
+      "addr": ":8080",
+      "upload": {
+        "defaultMode": "batch",
+        "batchSize": 1000,
+        "filter": { "include": [], "exclude": [] },
+        "pipeline": {
+          "batchSize": 1000,
+          "batchWorkers": 2,
+          "flushInterval": "1s",
+          "deadLetterCap": 128
+        }
+      }
     }
   }
 }
