@@ -20,11 +20,5 @@
       "filter": { "include": [], "exclude": [] },
       "checkpointCollection": "_tango_fileupload"
     }
-  },
-  "tasks": {
-    "collection": "_tango_tasks",
-    "instancesCollection": "_tango_instances",
-    "instanceTTL": "90s"
-  },
-  "backfillFilter": { "table": "event" }
+  }
 }

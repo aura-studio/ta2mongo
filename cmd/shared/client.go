@@ -1,13 +1,10 @@
-// Package shared holds the glue used by the role command packages (report,
-// worker, gateway, operator): config-file resolution, client construction, and
-// the long-running report/worker service runners. The cmd packages stay thin
-// by delegating; argument parsing aside, all wiring lives here.
+// Package shared holds the glue used by the role command packages (standalone,
+// gateway): config-file resolution, client construction, and the long-running
+// standalone service runner. The cmd packages stay thin by delegating; argument
+// parsing aside, all wiring lives here.
 package shared
 
 import (
-	"encoding/json"
-	"fmt"
-
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
@@ -23,20 +20,9 @@ func ConfigFlag(cmd *cobra.Command) string {
 }
 
 // ClientLoader resolves and loads the ClientConfig a client-driven command runs
-// on (operator vs gateway resolve different role files), returning a
-// ready-to-use ClientConfig and a logger derived from its logging level.
+// on, returning a ready-to-use ClientConfig and a logger derived from its
+// logging level.
 type ClientLoader func(cmd *cobra.Command) (config.ClientConfig, *logrus.Logger, error)
-
-// OperatorConfig loads operator.{yaml,yml,json} via the unified RoleConfig
-// schema.
-func OperatorConfig(cmd *cobra.Command) (config.ClientConfig, *logrus.Logger, error) {
-	path := cli.ResolveConfigPath(ConfigFlag(cmd), "operator.yaml", "operator.yml", "operator.json")
-	_, cc, err := config.LoadOperator(path, cmd.Flags())
-	if err != nil {
-		return config.ClientConfig{}, nil, err
-	}
-	return cc, cli.NewLogger(cc.Logging.Level), nil
-}
 
 // GatewayConfig loads gateway.{yaml,yml,json} via the unified RoleConfig schema.
 func GatewayConfig(cmd *cobra.Command) (config.ClientConfig, *logrus.Logger, error) {
@@ -55,7 +41,6 @@ func BuildClient(cmd *cobra.Command, cc config.ClientConfig, logger *logrus.Logg
 		sdk.WithURI(cc.Mongo.URI),
 		sdk.WithMaxElapsedTime(cc.Mongo.MaxElapsedTime),
 		sdk.WithLogger(logger),
-		sdk.WithTaskQueue(cc.Publish.TasksCollection, cc.Publish.InstancesCollection, cc.Publish.InstanceTTL),
 	}, extra...)
 	return sdk.New(cmd.Context(), opts...)
 }
@@ -72,14 +57,4 @@ func ConnectClient(cmd *cobra.Command, load ClientLoader, extra ...sdk.Option) (
 		return cc, nil, nil, err
 	}
 	return cc, c, logger, nil
-}
-
-// PrintJSON pretty-prints v as JSON to stdout.
-func PrintJSON(v any) error {
-	b, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return err
-	}
-	fmt.Println(string(b))
-	return nil
 }

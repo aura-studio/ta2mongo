@@ -2,38 +2,28 @@ package config
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 )
 
-// RoleConfig is the unified, role-oriented config file schema (Phase 4). One
-// schema backs every role-named config file — report.yaml, worker.yaml,
-// gateway.yaml, operator.yaml — and each role loader projects the sections it
-// needs onto the internal runtime Config / ClientConfig. Sections:
+// RoleConfig is the unified, role-oriented config file schema. One schema backs
+// every role-named config file — standalone.yaml, gateway.yaml — and each role
+// loader projects the sections it needs onto the internal runtime Config /
+// ClientConfig. Sections:
 //
-//   - runtime:        process-wide logging + MongoDB connection (every role).
-//   - report:         the reporting pipeline (report service).
-//   - remoteConfig:   the MongoDB control-plane override (report + worker).
-//   - tasks:          the task queue (worker + operator/gateway publish).
-//   - gateway:        the HTTP gateway listen address (gateway service).
-//   - upload:         string + file upload settings (operator + gateway + SDK).
-//   - backfill /
-//     backfillFilter / sql: backfill + ad-hoc SQL (worker + operator + gateway).
+//   - runtime: process-wide logging + MongoDB connection (every role).
+//   - report:  the reporting pipeline (standalone service).
+//   - gateway: the HTTP gateway listen address (gateway service).
+//   - upload:  string + file upload settings (gateway + SDK).
 //
-// It is the only file-facing schema; report/worker project onto the runtime
-// Config, gateway/operator onto ClientConfig (client.go).
+// It is the only file-facing schema; standalone projects onto the runtime
+// Config, gateway onto ClientConfig (client.go).
 type RoleConfig struct {
-	Runtime        RuntimeConfig        `mapstructure:"runtime"`
-	Report         RoleReportConfig     `mapstructure:"report"`
-	RemoteConfig   RemoteConfig         `mapstructure:"remoteConfig"`
-	Tasks          TasksConfig          `mapstructure:"tasks"`
-	Gateway        GatewayConfig        `mapstructure:"gateway"`
-	Upload         UploadConfig         `mapstructure:"upload"`
-	Backfill       BackfillConfig       `mapstructure:"backfill"`
-	BackfillFilter BackfillFilterConfig `mapstructure:"backfillFilter"`
-	SQL            SQLConfig            `mapstructure:"sql"`
+	Runtime RuntimeConfig    `mapstructure:"runtime"`
+	Report  RoleReportConfig `mapstructure:"report"`
+	Gateway GatewayConfig    `mapstructure:"gateway"`
+	Upload  UploadConfig     `mapstructure:"upload"`
 }
 
 // RuntimeConfig is the process-wide block shared by every role.
@@ -42,23 +32,11 @@ type RuntimeConfig struct {
 	Mongo   MongoConfig   `mapstructure:"mongo"`
 }
 
-// RoleReportConfig is the reporting pipeline block for the report service.
+// RoleReportConfig is the reporting pipeline block for the standalone service.
 type RoleReportConfig struct {
 	Source   SourceConfig   `mapstructure:"source"`
 	Pipeline PipelineConfig `mapstructure:"pipeline"`
 	Filter   FilterConfig   `mapstructure:"filter"`
-}
-
-// TasksConfig is the task-queue block. instanceID identifies a worker instance
-// (required for the worker service; unused by publishers).
-type TasksConfig struct {
-	InstanceID          string        `mapstructure:"instanceID"`
-	Collection          string        `mapstructure:"collection"`
-	InstancesCollection string        `mapstructure:"instancesCollection"`
-	PollInterval        time.Duration `mapstructure:"pollInterval"`
-	LeaseTTL            time.Duration `mapstructure:"leaseTTL"`
-	HeartbeatInterval   time.Duration `mapstructure:"heartbeatInterval"`
-	InstanceTTL         time.Duration `mapstructure:"instanceTTL"`
 }
 
 // GatewayConfig is the HTTP gateway block.
@@ -88,42 +66,20 @@ type UploadFileConfig struct {
 }
 
 // ReportRuntime projects the unified config onto the runtime Config consumed by
-// the report service. The control-plane switches (RemoteConfig.Enabled,
-// Agent.Enabled) are applied by LoadReport, not here.
+// the standalone report service.
 func (r RoleConfig) ReportRuntime() Config {
 	return Config{
-		Mode:         ModeReport,
-		Logging:      r.Runtime.Logging,
-		Mongo:        r.Runtime.Mongo,
-		Source:       r.Report.Source,
-		Pipeline:     r.Report.Pipeline,
-		Filter:       r.Report.Filter,
-		RemoteConfig: r.RemoteConfig,
-	}
-}
-
-// WorkerRuntime projects the unified config onto the runtime Config consumed by
-// the worker service. The control-plane switches are applied by LoadWorker.
-func (r RoleConfig) WorkerRuntime() Config {
-	return Config{
-		Mode:         ModeWorker,
-		InstanceID:   r.Tasks.InstanceID,
-		Logging:      r.Runtime.Logging,
-		Mongo:        r.Runtime.Mongo,
-		RemoteConfig: r.RemoteConfig,
-		Worker: WorkerConfig{
-			TasksCollection:     r.Tasks.Collection,
-			InstancesCollection: r.Tasks.InstancesCollection,
-			PollInterval:        r.Tasks.PollInterval,
-			LeaseDuration:       r.Tasks.LeaseTTL,
-			HeartbeatInterval:   r.Tasks.HeartbeatInterval,
-			InstanceTTL:         r.Tasks.InstanceTTL,
-		},
+		Mode:     ModeReport,
+		Logging:  r.Runtime.Logging,
+		Mongo:    r.Runtime.Mongo,
+		Source:   r.Report.Source,
+		Pipeline: r.Report.Pipeline,
+		Filter:   r.Report.Filter,
 	}
 }
 
 // Client projects the unified config onto the ClientConfig consumed by the
-// operator commands and the gateway service (both drive the client SDK).
+// gateway service (which drives the client SDK).
 func (r RoleConfig) Client() ClientConfig {
 	cc := ClientConfig{
 		Logging: r.Runtime.Logging,
@@ -138,14 +94,6 @@ func (r RoleConfig) Client() ClientConfig {
 			Pipeline:             r.Upload.File.Pipeline,
 			Filter:               r.Upload.File.Filter,
 			CheckpointCollection: r.Upload.File.CheckpointCollection,
-		},
-		Backfill:       r.Backfill,
-		BackfillFilter: r.BackfillFilter,
-		SQL:            r.SQL,
-		Publish: PublishConfig{
-			TasksCollection:     r.Tasks.Collection,
-			InstancesCollection: r.Tasks.InstancesCollection,
-			InstanceTTL:         r.Tasks.InstanceTTL,
 		},
 		Server: ServerConfig{Addr: r.Gateway.Addr},
 	}
@@ -165,7 +113,6 @@ func loadRole(path string, flags *pflag.FlagSet) (RoleConfig, error) {
 	if err := bindFlagsTo(v, flags); err != nil {
 		return RoleConfig{}, err
 	}
-	applyRoleAliases(v)
 
 	var rc RoleConfig
 	if err := v.Unmarshal(&rc, durationDecodeHook(), weaklyTyped()); err != nil {
@@ -174,45 +121,21 @@ func loadRole(path string, flags *pflag.FlagSet) (RoleConfig, error) {
 	return rc, nil
 }
 
-// LoadReport loads the unified report-service config (runtime + report +
-// remoteConfig) from a report.yaml-style file (+ env + flags).
-func LoadReport(path string, flags *pflag.FlagSet) (RoleConfig, Config, error) {
+// LoadStandalone loads the unified standalone-service config (runtime + report)
+// from a standalone.yaml-style file (+ env + flags).
+func LoadStandalone(path string, flags *pflag.FlagSet) (RoleConfig, Config, error) {
 	rc, err := loadRole(path, flags)
 	if err != nil {
 		return RoleConfig{}, Config{}, err
 	}
 	rt := rc.ReportRuntime()
 	applyDefaults(&rt)
-	rt.Worker.Enabled = false
 
 	if err := rt.Validate(); err != nil {
 		return RoleConfig{}, Config{}, err
 	}
 	if len(rc.Report.Source.LogPattern) == 0 {
 		return RoleConfig{}, Config{}, fmt.Errorf("config: report.source.logPattern is required (at least one regex)")
-	}
-	return rc, rt, nil
-}
-
-// LoadWorker loads the unified task-worker config (runtime + tasks +
-// remoteConfig). The worker requires tasks.instanceID and always runs with the
-// task worker and remote-config control plane enabled.
-func LoadWorker(path string, flags *pflag.FlagSet) (RoleConfig, Config, error) {
-	rc, err := loadRole(path, flags)
-	if err != nil {
-		return RoleConfig{}, Config{}, err
-	}
-	rt := rc.WorkerRuntime()
-	applyDefaults(&rt)
-	rt.Mode = ModeWorker
-	rt.RemoteConfig.Enabled = true
-	rt.Worker.Enabled = true
-
-	if rc.Tasks.InstanceID == "" {
-		return RoleConfig{}, Config{}, fmt.Errorf("config: tasks.instanceID is required for the worker service")
-	}
-	if err := rt.Validate(); err != nil {
-		return RoleConfig{}, Config{}, err
 	}
 	return rc, rt, nil
 }
@@ -225,28 +148,6 @@ func LoadGateway(path string, flags *pflag.FlagSet) (RoleConfig, ClientConfig, e
 		return RoleConfig{}, ClientConfig{}, err
 	}
 	return rc, rc.Client(), nil
-}
-
-// LoadOperator loads the unified operator config and projects it onto the
-// ClientConfig the one-shot commands run on.
-func LoadOperator(path string, flags *pflag.FlagSet) (RoleConfig, ClientConfig, error) {
-	rc, err := loadRole(path, flags)
-	if err != nil {
-		return RoleConfig{}, ClientConfig{}, err
-	}
-	return rc, rc.Client(), nil
-}
-
-// applyRoleAliases maps convenience flags onto their canonical unified keys so
-// the flag name and config key stay aligned while a short alias still works.
-func applyRoleAliases(v *viper.Viper) {
-	copyIfSet(v, "instanceID", "tasks.instanceID")
-}
-
-func copyIfSet(v *viper.Viper, from, to string) {
-	if v.IsSet(from) {
-		v.Set(to, v.Get(from))
-	}
 }
 
 // setRoleDefaults registers viper defaults for every unified key so AutomaticEnv
@@ -275,19 +176,6 @@ func setRoleDefaults(v *viper.Viper) {
 	v.SetDefault("report.pipeline.deadLetterCap", 128)
 	v.SetDefault("report.filter.include", []string{})
 	v.SetDefault("report.filter.exclude", []string{})
-	// remoteConfig
-	v.SetDefault("remoteConfig.enabled", false)
-	v.SetDefault("remoteConfig.collection", DefaultRemoteConfigCollection)
-	v.SetDefault("remoteConfig.documentID", DefaultRemoteConfigDocumentID)
-	v.SetDefault("remoteConfig.syncInterval", DefaultRemoteConfigInterval)
-	// tasks
-	v.SetDefault("tasks.instanceID", "")
-	v.SetDefault("tasks.collection", DefaultTasksCollection)
-	v.SetDefault("tasks.instancesCollection", DefaultInstancesCollection)
-	v.SetDefault("tasks.pollInterval", DefaultWorkerPollInterval)
-	v.SetDefault("tasks.leaseTTL", DefaultWorkerLeaseDuration)
-	v.SetDefault("tasks.heartbeatInterval", DefaultHeartbeatInterval)
-	v.SetDefault("tasks.instanceTTL", DefaultInstanceTTL)
 	// gateway
 	v.SetDefault("gateway.addr", DefaultServerAddr)
 	// upload
@@ -295,15 +183,4 @@ func setRoleDefaults(v *viper.Viper) {
 	v.SetDefault("upload.file.logPattern", []string{})
 	v.SetDefault("upload.file.maxLineBytes", 10*1024*1024)
 	v.SetDefault("upload.file.checkpointCollection", DefaultFileUploadCheckpointCollection)
-	// backfill execution (registered so TANGO_BACKFILL_* env binds; the
-	// tri-state *bool flags paginate/forceSkipExisting are intentionally left
-	// unregistered so their nil-means-default semantics survive — set them via
-	// file or flag, not env).
-	v.SetDefault("backfill.projectID", 0)
-	v.SetDefault("backfill.pageSize", 0)
-	v.SetDefault("backfill.pageRetries", 0)
-	v.SetDefault("backfill.limit", 0)
-	v.SetDefault("backfill.skipLocalFilter", false)
-	// backfill selection
-	v.SetDefault("backfillFilter.table", BackfillTableEvent)
 }

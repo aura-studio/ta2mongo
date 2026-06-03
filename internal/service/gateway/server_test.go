@@ -37,20 +37,20 @@ func TestDecodeBody_BadJSON(t *testing.T) {
 func TestDecodeBody_ValidAndEmpty(t *testing.T) {
 	t.Run("valid", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		r := httptest.NewRequest(http.MethodPost, "/sql", strings.NewReader(`{"sql":"SELECT 1"}`))
+		r := httptest.NewRequest(http.MethodPost, "/ingest", strings.NewReader(`{"line":"hello"}`))
 		var dst struct {
-			SQL string `json:"sql"`
+			Line string `json:"line"`
 		}
 		if !decodeBody(w, r, &dst) {
 			t.Fatal("decodeBody rejected valid JSON")
 		}
-		if dst.SQL != "SELECT 1" {
-			t.Errorf("decoded sql = %q", dst.SQL)
+		if dst.Line != "hello" {
+			t.Errorf("decoded line = %q", dst.Line)
 		}
 	})
 	t.Run("empty body ok", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		r := httptest.NewRequest(http.MethodPost, "/backfill", http.NoBody)
+		r := httptest.NewRequest(http.MethodPost, "/upload", http.NoBody)
 		var dst struct{}
 		if !decodeBody(w, r, &dst) {
 			t.Fatal("decodeBody rejected an empty POST body")

@@ -397,7 +397,7 @@ report:
     logPattern: ["/tmp/x.log"]
     rescanInterval: "30s"
 `
-	_, rt, err := LoadReport(writeFile(t, "report.yaml", yaml), nil)
+	_, rt, err := LoadStandalone(writeFile(t, "standalone.yaml", yaml), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

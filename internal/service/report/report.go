@@ -1,6 +1,6 @@
 // Package report implements the report service runtime, orchestrating the
 // tango pipeline: file tailing -> line parsing -> batch accumulation ->
-// MongoDB bulk writes, with optional remote-config filter hot-reload.
+// MongoDB bulk writes.
 package report
 
 import (
@@ -13,7 +13,6 @@ import (
 
 	"rocket-nano/tools/tango/config"
 	"rocket-nano/tools/tango/internal/core/filter"
-	"rocket-nano/tools/tango/internal/core/remoteconfig"
 	"rocket-nano/tools/tango/internal/core/runtime"
 	"rocket-nano/tools/tango/internal/core/store"
 	"rocket-nano/tools/tango/internal/core/tailer"
@@ -97,13 +96,6 @@ func (d *Service) Run(ctx context.Context) error {
 	reportDone := make(chan struct{})
 	go d.reportStats(ctx, stats, startTime, reportDone)
 
-	// Launch the remote-config hot-reload loop (no-op unless enabled). It
-	// periodically re-fetches the override document and swaps the active
-	// filter in place; other fields only take effect on the next restart.
-	if d.cfg.RemoteConfig.Enabled {
-		go d.syncRemoteConfig(ctx)
-	}
-
 	// Block until all workers finish.
 	pipeline.RunWorkers(ctx, d.cfg, d.store, d.parser, d.filter, d.logger, lineCh, stats, ingestion.WriteOptions{})
 
@@ -114,65 +106,6 @@ func (d *Service) Run(ctx context.Context) error {
 	d.logFinalStats(stats, startTime)
 
 	return nil
-}
-
-// syncRemoteConfig periodically re-fetches the remote override document and
-// hot-swaps the active filter when the include/exclude lists change. Non-filter
-// fields are reported but only take effect on the next restart (matching the
-// agreed "filter hot, rest on restart" policy). It returns when ctx is done.
-func (d *Service) syncRemoteConfig(ctx context.Context) {
-	coll := d.mongo.DB.Collection(d.cfg.RemoteConfig.Collection)
-
-	ticker := time.NewTicker(d.cfg.RemoteConfig.SyncInterval)
-	defer ticker.Stop()
-
-	d.logger.WithFields(logrus.Fields{
-		"collection":    d.cfg.RemoteConfig.Collection,
-		"documentID":    d.cfg.RemoteConfig.DocumentID,
-		"sync_interval": d.cfg.RemoteConfig.SyncInterval,
-	}).Info("report: remote-config sync loop started")
-
-	// current is the most recently applied config; start from the boot config.
-	current := d.cfg
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			doc, err := remoteconfig.Fetch(ctx, coll, d.cfg.RemoteConfig.DocumentID)
-			if err != nil {
-				d.logger.WithError(err).Warn("report: remote-config fetch failed; keeping current")
-				continue
-			}
-			if doc == nil {
-				continue
-			}
-			merged, err := remoteconfig.Merge(current, doc)
-			if err != nil {
-				d.logger.WithError(err).Warn("report: remote-config merge failed; keeping current")
-				continue
-			}
-			if err := merged.Validate(); err != nil {
-				d.logger.WithError(err).Warn("report: remote-config invalid; keeping current")
-				continue
-			}
-
-			if remoteconfig.FilterChanged(current, merged) {
-				newFilter, ferr := merged.BuildFilter()
-				if ferr != nil {
-					d.logger.WithError(ferr).Warn("report: remote filter failed to compile; keeping current")
-					continue
-				}
-				d.filter.Store(newFilter)
-				d.logger.WithFields(logrus.Fields{
-					"filter_include": merged.Filter.Include,
-					"filter_exclude": merged.Filter.Exclude,
-				}).Info("report: hot-reloaded filter from remote config")
-			}
-			current = merged
-		}
-	}
 }
 
 // reportStats periodically logs processing statistics every statsReportInterval.

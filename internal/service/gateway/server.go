@@ -29,11 +29,6 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	mux.HandleFunc("/ingest", s.handleIngest)
 	mux.HandleFunc("/upload", s.handleUpload)
-	mux.HandleFunc("/backfill", s.handleBackfill)
-	mux.HandleFunc("/sql", s.handleSQL)
-	mux.HandleFunc("/publish/report-sync", s.handlePublishReportSync)
-	mux.HandleFunc("/publish/backfill", s.handlePublishBackfill)
-	mux.HandleFunc("/publish/sql", s.handlePublishSQL)
 
 	httpSrv := &http.Server{Addr: addr, Handler: mux}
 	errCh := make(chan error, 1)
@@ -123,84 +118,4 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
-}
-
-func (s *Server) handleBackfill(w http.ResponseWriter, r *http.Request) {
-	if !decodeBody(w, r, &struct{}{}) {
-		return
-	}
-	res, err := s.cli.RunBackfill(r.Context(), s.cc.BackfillRuntime())
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, res)
-}
-
-func (s *Server) handleSQL(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		SQL string `json:"sql"`
-	}
-	if !decodeBody(w, r, &req) {
-		return
-	}
-	rows, err := s.cli.ExecuteSQL(r.Context(), s.cc.SQLRuntime(), req.SQL)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"rows": rows})
-}
-
-func (s *Server) handlePublishReportSync(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Include []string `json:"include"`
-		Exclude []string `json:"exclude"`
-		Target  string   `json:"target"`
-	}
-	if !decodeBody(w, r, &req) {
-		return
-	}
-	id, err := s.cli.PublishReportSync(r.Context(), req.Include, req.Exclude, req.Target)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"taskID": id})
-}
-
-func (s *Server) handlePublishBackfill(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Payload map[string]any `json:"payload"`
-		Target  string         `json:"target"`
-	}
-	if !decodeBody(w, r, &req) {
-		return
-	}
-	id, err := s.cli.PublishBackfillTask(r.Context(), req.Payload, req.Target)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"taskID": id})
-}
-
-func (s *Server) handlePublishSQL(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		SQL    string `json:"sql"`
-		Table  string `json:"table"`
-		Target string `json:"target"`
-	}
-	if !decodeBody(w, r, &req) {
-		return
-	}
-	if req.Table == "" {
-		req.Table = s.cc.BackfillFilter.Table
-	}
-	id, err := s.cli.PublishSQLTask(r.Context(), req.SQL, req.Table, req.Target)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"taskID": id})
 }

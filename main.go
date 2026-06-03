@@ -1,5 +1,6 @@
-// Command tango is a single binary with role-oriented commands: report,
-// worker, gateway, and operator.
+// Command tango is a single binary with two role-oriented commands:
+// standalone (tail TA logs and report to MongoDB) and gateway (an HTTP face
+// for the same log-reporting functions).
 package main
 
 import (
@@ -8,9 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	gatewaycmd "rocket-nano/tools/tango/cmd/gateway"
-	operatorcmd "rocket-nano/tools/tango/cmd/operator"
-	reportcmd "rocket-nano/tools/tango/cmd/report"
-	workercmd "rocket-nano/tools/tango/cmd/worker"
+	standalonecmd "rocket-nano/tools/tango/cmd/standalone"
 )
 
 func main() {
@@ -22,16 +21,14 @@ func main() {
 func newRoot() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "tango",
-		Short: "Tango: role-oriented data pipeline for TA logs, tasks, and HTTP operations",
+		Short: "Tango: report ThinkingData logs to MongoDB (standalone or via HTTP gateway)",
 	}
 	root.PersistentFlags().String("config", "",
 		"path to config file (.yaml/.yml/.json); default: <role>.{yaml,yml,json} next to the binary; skipped if absent")
 
 	root.AddCommand(
-		reportcmd.NewCommand(),
-		workercmd.NewCommand(),
+		standalonecmd.NewCommand(),
 		gatewaycmd.NewCommand(),
-		operatorcmd.NewCommand(),
 	)
 	return root
 }
