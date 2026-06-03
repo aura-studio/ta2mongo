@@ -13,7 +13,7 @@ import (
 
 	"rocket-nano/tools/tango/config"
 	"rocket-nano/tools/tango/internal/core/filter"
-	"rocket-nano/tools/tango/internal/core/runtime"
+	coremongo "rocket-nano/tools/tango/internal/core/mongo"
 	"rocket-nano/tools/tango/internal/core/store"
 	"rocket-nano/tools/tango/internal/core/tailer"
 	"rocket-nano/tools/tango/internal/core/talog"
@@ -31,7 +31,7 @@ type Service struct {
 	store  *store.Store
 	parser *talog.Parser
 	filter *filter.Holder
-	mongo  *runtime.MongoResource
+	mongo  *coremongo.MongoResource
 }
 
 // New connects to MongoDB and creates a ready-to-run Service.
@@ -42,11 +42,11 @@ func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Servic
 		return nil, fmt.Errorf("report: %w", err)
 	}
 
-	res, err := runtime.ConnectMongo(ctx, cfg.Mongo)
+	res, err := coremongo.ConnectMongo(ctx, cfg.Mongo)
 	if err != nil {
 		return nil, fmt.Errorf("report: %w", err)
 	}
-	st := runtime.NewStore(res.DB, cfg, logger)
+	st := coremongo.NewStore(res.DB, cfg, logger)
 	p := talog.NewParser()
 
 	return &Service{cfg: cfg, logger: logger, store: st, parser: p, filter: filter.NewHolder(flt), mongo: res}, nil

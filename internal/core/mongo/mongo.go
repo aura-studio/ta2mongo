@@ -1,9 +1,9 @@
-// Package runtime assembles the shared runtime resources used by the service
+// Package mongo assembles the shared MongoDB resources used by the service
 // and process layers — chiefly the MongoDB connection, the resolved database,
 // and the Store — so that connection setup, database resolution, and lifecycle
 // ownership are expressed once instead of being copy-pasted into every service
 // constructor.
-package runtime
+package mongo
 
 import (
 	"context"

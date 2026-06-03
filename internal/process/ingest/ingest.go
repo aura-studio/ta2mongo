@@ -20,11 +20,11 @@ import (
 	"fmt"
 
 	"github.com/sirupsen/logrus"
-	"go.mongodb.org/mongo-driver/mongo"
+	drivermongo "go.mongodb.org/mongo-driver/mongo"
 
 	"rocket-nano/tools/tango/config"
 	"rocket-nano/tools/tango/internal/core/filter"
-	"rocket-nano/tools/tango/internal/core/runtime"
+	coremongo "rocket-nano/tools/tango/internal/core/mongo"
 	"rocket-nano/tools/tango/internal/core/store"
 	"rocket-nano/tools/tango/internal/core/talog"
 	"rocket-nano/tools/tango/internal/process/ingestion"
@@ -35,7 +35,7 @@ import (
 type Ingester struct {
 	proc   *ingestion.Processor
 	store  *store.Store
-	mongo  *runtime.MongoResource
+	mongo  *coremongo.MongoResource
 	logger *logrus.Logger
 }
 
@@ -50,7 +50,7 @@ func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Ingest
 	if err != nil {
 		return nil, fmt.Errorf("ingest: %w", err)
 	}
-	res, err := runtime.ConnectMongo(ctx, cfg.Mongo)
+	res, err := coremongo.ConnectMongo(ctx, cfg.Mongo)
 	if err != nil {
 		return nil, fmt.Errorf("ingest: %w", err)
 	}
@@ -61,20 +61,20 @@ func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Ingest
 // second connection. The client is borrowed: Close will not disconnect it (the
 // caller owns its lifecycle). Returns an error if the configured filter
 // expressions fail to compile.
-func NewFromClient(client *mongo.Client, cfg config.Config, logger *logrus.Logger) (*Ingester, error) {
+func NewFromClient(client *drivermongo.Client, cfg config.Config, logger *logrus.Logger) (*Ingester, error) {
 	flt, err := cfg.BuildFilter()
 	if err != nil {
 		return nil, fmt.Errorf("ingest: %w", err)
 	}
-	res, err := runtime.Borrow(client, cfg.Mongo.URI)
+	res, err := coremongo.Borrow(client, cfg.Mongo.URI)
 	if err != nil {
 		return nil, fmt.Errorf("ingest: %w", err)
 	}
 	return newIngester(res, flt, cfg, logger), nil
 }
 
-func newIngester(res *runtime.MongoResource, flt *filter.Filter, cfg config.Config, logger *logrus.Logger) *Ingester {
-	st := runtime.NewStore(res.DB, cfg, logger)
+func newIngester(res *coremongo.MongoResource, flt *filter.Filter, cfg config.Config, logger *logrus.Logger) *Ingester {
+	st := coremongo.NewStore(res.DB, cfg, logger)
 	return &Ingester{
 		proc:   ingestion.NewProcessor(talog.NewParser(), filter.NewHolder(flt), st, ingestion.NoopStats{}, ingestion.WriteOptions{}),
 		store:  st,
@@ -113,19 +113,19 @@ func (ig *Ingester) Ingest(ctx context.Context, line string) error {
 		ig.writeDeadLetter(ctx, res.Model)
 		return fmt.Errorf("ingest: identity resolve: %w", res.Err)
 	case ingestion.KindUser:
-		if err := ig.store.BulkWriteOrdered(ctx, ig.store.UserCollection(), []mongo.WriteModel{res.Model}); err != nil {
+		if err := ig.store.BulkWriteOrdered(ctx, ig.store.UserCollection(), []drivermongo.WriteModel{res.Model}); err != nil {
 			return fmt.Errorf("ingest: write user: %w", err)
 		}
 	case ingestion.KindEvent:
-		if err := ig.store.BulkWrite(ctx, ig.store.EventCollection(), []mongo.WriteModel{res.Model}); err != nil {
+		if err := ig.store.BulkWrite(ctx, ig.store.EventCollection(), []drivermongo.WriteModel{res.Model}); err != nil {
 			return fmt.Errorf("ingest: write event: %w", err)
 		}
 	}
 	return nil
 }
 
-func (ig *Ingester) writeDeadLetter(ctx context.Context, model mongo.WriteModel) {
-	if err := ig.store.BulkWrite(ctx, ig.store.DeadLetterCollection(), []mongo.WriteModel{model}); err != nil {
+func (ig *Ingester) writeDeadLetter(ctx context.Context, model drivermongo.WriteModel) {
+	if err := ig.store.BulkWrite(ctx, ig.store.DeadLetterCollection(), []drivermongo.WriteModel{model}); err != nil {
 		ig.logger.WithError(err).Warn("ingest: failed to write dead letter")
 	}
 }
@@ -138,9 +138,9 @@ func (ig *Ingester) writeDeadLetter(ctx context.Context, model mongo.WriteModel)
 // errors are logged but do not prevent other lines from being processed.
 func (ig *Ingester) IngestBatch(ctx context.Context, lines []string) error {
 	var (
-		userModels  []mongo.WriteModel
-		eventModels []mongo.WriteModel
-		deadModels  []mongo.WriteModel
+		userModels  []drivermongo.WriteModel
+		eventModels []drivermongo.WriteModel
+		deadModels  []drivermongo.WriteModel
 	)
 
 	for _, line := range lines {
