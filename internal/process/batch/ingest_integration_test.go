@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"rocket-nano/tools/tango/config"
 	"rocket-nano/tools/tango/internal/dao"
 	daomongo "rocket-nano/tools/tango/internal/dao/mongo"
 	"rocket-nano/tools/tango/internal/dao/store"
@@ -49,16 +48,14 @@ func testIngesterSetup(t *testing.T) (*Ingester, *mongo.Database, func()) {
 	dbName := fmt.Sprintf("tango_ingest_test_%d_%d", time.Now().UnixNano(), rand.Intn(10000))
 	uri := testMongoURI + "/" + dbName
 
-	cfg := config.Config{
-		Dao: &dao.Config{
-			Mongo: &daomongo.Config{URI: uri},
-			Store: &store.Config{MaxElapsedTime: 5 * time.Second},
-		},
+	daoCfg := &dao.Config{
+		Mongo: &daomongo.Config{URI: uri},
+		Store: &store.Config{MaxElapsedTime: 5 * time.Second},
 	}
 
 	ctx := context.Background()
 
-	ig, err := New(ctx, cfg)
+	ig, err := New(ctx, daoCfg, nil)
 	if err != nil {
 		t.Fatalf("create ingester: %v", err)
 	}
@@ -502,4 +499,3 @@ func TestIngest_UserUnset(t *testing.T) {
 		t.Errorf("expected name=Alice to remain, got %v", doc["name"])
 	}
 }
-

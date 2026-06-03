@@ -9,8 +9,10 @@ import (
 	"rocket-nano/tools/tango/internal/dao"
 	"rocket-nano/tools/tango/internal/dao/mongo"
 	"rocket-nano/tools/tango/internal/dao/store"
-	"rocket-nano/tools/tango/internal/log"
+	"rocket-nano/tools/tango/internal/engine"
+	"rocket-nano/tools/tango/internal/logging"
 	"rocket-nano/tools/tango/internal/parser/filter"
+	"rocket-nano/tools/tango/internal/process"
 	"rocket-nano/tools/tango/internal/process/pipeline"
 	"rocket-nano/tools/tango/internal/source/tailer"
 )
@@ -36,9 +38,9 @@ type RoleConfig struct {
 
 // RuntimeConfig is the process-wide block shared by every role.
 type RuntimeConfig struct {
-	Logging *log.Config   `mapstructure:"logging"`
-	Mongo   *mongo.Config `mapstructure:"mongo"`
-	Store   *store.Config `mapstructure:"store"`
+	Logging *logging.Config `mapstructure:"logging"`
+	Mongo   *mongo.Config   `mapstructure:"mongo"`
+	Store   *store.Config   `mapstructure:"store"`
 }
 
 func (r RuntimeConfig) Dao() *dao.Config {
@@ -82,12 +84,12 @@ type UploadFileConfig struct {
 // the standalone report service.
 func (r RoleConfig) ReportRuntime() Config {
 	return Config{
-		Mode:     ModeReport,
-		Logging:  r.Runtime.Logging,
-		Dao:      r.Runtime.Dao(),
-		Source:   r.Report.Source,
-		Pipeline: r.Report.Pipeline,
-		Parser:   parserConfigFromFilter(r.Report.Filter),
+		Dao:     r.Runtime.Dao(),
+		Engine:  &engine.Config{Mode: ModeReport},
+		Logging: r.Runtime.Logging,
+		Parser:  parserConfigFromFilter(r.Report.Filter),
+		Process: &process.Config{Pipeline: r.Report.Pipeline},
+		Source:  r.Report.Source,
 	}
 }
 

@@ -1,10 +1,10 @@
-// Package log is the shared logging foundation for the whole module. Instead of
+// package logging is the shared logging foundation for the whole module. Instead of
 // threading a *logrus.Logger through every constructor, all packages call the
 // package-level helpers here, which delegate to a single process-wide logger.
 //
 // Configure it once at startup with Init; everything logged afterwards uses the
 // chosen level and format.
-package log
+package logging
 
 import (
 	"strings"

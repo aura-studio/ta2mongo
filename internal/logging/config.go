@@ -1,6 +1,6 @@
-package log
+package logging
 
-// Config configures log output. It is the log module's own configuration; the
+// Config configures log output. It is the logging module's own configuration; the
 // top-level config package references it by pointer and the loader unmarshals
 // the logging.* keys into it.
 type Config struct {

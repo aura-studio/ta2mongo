@@ -12,7 +12,7 @@ import (
 
 	sdk "rocket-nano/tools/tango/client"
 	"rocket-nano/tools/tango/config"
-	"rocket-nano/tools/tango/internal/log"
+	"rocket-nano/tools/tango/internal/logging"
 )
 
 // ConfigFlag reads the inherited --config persistent flag (empty when unset).
@@ -56,7 +56,7 @@ func GatewayConfig(cmd *cobra.Command) (config.ClientConfig, error) {
 	if err != nil {
 		return config.ClientConfig{}, err
 	}
-	log.Init(cc.Logging.Level)
+	logging.Init(cc.Logging.Level)
 	return cc, nil
 }
 

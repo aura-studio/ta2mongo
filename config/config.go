@@ -8,8 +8,8 @@
 // TANGO_* env + flag loading helpers.
 //
 // Each runtime concern owns its own config struct in its module (dao.Config,
-// parser.Config, tailer.Config, pipeline.Config, log.Config); the top-level
-// Config merely references them by pointer.
+// engine.Config, logging.Config, parser.Config, process.Config, tailer.Config);
+// the top-level Config merely references them by pointer.
 //
 // Sources, in increasing priority: built-in defaults < config file (YAML or
 // JSON, by extension) < TANGO_* environment variables < CLI flags.
@@ -19,9 +19,10 @@ import (
 	"fmt"
 
 	"rocket-nano/tools/tango/internal/dao"
-	"rocket-nano/tools/tango/internal/log"
+	"rocket-nano/tools/tango/internal/engine"
+	"rocket-nano/tools/tango/internal/logging"
 	"rocket-nano/tools/tango/internal/parser"
-	"rocket-nano/tools/tango/internal/process/pipeline"
+	"rocket-nano/tools/tango/internal/process"
 	"rocket-nano/tools/tango/internal/source/tailer"
 )
 
@@ -36,31 +37,34 @@ const (
 // Config is the top-level runtime configuration for the report pipeline. Each
 // section is a pointer to the owning module's config struct.
 type Config struct {
-	// Mode selects the runtime role. Only report is supported.
-	Mode string `mapstructure:"mode"`
-
-	// Logging configures log output (internal/log).
-	Logging *log.Config `mapstructure:"logging"`
-
 	// Dao configures data access: MongoDB connection and store write behaviour.
 	Dao *dao.Config `mapstructure:"dao"`
 
-	// Source configures the file-tailing data source (internal/source/tailer).
-	Source *tailer.Config `mapstructure:"source"`
+	// Engine configures runtime engine behavior.
+	Engine *engine.Config `mapstructure:"engine"`
 
-	// Pipeline configures batching and parallel write workers
-	// (internal/process/pipeline).
-	Pipeline *pipeline.Config `mapstructure:"pipeline"`
+	// Logging configures log output (internal/logging).
+	Logging *logging.Config `mapstructure:"logging"`
 
 	// Parser configures log parsing and reporting filters.
 	Parser *parser.Config `mapstructure:"parser"`
+
+	// Process configures ingestion processing.
+	Process *process.Config `mapstructure:"process"`
+
+	// Source configures the file-tailing data source (internal/source/tailer).
+	Source *tailer.Config `mapstructure:"source"`
 }
 
 // Validate checks that required fields are present. It assumes applyDefaults has
 // run (so the section pointers are non-nil) but still guards them defensively.
 func (c *Config) Validate() error {
-	if c.Mode != ModeReport {
-		return fmt.Errorf("config: mode must be %q; got %q", ModeReport, c.Mode)
+	if c.Engine == nil || c.Engine.Mode != ModeReport {
+		got := ""
+		if c.Engine != nil {
+			got = c.Engine.Mode
+		}
+		return fmt.Errorf("config: engine.mode must be %q; got %q", ModeReport, got)
 	}
 	if c.Dao == nil || c.Dao.Mongo == nil || c.Dao.Mongo.URI == "" {
 		return fmt.Errorf("config: mongo.uri is required (set runtime.mongo.uri in the config file, via TANGO_RUNTIME_MONGO_URI, or via --runtime.mongo.uri)")
@@ -76,14 +80,15 @@ func (c *Config) Validate() error {
 			tailer.TailModeHybrid, tailer.TailModePoll, tailer.TailModeEvent, c.Source.TailMode)
 	}
 	// Validate batch size constraints.
-	if c.Pipeline != nil {
-		if c.Pipeline.BatchSizeMin > 0 && c.Pipeline.BatchSizeMin > c.Pipeline.BatchSize {
-			return fmt.Errorf("config: pipeline.batchSizeMin (%d) cannot exceed pipeline.batchSize (%d)",
-				c.Pipeline.BatchSizeMin, c.Pipeline.BatchSize)
+	if c.Process != nil && c.Process.Pipeline != nil {
+		p := c.Process.Pipeline
+		if p.BatchSizeMin > 0 && p.BatchSizeMin > p.BatchSize {
+			return fmt.Errorf("config: process.pipeline.batchSizeMin (%d) cannot exceed process.pipeline.batchSize (%d)",
+				p.BatchSizeMin, p.BatchSize)
 		}
-		if c.Pipeline.BatchSizeMax > 0 && c.Pipeline.BatchSize > c.Pipeline.BatchSizeMax {
-			return fmt.Errorf("config: pipeline.batchSize (%d) cannot exceed pipeline.batchSizeMax (%d)",
-				c.Pipeline.BatchSize, c.Pipeline.BatchSizeMax)
+		if p.BatchSizeMax > 0 && p.BatchSize > p.BatchSizeMax {
+			return fmt.Errorf("config: process.pipeline.batchSize (%d) cannot exceed process.pipeline.batchSizeMax (%d)",
+				p.BatchSize, p.BatchSizeMax)
 		}
 	}
 	if _, err := c.Parser.Build(); err != nil {

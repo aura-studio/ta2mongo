@@ -6,7 +6,7 @@ import (
 	"rocket-nano/tools/tango/internal/dao"
 	"rocket-nano/tools/tango/internal/dao/mongo"
 	"rocket-nano/tools/tango/internal/dao/store"
-	"rocket-nano/tools/tango/internal/log"
+	"rocket-nano/tools/tango/internal/logging"
 	"rocket-nano/tools/tango/internal/parser"
 	"rocket-nano/tools/tango/internal/parser/filter"
 	"rocket-nano/tools/tango/internal/process/pipeline"
@@ -18,8 +18,8 @@ import (
 // an HTTP server block for the gateway face. Each section is a pointer to the
 // owning module's config struct.
 type ClientConfig struct {
-	Logging *log.Config `mapstructure:"logging"`
-	Dao     *dao.Config `mapstructure:"dao"`
+	Logging *logging.Config `mapstructure:"logging"`
+	Dao     *dao.Config     `mapstructure:"dao"`
 
 	// StringUpload: single string ingest, no retransmission.
 	StringUpload StringUploadConfig `mapstructure:"stringUpload"`
@@ -60,7 +60,7 @@ const DefaultServerAddr = ":8080"
 
 func (c *ClientConfig) applyDefaults() {
 	if c.Logging == nil {
-		c.Logging = &log.Config{}
+		c.Logging = &logging.Config{}
 	}
 	if c.Logging.Level == "" {
 		c.Logging.Level = "info"

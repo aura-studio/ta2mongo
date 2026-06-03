@@ -11,7 +11,7 @@ import (
 
 	"rocket-nano/tools/tango/config"
 	"rocket-nano/tools/tango/internal/dao"
-	"rocket-nano/tools/tango/internal/log"
+	"rocket-nano/tools/tango/internal/logging"
 	"rocket-nano/tools/tango/internal/parser"
 	"rocket-nano/tools/tango/internal/process"
 	"rocket-nano/tools/tango/internal/source/tailer"
@@ -67,11 +67,11 @@ func (d *Service) Run(ctx context.Context) error {
 		return errors.New("report: ta.logPattern is required (at least one regex)")
 	}
 
-	log.WithFields(log.Fields{
+	logging.WithFields(logging.Fields{
 		"log_patterns":   d.cfg.Source.LogPattern,
-		"workers":        d.cfg.Pipeline.BatchWorkers,
-		"batch_size":     d.cfg.Pipeline.BatchSize,
-		"flush_interval": d.cfg.Pipeline.FlushInterval,
+		"workers":        d.cfg.Process.Pipeline.BatchWorkers,
+		"batch_size":     d.cfg.Process.Pipeline.BatchSize,
+		"flush_interval": d.cfg.Process.Pipeline.FlushInterval,
 		"tail_mode":      d.cfg.Source.TailMode,
 	}).Info("report: starting pipeline")
 
@@ -88,7 +88,7 @@ func (d *Service) Run(ctx context.Context) error {
 	go d.reportStats(ctx, stats, startTime, reportDone)
 
 	// Block until all workers finish.
-	process.RunPipeline(ctx, d.cfg, d.dao, d.source, lineCh, stats, process.WriteOptions{})
+	process.RunPipeline(ctx, d.cfg.Process, d.dao, d.source, lineCh, stats, process.WriteOptions{})
 
 	// Wait for the reporter goroutine to exit.
 	<-reportDone
@@ -117,7 +117,7 @@ func (d *Service) reportStats(ctx context.Context, stats *process.Counters, star
 
 			uptime := time.Since(startTime).Round(time.Second)
 
-			log.WithFields(log.Fields{
+			logging.WithFields(logging.Fields{
 				"uptime":                uptime,
 				"interval_lines":        cur.TotalLines - prev.TotalLines,
 				"interval_parsed_ok":    cur.ParsedOK - prev.ParsedOK,
@@ -131,7 +131,7 @@ func (d *Service) reportStats(ctx context.Context, stats *process.Counters, star
 				"interval_filter_err":   cur.FilterErrors - prev.FilterErrors,
 			}).Info("report: periodic stats (last 60s)")
 
-			log.WithFields(log.Fields{
+			logging.WithFields(logging.Fields{
 				"total_lines":        cur.TotalLines,
 				"total_parsed_ok":    cur.ParsedOK,
 				"total_parse_err":    cur.ParseErrors,
@@ -155,8 +155,8 @@ func (d *Service) logFinalStats(stats *process.Counters, startTime time.Time) {
 
 	duration := time.Since(startTime).Round(time.Second)
 
-	log.Info("report: ========== shutdown summary ==========")
-	log.WithFields(log.Fields{
+	logging.Info("report: ========== shutdown summary ==========")
+	logging.WithFields(logging.Fields{
 		"total_lines":        cur.TotalLines,
 		"total_parsed_ok":    cur.ParsedOK,
 		"total_parse_errors": cur.ParseErrors,
@@ -172,12 +172,12 @@ func (d *Service) logFinalStats(stats *process.Counters, startTime time.Time) {
 
 	if cur.TotalLines > 0 && duration.Seconds() > 0 {
 		lps := float64(cur.TotalLines) / duration.Seconds()
-		log.WithField("lines_per_second", fmt.Sprintf("%.1f", lps)).Info("report: average throughput")
+		logging.WithField("lines_per_second", fmt.Sprintf("%.1f", lps)).Info("report: average throughput")
 	}
 
 	if cur.ParseErrors > 0 || cur.IdentityErrors > 0 || cur.WriteErrors > 0 {
-		log.Warn("report: ========== SHUTDOWN WITH ERRORS ==========")
+		logging.Warn("report: ========== SHUTDOWN WITH ERRORS ==========")
 	} else {
-		log.Info("report: ========== SHUTDOWN COMPLETE ==========")
+		logging.Info("report: ========== SHUTDOWN COMPLETE ==========")
 	}
 }

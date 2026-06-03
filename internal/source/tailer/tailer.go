@@ -17,7 +17,7 @@ import (
 
 	"github.com/hpcloud/tail"
 
-	"rocket-nano/tools/tango/internal/log"
+	"rocket-nano/tools/tango/internal/logging"
 )
 
 // ---------------------------------------------------------------------------
@@ -298,7 +298,7 @@ func (t *Tailer) startFile(ctx context.Context, path string, out chan<- string) 
 	t.tailed[path] = struct{}{}
 	t.mu.Unlock()
 
-	log.WithFields(log.Fields{
+	logging.WithFields(logging.Fields{
 		"path":      path,
 		"tail_mode": t.tailMode,
 	}).Info("tailer: discovered and tailing new file")
@@ -329,7 +329,7 @@ func (t *Tailer) tailFile(ctx context.Context, path string, out chan<- string) {
 			if ctx.Err() != nil {
 				return
 			}
-			log.WithError(err).WithField("path", path).Warn("tailer: error reading file, will retry")
+			logging.WithError(err).WithField("path", path).Warn("tailer: error reading file, will retry")
 		}
 
 		// File was deleted or rotated; wait for it to reappear.
@@ -447,7 +447,7 @@ func (t *Tailer) tailFileEvent(ctx context.Context, path string, out chan<- stri
 		MaxLineSize: t.maxLineSize,
 	})
 	if err != nil {
-		log.WithError(err).WithField("path", path).Warn("tailer: failed to start event-mode tailing")
+		logging.WithError(err).WithField("path", path).Warn("tailer: failed to start event-mode tailing")
 		t.mu.Lock()
 		delete(t.tailed, path)
 		t.mu.Unlock()
@@ -522,12 +522,12 @@ func (t *Tailer) tailFileHybrid(ctx context.Context, path string, out chan<- str
 		}
 
 		// --- Phase 2: poll fallback to drain missed data ---
-		log.WithField("path", path).Debug("tailer: hybrid fallback — draining missed data via poll")
+		logging.WithField("path", path).Debug("tailer: hybrid fallback — draining missed data via poll")
 		if err := t.drainByPoll(ctx, path, out, &lastSize); err != nil {
 			if ctx.Err() != nil {
 				return
 			}
-			log.WithError(err).WithField("path", path).Warn("tailer: hybrid poll drain error")
+			logging.WithError(err).WithField("path", path).Warn("tailer: hybrid poll drain error")
 			select {
 			case <-ctx.Done():
 				return
@@ -671,7 +671,7 @@ func discoverFiles(patterns []string) []string {
 		matchPattern = normalizePath(matchPattern)
 
 		base := globBaseDir(pattern)
-		log.WithFields(log.Fields{
+		logging.WithFields(logging.Fields{
 			"pattern":  pattern,
 			"walk_dir": base,
 		}).Debug("tailer: scanning directory for matching files")
@@ -697,10 +697,10 @@ func discoverFiles(patterns []string) []string {
 			return nil
 		})
 		if walkErr != nil {
-			log.WithError(walkErr).WithField("walk_dir", base).Warn("tailer: error walking directory")
+			logging.WithError(walkErr).WithField("walk_dir", base).Warn("tailer: error walking directory")
 		}
 
-		log.WithFields(log.Fields{
+		logging.WithFields(logging.Fields{
 			"pattern":       pattern,
 			"walk_dir":      base,
 			"files_matched": matched,

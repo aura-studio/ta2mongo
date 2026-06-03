@@ -235,11 +235,12 @@ func TestFlushInterval(t *testing.T) {
 dao:
   mongo:
     uri: "mongodb://localhost"
-pipeline:
-  flushInterval: "500ms"
+process:
+  pipeline:
+    flushInterval: "500ms"
 `)
 	want := 500 * time.Millisecond
-	if got := cfg.Pipeline.FlushInterval; got != want {
+	if got := cfg.Process.Pipeline.FlushInterval; got != want {
 		t.Errorf("FlushInterval = %v, want %v", got, want)
 	}
 }
@@ -263,8 +264,8 @@ dao:
 	if cfg.Source.MaxLineBytes != 10*1024*1024 {
 		t.Errorf("maxLineBytes = %d", cfg.Source.MaxLineBytes)
 	}
-	if cfg.Pipeline.DeadLetterCap != 128 {
-		t.Errorf("deadLetterCap = %d", cfg.Pipeline.DeadLetterCap)
+	if cfg.Process.Pipeline.DeadLetterCap != 128 {
+		t.Errorf("deadLetterCap = %d", cfg.Process.Pipeline.DeadLetterCap)
 	}
 	if cfg.Logging.Level != "info" || cfg.Logging.Format != "text" {
 		t.Errorf("logging = %+v", cfg.Logging)
@@ -272,12 +273,12 @@ dao:
 }
 
 func TestChannelBuffer_DerivedVsExplicit(t *testing.T) {
-	cfg := loadFlat(t, "mongo:\n  uri: x\npipeline:\n  batchSize: 500\n")
-	if got := cfg.Pipeline.ChannelSize(); got != 1000 {
+	cfg := loadFlat(t, "dao:\n  mongo:\n    uri: x\nprocess:\n  pipeline:\n    batchSize: 500\n")
+	if got := cfg.Process.Pipeline.ChannelSize(); got != 1000 {
 		t.Errorf("derived channel size = %d, want 1000", got)
 	}
-	cfg = loadFlat(t, "mongo:\n  uri: x\npipeline:\n  batchSize: 500\n  channelBuffer: 4096\n")
-	if got := cfg.Pipeline.ChannelSize(); got != 4096 {
+	cfg = loadFlat(t, "dao:\n  mongo:\n    uri: x\nprocess:\n  pipeline:\n    batchSize: 500\n    channelBuffer: 4096\n")
+	if got := cfg.Process.Pipeline.ChannelSize(); got != 4096 {
 		t.Errorf("explicit channel size = %d, want 4096", got)
 	}
 }
@@ -291,15 +292,16 @@ func TestBatchSizeMinMax_ConfiguredValues(t *testing.T) {
 dao:
   mongo:
     uri: "mongodb://localhost"
-pipeline:
-  batchSize: 1000
-  batchSizeMin: 200
-  batchSizeMax: 3000
+process:
+  pipeline:
+    batchSize: 1000
+    batchSizeMin: 200
+    batchSizeMax: 3000
 `)
-	if got := cfg.Pipeline.MinBatchSize(); got != 200 {
+	if got := cfg.Process.Pipeline.MinBatchSize(); got != 200 {
 		t.Errorf("BatchSizeMin() = %d, want 200", got)
 	}
-	if got := cfg.Pipeline.MaxBatchSize(); got != 3000 {
+	if got := cfg.Process.Pipeline.MaxBatchSize(); got != 3000 {
 		t.Errorf("BatchSizeMax() = %d, want 3000", got)
 	}
 }
@@ -309,15 +311,16 @@ func TestBatchSizeMinMax_AutoDerivation(t *testing.T) {
 dao:
   mongo:
     uri: "mongodb://localhost"
-pipeline:
-  batchSize: 1000
-  batchSizeMin: 0
-  batchSizeMax: 0
+process:
+  pipeline:
+    batchSize: 1000
+    batchSizeMin: 0
+    batchSizeMax: 0
 `)
-	if got := cfg.Pipeline.MinBatchSize(); got != 250 {
+	if got := cfg.Process.Pipeline.MinBatchSize(); got != 250 {
 		t.Errorf("BatchSizeMin() = %d, want 250 (auto-derived BatchSize/4)", got)
 	}
-	if got := cfg.Pipeline.MaxBatchSize(); got != 2000 {
+	if got := cfg.Process.Pipeline.MaxBatchSize(); got != 2000 {
 		t.Errorf("BatchSizeMax() = %d, want 2000 (auto-derived BatchSize*2)", got)
 	}
 }
@@ -327,24 +330,26 @@ func TestBatchSizeMinMax_ClampBehavior(t *testing.T) {
 dao:
   mongo:
     uri: "mongodb://localhost"
-pipeline:
-  batchSize: 1000
-  batchSizeMin: 1500
-  batchSizeMax: 0
+process:
+  pipeline:
+    batchSize: 1000
+    batchSizeMin: 1500
+    batchSizeMax: 0
 `)
-	if got := cfg.Pipeline.MinBatchSize(); got != 1000 {
+	if got := cfg.Process.Pipeline.MinBatchSize(); got != 1000 {
 		t.Errorf("BatchSizeMin() = %d, want 1000 (clamped to batchSize)", got)
 	}
 	cfg2 := loadFlat(t, `
 dao:
   mongo:
     uri: "mongodb://localhost"
-pipeline:
-  batchSize: 1000
-  batchSizeMin: 0
-  batchSizeMax: 500
+process:
+  pipeline:
+    batchSize: 1000
+    batchSizeMin: 0
+    batchSizeMax: 500
 `)
-	if got := cfg2.Pipeline.MaxBatchSize(); got != 1000 {
+	if got := cfg2.Process.Pipeline.MaxBatchSize(); got != 1000 {
 		t.Errorf("BatchSizeMax() = %d, want 1000 (clamped to batchSize)", got)
 	}
 }
@@ -355,12 +360,13 @@ func TestBatchSizeMinMax_ValidationErrors(t *testing.T) {
 dao:
   mongo:
     uri: "mongodb://localhost"
-pipeline:
-  batchSize: 1000
-  batchSizeMin: 1500
+process:
+  pipeline:
+    batchSize: 1000
+    batchSizeMin: 1500
 `)
-	if cfg.Pipeline.MinBatchSize() != 1000 {
-		t.Errorf("BatchSizeMin() = %d, want 1000 (clamped)", cfg.Pipeline.MinBatchSize())
+	if cfg.Process.Pipeline.MinBatchSize() != 1000 {
+		t.Errorf("BatchSizeMin() = %d, want 1000 (clamped)", cfg.Process.Pipeline.MinBatchSize())
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("Validate() unexpected error: %v", err)
@@ -370,12 +376,13 @@ pipeline:
 dao:
   mongo:
     uri: "mongodb://localhost"
-pipeline:
-  batchSize: 1000
-  batchSizeMax: 500
+process:
+  pipeline:
+    batchSize: 1000
+    batchSizeMax: 500
 `)
-	if cfg2.Pipeline.MaxBatchSize() != 1000 {
-		t.Errorf("BatchSizeMax() = %d, want 1000 (clamped)", cfg2.Pipeline.MaxBatchSize())
+	if cfg2.Process.Pipeline.MaxBatchSize() != 1000 {
+		t.Errorf("BatchSizeMax() = %d, want 1000 (clamped)", cfg2.Process.Pipeline.MaxBatchSize())
 	}
 	if err := cfg2.Validate(); err != nil {
 		t.Errorf("Validate() unexpected error: %v", err)
@@ -387,15 +394,16 @@ func TestBatchSizeMinMax_BatchSize1_Ceiling(t *testing.T) {
 dao:
   mongo:
     uri: "mongodb://localhost"
-pipeline:
-  batchSize: 1
-  batchSizeMin: 0
-  batchSizeMax: 0
+process:
+  pipeline:
+    batchSize: 1
+    batchSizeMin: 0
+    batchSizeMax: 0
 `)
-	if got := cfg.Pipeline.MinBatchSize(); got != 1 {
+	if got := cfg.Process.Pipeline.MinBatchSize(); got != 1 {
 		t.Errorf("BatchSizeMin() = %d, want 1 (minimum 1)", got)
 	}
-	if got := cfg.Pipeline.MaxBatchSize(); got != 2 {
+	if got := cfg.Process.Pipeline.MaxBatchSize(); got != 2 {
 		t.Errorf("BatchSizeMax() = %d, want 2 (BatchSize*2)", got)
 	}
 }

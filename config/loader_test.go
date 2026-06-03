@@ -60,8 +60,8 @@ report:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rt.Pipeline.BatchSize != 2500 {
-		t.Errorf("pipeline.batchSize via int env = %d, want 2500", rt.Pipeline.BatchSize)
+	if rt.Process.Pipeline.BatchSize != 2500 {
+		t.Errorf("pipeline.batchSize via int env = %d, want 2500", rt.Process.Pipeline.BatchSize)
 	}
 }
 

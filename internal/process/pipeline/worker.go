@@ -8,7 +8,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 
 	daostore "rocket-nano/tools/tango/internal/dao/store"
-	"rocket-nano/tools/tango/internal/log"
+	"rocket-nano/tools/tango/internal/logging"
 	"rocket-nano/tools/tango/internal/parser/filter"
 	"rocket-nano/tools/tango/internal/parser/talog"
 	"rocket-nano/tools/tango/internal/process/single"
@@ -95,7 +95,7 @@ func worker(ctx context.Context, cfg *Config, st *daostore.Store,
 			case single.KindParseError:
 				invalidCount++
 				if invalidCount%1000 == 0 {
-					log.WithError(res.Err).Warnf("dropped invalid line (total invalid=%d)", invalidCount)
+					logging.WithError(res.Err).Warnf("dropped invalid line (total invalid=%d)", invalidCount)
 				}
 				deadBatch.Add(res.Model)
 				if deadBatch.Full() || time.Since(lastFlush) >= flushInterval {
@@ -103,7 +103,7 @@ func worker(ctx context.Context, cfg *Config, st *daostore.Store,
 				}
 				continue
 			case single.KindIdentityError:
-				log.WithError(res.Err).Warn("identity resolve failed, sending to dead letter")
+				logging.WithError(res.Err).Warn("identity resolve failed, sending to dead letter")
 				deadBatch.Add(res.Model)
 				continue
 			case single.KindFiltered:
@@ -155,7 +155,7 @@ func flushBatch(ctx context.Context, st *daostore.Store,
 	}
 	if err := st.BulkWrite(ctx, coll, b.Models); err != nil {
 		stats.OnWriteError()
-		log.WithError(err).WithField("collection", coll.Name()).
+		logging.WithError(err).WithField("collection", coll.Name()).
 			Error("bulk write failed")
 	}
 	b.Reset()
@@ -171,7 +171,7 @@ func flushBatchOrdered(ctx context.Context, st *daostore.Store,
 	}
 	if err := st.BulkWriteOrdered(ctx, coll, b.Models); err != nil {
 		stats.OnWriteError()
-		log.WithError(err).WithField("collection", coll.Name()).
+		logging.WithError(err).WithField("collection", coll.Name()).
 			Error("bulk write failed")
 	}
 	b.Reset()

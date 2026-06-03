@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"rocket-nano/tools/tango/internal/log"
+	"rocket-nano/tools/tango/internal/logging"
 
 	"github.com/cenkalti/backoff/v4"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -107,7 +107,7 @@ func (s *Store) bulkWrite(ctx context.Context, coll *mongo.Collection, models []
 	}
 
 	if err != nil {
-		log.WithError(err).WithField("collection", coll.Name()).
+		logging.WithError(err).WithField("collection", coll.Name()).
 			Warn("bulk write failed after retries")
 		return err
 	}

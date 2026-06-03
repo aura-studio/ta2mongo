@@ -13,7 +13,7 @@ import (
 
 	"rocket-nano/tools/tango/config"
 	"rocket-nano/tools/tango/internal/engine/daemon"
-	"rocket-nano/tools/tango/internal/log"
+	"rocket-nano/tools/tango/internal/logging"
 )
 
 // RunStandaloneService loads the standalone config from path and runs the
@@ -23,11 +23,11 @@ func RunStandaloneService(cmd *cobra.Command, path string) error {
 	if err != nil {
 		return err
 	}
-	log.Init(rt.Logging.Level)
+	logging.Init(rt.Logging.Level)
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	log.WithFields(log.Fields{
+	logging.WithFields(logging.Fields{
 		"pid":       os.Getpid(),
 		"go_procs":  runtime.GOMAXPROCS(0),
 		"mongo_uri": MaskURI(rt.Dao.Mongo.URI),
@@ -41,17 +41,17 @@ func RunStandaloneService(cmd *cobra.Command, path string) error {
 func runReport(ctx context.Context, rt config.Config) error {
 	svc, err := daemon.New(ctx, rt)
 	if err != nil {
-		log.WithError(err).Error("tango standalone: init failed")
+		logging.WithError(err).Error("tango standalone: init failed")
 		return err
 	}
 	defer func() {
 		if err := svc.Shutdown(); err != nil {
-			log.WithError(err).Error("tango standalone: shutdown error")
+			logging.WithError(err).Error("tango standalone: shutdown error")
 		}
 	}()
 
 	if err := svc.EnsureIndexes(ctx); err != nil {
-		log.WithError(err).Error("tango standalone: ensure indexes failed")
+		logging.WithError(err).Error("tango standalone: ensure indexes failed")
 		return err
 	}
 

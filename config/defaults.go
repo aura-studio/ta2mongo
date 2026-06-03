@@ -6,9 +6,11 @@ import (
 	"rocket-nano/tools/tango/internal/dao"
 	"rocket-nano/tools/tango/internal/dao/mongo"
 	"rocket-nano/tools/tango/internal/dao/store"
-	"rocket-nano/tools/tango/internal/log"
+	"rocket-nano/tools/tango/internal/engine"
+	"rocket-nano/tools/tango/internal/logging"
 	"rocket-nano/tools/tango/internal/parser"
 	"rocket-nano/tools/tango/internal/parser/filter"
+	"rocket-nano/tools/tango/internal/process"
 	"rocket-nano/tools/tango/internal/process/pipeline"
 	"rocket-nano/tools/tango/internal/source/tailer"
 )
@@ -17,12 +19,15 @@ import (
 // any section pointer that is nil so callers can rely on every section being
 // present after this runs.
 func applyDefaults(c *Config) {
-	if c.Mode == "" {
-		c.Mode = ModeReport
+	if c.Engine == nil {
+		c.Engine = &engine.Config{}
+	}
+	if c.Engine.Mode == "" {
+		c.Engine.Mode = ModeReport
 	}
 
 	if c.Logging == nil {
-		c.Logging = &log.Config{}
+		c.Logging = &logging.Config{}
 	}
 	if c.Logging.Level == "" {
 		c.Logging.Level = "info"
@@ -66,29 +71,33 @@ func applyDefaults(c *Config) {
 		c.Source.MaxLineBytes = 10 * 1024 * 1024
 	}
 
-	if c.Pipeline == nil {
-		c.Pipeline = &pipeline.Config{}
+	if c.Process == nil {
+		c.Process = &process.Config{}
 	}
-	if c.Pipeline.BatchSize <= 0 {
-		c.Pipeline.BatchSize = 1000
+	if c.Process.Pipeline == nil {
+		c.Process.Pipeline = &pipeline.Config{}
+	}
+	p := c.Process.Pipeline
+	if p.BatchSize <= 0 {
+		p.BatchSize = 1000
 	}
 	// BatchSizeMin/BatchSizeMax: 0 means auto-derive (handled by the pipeline
 	// Config's MinBatchSize/MaxBatchSize methods). Clamp explicit values to a
 	// valid range here for consistency.
-	if c.Pipeline.BatchSizeMin > 0 && c.Pipeline.BatchSizeMin > c.Pipeline.BatchSize {
-		c.Pipeline.BatchSizeMin = c.Pipeline.BatchSize
+	if p.BatchSizeMin > 0 && p.BatchSizeMin > p.BatchSize {
+		p.BatchSizeMin = p.BatchSize
 	}
-	if c.Pipeline.BatchSizeMax > 0 && c.Pipeline.BatchSizeMax < c.Pipeline.BatchSize {
-		c.Pipeline.BatchSizeMax = c.Pipeline.BatchSize
+	if p.BatchSizeMax > 0 && p.BatchSizeMax < p.BatchSize {
+		p.BatchSizeMax = p.BatchSize
 	}
-	if c.Pipeline.BatchWorkers <= 0 {
-		c.Pipeline.BatchWorkers = 2
+	if p.BatchWorkers <= 0 {
+		p.BatchWorkers = 2
 	}
-	if c.Pipeline.FlushInterval <= 0 {
-		c.Pipeline.FlushInterval = time.Second
+	if p.FlushInterval <= 0 {
+		p.FlushInterval = time.Second
 	}
-	if c.Pipeline.DeadLetterCap <= 0 {
-		c.Pipeline.DeadLetterCap = 128
+	if p.DeadLetterCap <= 0 {
+		p.DeadLetterCap = 128
 	}
 
 	if c.Parser == nil {

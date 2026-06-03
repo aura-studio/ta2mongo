@@ -25,7 +25,6 @@ import (
 	"fmt"
 	"time"
 
-	"rocket-nano/tools/tango/config"
 	"rocket-nano/tools/tango/internal/dao"
 	daomongo "rocket-nano/tools/tango/internal/dao/mongo"
 	"rocket-nano/tools/tango/internal/dao/store"
@@ -124,18 +123,13 @@ func New(ctx context.Context, optFns ...Option) (*Client, error) {
 	}
 	opts.defaults()
 
-	// Build a minimal config for the store/ingester (only retry + filter
-	// settings matter; the synchronous ingester does not use the daemon's batch
-	// flusher, so no pipeline section is needed).
-	cfg := config.Config{
-		Dao: &dao.Config{
-			Mongo: &daomongo.Config{URI: opts.URI},
-			Store: &store.Config{MaxElapsedTime: opts.MaxElapsedTime},
-		},
-		Parser: &parser.Config{Filter: &filter.Config{Include: opts.FilterInclude, Exclude: opts.FilterExclude}},
+	daoCfg := &dao.Config{
+		Mongo: &daomongo.Config{URI: opts.URI},
+		Store: &store.Config{MaxElapsedTime: opts.MaxElapsedTime},
 	}
+	parserCfg := &parser.Config{Filter: &filter.Config{Include: opts.FilterInclude, Exclude: opts.FilterExclude}}
 
-	ig, err := process.NewIngester(ctx, cfg)
+	ig, err := process.NewIngester(ctx, daoCfg, parserCfg)
 	if err != nil {
 		return nil, fmt.Errorf("client: %w", err)
 	}

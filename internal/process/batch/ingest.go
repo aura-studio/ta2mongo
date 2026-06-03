@@ -21,9 +21,8 @@ import (
 
 	drivermongo "go.mongodb.org/mongo-driver/mongo"
 
-	"rocket-nano/tools/tango/config"
 	"rocket-nano/tools/tango/internal/dao"
-	"rocket-nano/tools/tango/internal/log"
+	"rocket-nano/tools/tango/internal/logging"
 	"rocket-nano/tools/tango/internal/parser"
 	"rocket-nano/tools/tango/internal/process/single"
 )
@@ -45,12 +44,15 @@ var ErrFiltered = errors.New("ingest: dropped by filter")
 
 // New connects to MongoDB and creates a ready-to-use Ingester.
 // The caller must call Close when the Ingester is no longer needed.
-func New(ctx context.Context, cfg config.Config) (*Ingester, error) {
-	src, err := cfg.BuildParser()
+func New(ctx context.Context, daoCfg *dao.Config, parserCfg *parser.Config) (*Ingester, error) {
+	if parserCfg == nil {
+		parserCfg = &parser.Config{}
+	}
+	src, err := parserCfg.Build()
 	if err != nil {
 		return nil, fmt.Errorf("ingest: %w", err)
 	}
-	da, err := dao.New(ctx, cfg.Dao)
+	da, err := dao.New(ctx, daoCfg)
 	if err != nil {
 		return nil, fmt.Errorf("ingest: %w", err)
 	}
@@ -105,7 +107,7 @@ func (ig *Ingester) Ingest(ctx context.Context, line string) error {
 
 func (ig *Ingester) writeDeadLetter(ctx context.Context, model drivermongo.WriteModel) {
 	if err := ig.dao.Store.BulkWrite(ctx, ig.dao.Store.DeadLetterCollection(), []drivermongo.WriteModel{model}); err != nil {
-		log.WithError(err).Warn("ingest: failed to write dead letter")
+		logging.WithError(err).Warn("ingest: failed to write dead letter")
 	}
 }
 
@@ -126,10 +128,10 @@ func (ig *Ingester) IngestBatch(ctx context.Context, lines []string) error {
 		res := ig.proc.Process(ctx, line)
 		switch res.Kind {
 		case single.KindParseError:
-			log.WithError(res.Err).Debug("ingest batch: invalid line")
+			logging.WithError(res.Err).Debug("ingest batch: invalid line")
 			deadModels = append(deadModels, res.Model)
 		case single.KindIdentityError:
-			log.WithError(res.Err).Warn("ingest batch: identity resolve failed")
+			logging.WithError(res.Err).Warn("ingest batch: identity resolve failed")
 			deadModels = append(deadModels, res.Model)
 		case single.KindFiltered:
 			// intentionally discarded
