@@ -3,9 +3,11 @@ package config
 import (
 	"time"
 
+	"rocket-nano/tools/tango/internal/dao"
 	"rocket-nano/tools/tango/internal/dao/mongo"
 	"rocket-nano/tools/tango/internal/dao/store"
 	"rocket-nano/tools/tango/internal/log"
+	"rocket-nano/tools/tango/internal/parser"
 	"rocket-nano/tools/tango/internal/parser/filter"
 	"rocket-nano/tools/tango/internal/process/pipeline"
 )
@@ -16,9 +18,8 @@ import (
 // an HTTP server block for the gateway face. Each section is a pointer to the
 // owning module's config struct.
 type ClientConfig struct {
-	Logging *log.Config   `mapstructure:"logging"`
-	Mongo   *mongo.Config `mapstructure:"mongo"`
-	Store   *store.Config `mapstructure:"store"`
+	Logging *log.Config `mapstructure:"logging"`
+	Dao     *dao.Config `mapstructure:"dao"`
 
 	// StringUpload: single string ingest, no retransmission.
 	StringUpload StringUploadConfig `mapstructure:"stringUpload"`
@@ -34,7 +35,7 @@ type StringUploadConfig struct {
 	Filter    *filter.Config `mapstructure:"filter"`
 }
 
-// FileUploadConfig configures file ingest with resume (retransmission).
+// FileUploadConfig configures file ingest with resume/retransmission.
 type FileUploadConfig struct {
 	LogPattern   []string         `mapstructure:"logPattern"`
 	MaxLineBytes int              `mapstructure:"maxLineBytes"`
@@ -67,14 +68,17 @@ func (c *ClientConfig) applyDefaults() {
 	if c.Logging.Format == "" {
 		c.Logging.Format = "text"
 	}
-	if c.Mongo == nil {
-		c.Mongo = &mongo.Config{}
+	if c.Dao == nil {
+		c.Dao = &dao.Config{}
 	}
-	if c.Store == nil {
-		c.Store = &store.Config{}
+	if c.Dao.Mongo == nil {
+		c.Dao.Mongo = &mongo.Config{}
 	}
-	if c.Store.MaxElapsedTime <= 0 {
-		c.Store.MaxElapsedTime = 10 * time.Second
+	if c.Dao.Store == nil {
+		c.Dao.Store = &store.Config{}
+	}
+	if c.Dao.Store.MaxElapsedTime <= 0 {
+		c.Dao.Store.MaxElapsedTime = 10 * time.Second
 	}
 	if c.StringUpload.BatchSize <= 0 {
 		c.StringUpload.BatchSize = 1000
@@ -91,4 +95,8 @@ func (c *ClientConfig) applyDefaults() {
 	if c.Server.Addr == "" {
 		c.Server.Addr = DefaultServerAddr
 	}
+}
+
+func parserConfigFromFilter(fc *filter.Config) *parser.Config {
+	return &parser.Config{Filter: fc}
 }

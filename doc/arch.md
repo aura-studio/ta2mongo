@@ -18,14 +18,13 @@
 
 1. **根包整合子包（root-fronts-subpackages）**：每个领域有一个根包，对外只暴露根包，
    子包是其实现细节。已建立的根包：
-   - `internal/dao`（`Dao` 内嵌 `*store.Store`）整合 `dao/store` + `dao/mongo`
+   - `internal/dao`（`Dao` 显式持有 `Mongo` + `Store`，`dao.Config` 聚合 mongo/store 配置）整合 `dao/store` + `dao/mongo`
    - `internal/parser`（`Parser` 内嵌 `*talog.Parser`，持有 filter）整合 `parser/talog` + `parser/filter`
    - `internal/process`（`process.go`）整合 `process/single` + `process/batch` + `process/pipeline`
    - `internal/engine` 是运行模式集合：`daemon` / `gateway` / `cli` / `api`
    - `internal/source` 是数据来源集合：目前 `source/tailer`（未来 sql、console）
-2. **每个模块自管配置**：配置结构体下沉到各自模块（`mongo.Config`、`store.Config`、
-   `tailer.Config`、`pipeline.Config`、`filter.Config`、`log.Config`），顶层
-   `config.Config` 用**指针字段**引用它们。叶子模块**不得 import 顶层 `config` 包**
+2. **每个模块自管配置**：配置结构体下沉到各自模块并由领域根包聚合（`dao.Config` 聚合 `mongo.Config` + `store.Config`，`parser.Config` 聚合 filter 配置，另有 `tailer.Config`、`pipeline.Config`、`log.Config`），顶层
+   `config.Config` 用**指针字段**引用领域根包配置。叶子模块**不得 import 顶层 `config` 包**
    （否则成环）。依赖方向：`config` → 各模块；各模块 ↛ `config`。
 3. **`process` 是三种处理方式的唯一对外入口**：`single`（单条）/`batch`（同步批量）/
    `pipeline`（异步流水线）不被外部直接 import；engine 与 client SDK 只用 `process` 的
@@ -51,13 +50,15 @@
     ├── log/         # 全局 logger + log.Config
     ├── core/        # cli（仅配置路径解析 helper）
     ├── parser/      # parser.go 整合 talog + filter（日志解析层，原 source 包改名而来）
-    │   ├── talog/   # TA JSON 行解析 -> Record
-    │   └── filter/  # expr-lang include/exclude 上报过滤器 + filter.Config
+    │   ├── config.go # parser.Config：聚合 parser 子模块配置
+    │   ├── talog/    # TA JSON 行解析 -> Record
+    │   └── filter/   # expr-lang include/exclude 上报过滤器 + filter.Config
     ├── source/      # 数据来源集合
     │   └── tailer/  # 文件追尾来源（来源1）+ tailer.Config / TailMode 常量
     ├── dao/         # dao.go 整合 store + mongo
-    │   ├── store/   # MongoDB 持久化 + store.Config
-    │   └── mongo/   # 连接装配 + mongo.Config + MongoDBFromURI
+    │   ├── config.go # dao.Config：聚合 mongo.Config + store.Config
+    │   ├── store/    # MongoDB 持久化 + store.Config
+    │   └── mongo/    # 连接装配 + mongo.Config + MongoDBFromURI
     ├── process/     # process.go 统一管理三种处理方式（唯一对外入口）
     │   ├── single/  # 单条 parse→filter→identity→写模型（原 processor 包）
     │   ├── batch/   # 同步单条/批量 Ingester（原 ingest 包）
@@ -76,8 +77,8 @@ cmd     -> config + engine + client SDK
 engine  -> process + parser + dao + source + config + log
 process -> single/batch/pipeline + dao + parser + config
 parser  -> talog + filter
-dao     -> store + mongo (+ config 仅 dao.go 做投影)
-config  -> 各模块的 Config 类型（mongo/store/tailer/pipeline/filter/log）
+dao     -> store + mongo
+config  -> 各领域根包/模块的 Config 类型（dao/parser/tailer/pipeline/log）
 各叶子模块 ↛ config
 ```
 
@@ -101,7 +102,7 @@ config  -> 各模块的 Config 类型（mongo/store/tailer/pipeline/filter/log�
 | `config/role.go` | 统一 `RoleConfig` schema + `LoadStandalone/LoadGateway` + 投影 + `setRoleDefaults` |
 | `config/client.go` | `ClientConfig`（gateway/SDK 投影）+ `applyDefaults` |
 | `config/defaults.go` | `applyDefaults`：分配 nil 指针段并填默认值 |
-| `config/filter.go` | `BuildFilter` → 委托 `filter.Config.Build()` |
+| `config/filter.go` | `BuildParser` → 委托 `parser.Config.Build()` |
 | `config/loader.go` | viper 装配 helper |
 
 #### 全局基础 `internal/log` `internal/core`
@@ -134,7 +135,8 @@ config  -> 各模块的 Config 类型（mongo/store/tailer/pipeline/filter/log�
 
 | 文件 | 职责 |
 |---|---|
-| `dao/dao.go` | `Dao`：内嵌 `*store.Store`；`New(db, cfg)` 把 `cfg.Store` 投影给 store |
+| `dao/dao.go` | `Dao`：显式持有 `Mongo *mongo.MongoResource` + `Store *store.Store`；`New(res, cfg)` 装配 store |
+| `dao/config.go` | `dao.Config`：聚合 `mongo.Config` + `store.Config` |
 | `dao/store/store.go` | `Store` + `store.Config`(MaxElapsedTime) + `WriteStats` + `BulkWrite(Ordered)` + 集合访问器 |
 | `dao/store/identity.go` | `IdentityResolver`：`#account_id`/`#distinct_id` → `#user_id` |
 | `dao/store/indexes.go` | `EnsureIndexes`：user/event/dead_letter/id_mapping 索引 |
@@ -199,4 +201,4 @@ POST /upload
 
 上报 filter 作用于 standalone 服务与 string/file upload，维度为
 `#type` / `#event_name` / 属性，用 include / exclude（expr-lang）表达。
-`config.Config.BuildFilter()` 委托 `filter.Config.Build()`（→ `filter.New`）。
+`config.Config.BuildParser()` 委托 `parser.Config.Build()`（→ `filter.Config.Build()` / `filter.New`）。

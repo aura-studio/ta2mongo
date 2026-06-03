@@ -1,10 +1,8 @@
 package config
 
-import "rocket-nano/tools/tango/internal/parser/filter"
+import "rocket-nano/tools/tango/internal/parser"
 
-// BuildFilter compiles the configured filter expressions. Validate must have
-// been called first; this method is intended to be invoked by runtime
-// components (the report service / upload paths) that need a ready-to-use filter.
-func (c *Config) BuildFilter() (*filter.Filter, error) {
-	return c.Filter.Build()
+// BuildParser compiles parser-layer config and returns a ready parser.
+func (c *Config) BuildParser() (*parser.Parser, error) {
+	return c.Parser.Build()
 }

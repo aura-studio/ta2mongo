@@ -44,15 +44,15 @@ var ErrFiltered = errors.New("ingest: dropped by filter")
 // New connects to MongoDB and creates a ready-to-use Ingester.
 // The caller must call Close when the Ingester is no longer needed.
 func New(ctx context.Context, cfg config.Config) (*Ingester, error) {
-	flt, err := cfg.BuildFilter()
+	src, err := cfg.BuildParser()
 	if err != nil {
 		return nil, fmt.Errorf("ingest: %w", err)
 	}
-	res, err := daomongo.ConnectMongo(ctx, cfg.Mongo)
+	res, err := daomongo.ConnectMongo(ctx, cfg.Dao.Mongo)
 	if err != nil {
 		return nil, fmt.Errorf("ingest: %w", err)
 	}
-	return newIngester(res, parser.New(flt), cfg), nil
+	return newIngester(res, src, cfg), nil
 }
 
 // NewFromClient creates an Ingester from an existing MongoDB client, avoiding a
@@ -60,19 +60,19 @@ func New(ctx context.Context, cfg config.Config) (*Ingester, error) {
 // caller owns its lifecycle). Returns an error if the configured filter
 // expressions fail to compile.
 func NewFromClient(client *drivermongo.Client, cfg config.Config) (*Ingester, error) {
-	flt, err := cfg.BuildFilter()
+	src, err := cfg.BuildParser()
 	if err != nil {
 		return nil, fmt.Errorf("ingest: %w", err)
 	}
-	res, err := daomongo.Borrow(client, cfg.Mongo.URI)
+	res, err := daomongo.Borrow(client, cfg.Dao.Mongo.URI)
 	if err != nil {
 		return nil, fmt.Errorf("ingest: %w", err)
 	}
-	return newIngester(res, parser.New(flt), cfg), nil
+	return newIngester(res, src, cfg), nil
 }
 
 func newIngester(res *daomongo.MongoResource, src *parser.Parser, cfg config.Config) *Ingester {
-	da := dao.New(res.DB, cfg)
+	da := dao.New(res, cfg.Dao)
 	return &Ingester{
 		proc:  single.NewProcessor(src.Parser, src.Filter(), da.Store, single.NoopStats{}, single.WriteOptions{}),
 		dao:   da,
@@ -89,7 +89,7 @@ func (ig *Ingester) Close() error {
 
 // EnsureIndexes creates all required MongoDB indexes (idempotent).
 func (ig *Ingester) EnsureIndexes(ctx context.Context) error {
-	return ig.dao.EnsureIndexes(ctx)
+	return ig.dao.Store.EnsureIndexes(ctx)
 }
 
 // Ingest parses a single JSON log line, resolves user identity, and writes the
@@ -110,11 +110,11 @@ func (ig *Ingester) Ingest(ctx context.Context, line string) error {
 		ig.writeDeadLetter(ctx, res.Model)
 		return fmt.Errorf("ingest: identity resolve: %w", res.Err)
 	case single.KindUser:
-		if err := ig.dao.BulkWriteOrdered(ctx, ig.dao.UserCollection(), []drivermongo.WriteModel{res.Model}); err != nil {
+		if err := ig.dao.Store.BulkWriteOrdered(ctx, ig.dao.Store.UserCollection(), []drivermongo.WriteModel{res.Model}); err != nil {
 			return fmt.Errorf("ingest: write user: %w", err)
 		}
 	case single.KindEvent:
-		if err := ig.dao.BulkWrite(ctx, ig.dao.EventCollection(), []drivermongo.WriteModel{res.Model}); err != nil {
+		if err := ig.dao.Store.BulkWrite(ctx, ig.dao.Store.EventCollection(), []drivermongo.WriteModel{res.Model}); err != nil {
 			return fmt.Errorf("ingest: write event: %w", err)
 		}
 	}
@@ -122,7 +122,7 @@ func (ig *Ingester) Ingest(ctx context.Context, line string) error {
 }
 
 func (ig *Ingester) writeDeadLetter(ctx context.Context, model drivermongo.WriteModel) {
-	if err := ig.dao.BulkWrite(ctx, ig.dao.DeadLetterCollection(), []drivermongo.WriteModel{model}); err != nil {
+	if err := ig.dao.Store.BulkWrite(ctx, ig.dao.Store.DeadLetterCollection(), []drivermongo.WriteModel{model}); err != nil {
 		log.WithError(err).Warn("ingest: failed to write dead letter")
 	}
 }
@@ -161,17 +161,17 @@ func (ig *Ingester) IngestBatch(ctx context.Context, lines []string) error {
 	// Flush all batches. User collection uses ordered writes for correctness.
 	var firstErr error
 	if len(userModels) > 0 {
-		if err := ig.dao.BulkWriteOrdered(ctx, ig.dao.UserCollection(), userModels); err != nil {
+		if err := ig.dao.Store.BulkWriteOrdered(ctx, ig.dao.Store.UserCollection(), userModels); err != nil {
 			firstErr = fmt.Errorf("ingest batch: write user: %w", err)
 		}
 	}
 	if len(eventModels) > 0 {
-		if err := ig.dao.BulkWrite(ctx, ig.dao.EventCollection(), eventModels); err != nil && firstErr == nil {
+		if err := ig.dao.Store.BulkWrite(ctx, ig.dao.Store.EventCollection(), eventModels); err != nil && firstErr == nil {
 			firstErr = fmt.Errorf("ingest batch: write event: %w", err)
 		}
 	}
 	if len(deadModels) > 0 {
-		if err := ig.dao.BulkWrite(ctx, ig.dao.DeadLetterCollection(), deadModels); err != nil && firstErr == nil {
+		if err := ig.dao.Store.BulkWrite(ctx, ig.dao.Store.DeadLetterCollection(), deadModels); err != nil && firstErr == nil {
 			firstErr = fmt.Errorf("ingest batch: write dead letter: %w", err)
 		}
 	}

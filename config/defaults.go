@@ -3,9 +3,11 @@ package config
 import (
 	"time"
 
+	"rocket-nano/tools/tango/internal/dao"
 	"rocket-nano/tools/tango/internal/dao/mongo"
 	"rocket-nano/tools/tango/internal/dao/store"
 	"rocket-nano/tools/tango/internal/log"
+	"rocket-nano/tools/tango/internal/parser"
 	"rocket-nano/tools/tango/internal/parser/filter"
 	"rocket-nano/tools/tango/internal/process/pipeline"
 	"rocket-nano/tools/tango/internal/source/tailer"
@@ -29,21 +31,23 @@ func applyDefaults(c *Config) {
 		c.Logging.Format = "text"
 	}
 
-	if c.Mongo == nil {
-		c.Mongo = &mongo.Config{}
+	if c.Dao == nil {
+		c.Dao = &dao.Config{}
 	}
-	if c.Mongo.ConnectTimeout <= 0 {
-		c.Mongo.ConnectTimeout = 10 * time.Second
+	if c.Dao.Mongo == nil {
+		c.Dao.Mongo = &mongo.Config{}
 	}
-	if c.Mongo.ServerSelectionTimeout <= 0 {
-		c.Mongo.ServerSelectionTimeout = 30 * time.Second
+	if c.Dao.Mongo.ConnectTimeout <= 0 {
+		c.Dao.Mongo.ConnectTimeout = 10 * time.Second
 	}
-
-	if c.Store == nil {
-		c.Store = &store.Config{}
+	if c.Dao.Mongo.ServerSelectionTimeout <= 0 {
+		c.Dao.Mongo.ServerSelectionTimeout = 30 * time.Second
 	}
-	if c.Store.MaxElapsedTime <= 0 {
-		c.Store.MaxElapsedTime = 10 * time.Second
+	if c.Dao.Store == nil {
+		c.Dao.Store = &store.Config{}
+	}
+	if c.Dao.Store.MaxElapsedTime <= 0 {
+		c.Dao.Store.MaxElapsedTime = 10 * time.Second
 	}
 
 	if c.Source == nil {
@@ -87,7 +91,10 @@ func applyDefaults(c *Config) {
 		c.Pipeline.DeadLetterCap = 128
 	}
 
-	if c.Filter == nil {
-		c.Filter = &filter.Config{}
+	if c.Parser == nil {
+		c.Parser = &parser.Config{}
+	}
+	if c.Parser.Filter == nil {
+		c.Parser.Filter = &filter.Config{}
 	}
 }

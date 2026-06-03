@@ -11,6 +11,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"rocket-nano/tools/tango/config"
+	"rocket-nano/tools/tango/internal/dao"
 	daomongo "rocket-nano/tools/tango/internal/dao/mongo"
 	"rocket-nano/tools/tango/internal/dao/store"
 )
@@ -30,8 +31,10 @@ func TestNewFromClient_DoesNotOwnClient(t *testing.T) {
 
 	dbName := fmt.Sprintf("tango_ingest_own_%d_%d", time.Now().UnixNano(), rand.Intn(10000))
 	cfg := config.Config{
-		Mongo: &daomongo.Config{URI: testMongoURI + "/" + dbName},
-		Store: &store.Config{MaxElapsedTime: 5 * time.Second},
+		Dao: &dao.Config{
+			Mongo: &daomongo.Config{URI: testMongoURI + "/" + dbName},
+			Store: &store.Config{MaxElapsedTime: 5 * time.Second},
+		},
 	}
 
 	ig, err := NewFromClient(client, cfg)

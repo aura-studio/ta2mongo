@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"rocket-nano/tools/tango/config"
+	"rocket-nano/tools/tango/internal/dao"
 	daomongo "rocket-nano/tools/tango/internal/dao/mongo"
 	"rocket-nano/tools/tango/internal/dao/store"
 
@@ -49,8 +50,10 @@ func testIngesterSetup(t *testing.T) (*Ingester, *mongo.Database, func()) {
 	uri := testMongoURI + "/" + dbName
 
 	cfg := config.Config{
-		Mongo: &daomongo.Config{URI: uri},
-		Store: &store.Config{MaxElapsedTime: 5 * time.Second},
+		Dao: &dao.Config{
+			Mongo: &daomongo.Config{URI: uri},
+			Store: &store.Config{MaxElapsedTime: 5 * time.Second},
+		},
 	}
 
 	ctx := context.Background()
@@ -516,8 +519,10 @@ func TestNewFromClient(t *testing.T) {
 
 	dbName := fmt.Sprintf("tango_fromclient_test_%d", time.Now().UnixNano())
 	cfg := config.Config{
-		Mongo: &daomongo.Config{URI: testMongoURI + "/" + dbName},
-		Store: &store.Config{MaxElapsedTime: 5 * time.Second},
+		Dao: &dao.Config{
+			Mongo: &daomongo.Config{URI: testMongoURI + "/" + dbName},
+			Store: &store.Config{MaxElapsedTime: 5 * time.Second},
+		},
 	}
 
 	ig, err := NewFromClient(client, cfg)

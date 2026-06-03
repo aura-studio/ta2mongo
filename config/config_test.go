@@ -34,8 +34,9 @@ func loadFlat(t *testing.T, y string) Config {
 
 func TestRescanInterval_Default(t *testing.T) {
 	cfg := loadFlat(t, `
-mongo:
-  uri: "mongodb://localhost"
+dao:
+  mongo:
+    uri: "mongodb://localhost"
 source:
   logPattern:
     - "/tmp/.*\\.log"
@@ -48,8 +49,9 @@ source:
 
 func TestRescanInterval_CustomValue(t *testing.T) {
 	cfg := loadFlat(t, `
-mongo:
-  uri: "mongodb://localhost"
+dao:
+  mongo:
+    uri: "mongodb://localhost"
 source:
   rescanInterval: "60s"
 `)
@@ -61,8 +63,9 @@ source:
 
 func TestRescanInterval_ZeroFallsBackToDefault(t *testing.T) {
 	cfg := loadFlat(t, `
-mongo:
-  uri: "mongodb://localhost"
+dao:
+  mongo:
+    uri: "mongodb://localhost"
 source:
   rescanInterval: "0s"
 `)
@@ -78,50 +81,54 @@ source:
 
 func TestMaxElapsedTime_Default(t *testing.T) {
 	cfg := loadFlat(t, `
-mongo:
-  uri: "mongodb://localhost"
+dao:
+  mongo:
+    uri: "mongodb://localhost"
 `)
 	want := 10 * time.Second
-	if got := cfg.Store.MaxElapsedTime; got != want {
+	if got := cfg.Dao.Store.MaxElapsedTime; got != want {
 		t.Errorf("MaxElapsedTime = %v, want %v", got, want)
 	}
 }
 
 func TestMaxElapsedTime_CustomValue(t *testing.T) {
 	cfg := loadFlat(t, `
-mongo:
-  uri: "mongodb://localhost"
-store:
-  maxElapsedTime: "30s"
+dao:
+  mongo:
+    uri: "mongodb://localhost"
+  store:
+    maxElapsedTime: "30s"
 `)
 	want := 30 * time.Second
-	if got := cfg.Store.MaxElapsedTime; got != want {
+	if got := cfg.Dao.Store.MaxElapsedTime; got != want {
 		t.Errorf("MaxElapsedTime = %v, want %v", got, want)
 	}
 }
 
 func TestMaxElapsedTime_FallbackForZero(t *testing.T) {
 	cfg := loadFlat(t, `
-mongo:
-  uri: "mongodb://localhost"
-store:
-  maxElapsedTime: "0s"
+dao:
+  mongo:
+    uri: "mongodb://localhost"
+  store:
+    maxElapsedTime: "0s"
 `)
 	want := 10 * time.Second
-	if got := cfg.Store.MaxElapsedTime; got != want {
+	if got := cfg.Dao.Store.MaxElapsedTime; got != want {
 		t.Errorf("MaxElapsedTime = %v, want %v (should fallback for zero)", got, want)
 	}
 }
 
 func TestMaxElapsedTime_LargeValue(t *testing.T) {
 	cfg := loadFlat(t, `
-mongo:
-  uri: "mongodb://localhost"
-store:
-  maxElapsedTime: "5m"
+dao:
+  mongo:
+    uri: "mongodb://localhost"
+  store:
+    maxElapsedTime: "5m"
 `)
 	want := 5 * time.Minute
-	if got := cfg.Store.MaxElapsedTime; got != want {
+	if got := cfg.Dao.Store.MaxElapsedTime; got != want {
 		t.Errorf("MaxElapsedTime = %v, want %v", got, want)
 	}
 }
@@ -143,8 +150,9 @@ source:
 
 func TestValidation_MissingLogPattern_OK(t *testing.T) {
 	cfg := loadFlat(t, `
-mongo:
-  uri: "mongodb://localhost"
+dao:
+  mongo:
+    uri: "mongodb://localhost"
 `)
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -153,8 +161,9 @@ mongo:
 
 func TestValidation_EmptyLogPattern_OK(t *testing.T) {
 	cfg := loadFlat(t, `
-mongo:
-  uri: "mongodb://localhost"
+dao:
+  mongo:
+    uri: "mongodb://localhost"
 source:
   logPattern: []
 `)
@@ -169,36 +178,40 @@ source:
 
 func TestFilter_LoadsFromYAML(t *testing.T) {
 	cfg := loadFlat(t, `
-mongo:
-  uri: "mongodb://localhost"
-filter:
-  include:
-    - '#type == "track"'
-    - '#type == "user_set"'
-  exclude:
-    - 'debug == true'
+dao:
+  mongo:
+    uri: "mongodb://localhost"
+parser:
+  filter:
+    include:
+      - '#type == "track"'
+      - '#type == "user_set"'
+    exclude:
+      - 'debug == true'
 `)
-	if len(cfg.Filter.Include) != 2 {
-		t.Errorf("Filter.Include len = %d, want 2", len(cfg.Filter.Include))
+	if len(cfg.Parser.Filter.Include) != 2 {
+		t.Errorf("Filter.Include len = %d, want 2", len(cfg.Parser.Filter.Include))
 	}
-	if len(cfg.Filter.Exclude) != 1 {
-		t.Errorf("Filter.Exclude len = %d, want 1", len(cfg.Filter.Exclude))
+	if len(cfg.Parser.Filter.Exclude) != 1 {
+		t.Errorf("Filter.Exclude len = %d, want 1", len(cfg.Parser.Filter.Exclude))
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("Validate: %v", err)
 	}
-	if _, err := cfg.BuildFilter(); err != nil {
-		t.Errorf("BuildFilter: %v", err)
+	if _, err := cfg.BuildParser(); err != nil {
+		t.Errorf("BuildParser: %v", err)
 	}
 }
 
 func TestFilter_ValidationFailsForBadExpression(t *testing.T) {
 	cfg := loadFlat(t, `
-mongo:
-  uri: "mongodb://localhost"
-filter:
-  include:
-    - '#type =='
+dao:
+  mongo:
+    uri: "mongodb://localhost"
+parser:
+  filter:
+    include:
+      - '#type =='
 `)
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected Validate to fail for malformed expression")
@@ -207,19 +220,21 @@ filter:
 
 func TestFilter_EmptyByDefault(t *testing.T) {
 	cfg := loadFlat(t, `
-mongo:
-  uri: "mongodb://localhost"
+dao:
+  mongo:
+    uri: "mongodb://localhost"
 `)
-	if len(cfg.Filter.Include) != 0 || len(cfg.Filter.Exclude) != 0 {
+	if len(cfg.Parser.Filter.Include) != 0 || len(cfg.Parser.Filter.Exclude) != 0 {
 		t.Errorf("expected empty filter lists, got inc=%v exc=%v",
-			cfg.Filter.Include, cfg.Filter.Exclude)
+			cfg.Parser.Filter.Include, cfg.Parser.Filter.Exclude)
 	}
 }
 
 func TestFlushInterval(t *testing.T) {
 	cfg := loadFlat(t, `
-mongo:
-  uri: "mongodb://localhost"
+dao:
+  mongo:
+    uri: "mongodb://localhost"
 pipeline:
   flushInterval: "500ms"
 `)
@@ -235,11 +250,12 @@ pipeline:
 
 func TestNestedKnobs_Defaults(t *testing.T) {
 	cfg := loadFlat(t, `
-mongo:
-  uri: "mongodb://localhost"
+dao:
+  mongo:
+    uri: "mongodb://localhost"
 `)
-	if cfg.Mongo.ConnectTimeout != 10*time.Second {
-		t.Errorf("connectTimeout = %v", cfg.Mongo.ConnectTimeout)
+	if cfg.Dao.Mongo.ConnectTimeout != 10*time.Second {
+		t.Errorf("connectTimeout = %v", cfg.Dao.Mongo.ConnectTimeout)
 	}
 	if cfg.Source.PollInterval != 200*time.Millisecond {
 		t.Errorf("pollInterval = %v", cfg.Source.PollInterval)
@@ -272,8 +288,9 @@ func TestChannelBuffer_DerivedVsExplicit(t *testing.T) {
 
 func TestBatchSizeMinMax_ConfiguredValues(t *testing.T) {
 	cfg := loadFlat(t, `
-mongo:
-  uri: "mongodb://localhost"
+dao:
+  mongo:
+    uri: "mongodb://localhost"
 pipeline:
   batchSize: 1000
   batchSizeMin: 200
@@ -289,8 +306,9 @@ pipeline:
 
 func TestBatchSizeMinMax_AutoDerivation(t *testing.T) {
 	cfg := loadFlat(t, `
-mongo:
-  uri: "mongodb://localhost"
+dao:
+  mongo:
+    uri: "mongodb://localhost"
 pipeline:
   batchSize: 1000
   batchSizeMin: 0
@@ -306,8 +324,9 @@ pipeline:
 
 func TestBatchSizeMinMax_ClampBehavior(t *testing.T) {
 	cfg := loadFlat(t, `
-mongo:
-  uri: "mongodb://localhost"
+dao:
+  mongo:
+    uri: "mongodb://localhost"
 pipeline:
   batchSize: 1000
   batchSizeMin: 1500
@@ -317,8 +336,9 @@ pipeline:
 		t.Errorf("BatchSizeMin() = %d, want 1000 (clamped to batchSize)", got)
 	}
 	cfg2 := loadFlat(t, `
-mongo:
-  uri: "mongodb://localhost"
+dao:
+  mongo:
+    uri: "mongodb://localhost"
 pipeline:
   batchSize: 1000
   batchSizeMin: 0
@@ -332,8 +352,9 @@ pipeline:
 func TestBatchSizeMinMax_ValidationErrors(t *testing.T) {
 	// applyDefaults silently clamps invalid values, so Validate passes.
 	cfg := loadFlat(t, `
-mongo:
-  uri: "mongodb://localhost"
+dao:
+  mongo:
+    uri: "mongodb://localhost"
 pipeline:
   batchSize: 1000
   batchSizeMin: 1500
@@ -346,8 +367,9 @@ pipeline:
 	}
 
 	cfg2 := loadFlat(t, `
-mongo:
-  uri: "mongodb://localhost"
+dao:
+  mongo:
+    uri: "mongodb://localhost"
 pipeline:
   batchSize: 1000
   batchSizeMax: 500
@@ -362,8 +384,9 @@ pipeline:
 
 func TestBatchSizeMinMax_BatchSize1_Ceiling(t *testing.T) {
 	cfg := loadFlat(t, `
-mongo:
-  uri: "mongodb://localhost"
+dao:
+  mongo:
+    uri: "mongodb://localhost"
 pipeline:
   batchSize: 1
   batchSizeMin: 0

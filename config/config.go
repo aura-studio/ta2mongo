@@ -7,9 +7,9 @@
 // (daemon/gateway) consume those. loader.go holds the shared YAML/JSON +
 // TANGO_* env + flag loading helpers.
 //
-// Each runtime concern owns its own config struct in its module (mongo.Config,
-// store.Config, tailer.Config, pipeline.Config, filter.Config, log.Config); the
-// top-level Config merely references them by pointer.
+// Each runtime concern owns its own config struct in its module (dao.Config,
+// parser.Config, tailer.Config, pipeline.Config, log.Config); the top-level
+// Config merely references them by pointer.
 //
 // Sources, in increasing priority: built-in defaults < config file (YAML or
 // JSON, by extension) < TANGO_* environment variables < CLI flags.
@@ -18,10 +18,9 @@ package config
 import (
 	"fmt"
 
-	"rocket-nano/tools/tango/internal/dao/mongo"
-	"rocket-nano/tools/tango/internal/dao/store"
+	"rocket-nano/tools/tango/internal/dao"
 	"rocket-nano/tools/tango/internal/log"
-	"rocket-nano/tools/tango/internal/parser/filter"
+	"rocket-nano/tools/tango/internal/parser"
 	"rocket-nano/tools/tango/internal/process/pipeline"
 	"rocket-nano/tools/tango/internal/source/tailer"
 )
@@ -35,9 +34,7 @@ const (
 )
 
 // Config is the top-level runtime configuration for the report pipeline. Each
-// section is a pointer to the owning module's config struct. YAML keys are the
-// mapstructure tags; env vars use the TANGO_ prefix with "." → "_"
-// (e.g. mongo.uri → TANGO_MONGO_URI).
+// section is a pointer to the owning module's config struct.
 type Config struct {
 	// Mode selects the runtime role. Only report is supported.
 	Mode string `mapstructure:"mode"`
@@ -45,11 +42,8 @@ type Config struct {
 	// Logging configures log output (internal/log).
 	Logging *log.Config `mapstructure:"logging"`
 
-	// Mongo configures the MongoDB connection (internal/dao/mongo).
-	Mongo *mongo.Config `mapstructure:"mongo"`
-
-	// Store configures the store's write-retry behaviour (internal/dao/store).
-	Store *store.Config `mapstructure:"store"`
+	// Dao configures data access: MongoDB connection and store write behaviour.
+	Dao *dao.Config `mapstructure:"dao"`
 
 	// Source configures the file-tailing data source (internal/source/tailer).
 	Source *tailer.Config `mapstructure:"source"`
@@ -58,8 +52,8 @@ type Config struct {
 	// (internal/process/pipeline).
 	Pipeline *pipeline.Config `mapstructure:"pipeline"`
 
-	// Filter configures the reporting filter (internal/parser/filter).
-	Filter *filter.Config `mapstructure:"filter"`
+	// Parser configures log parsing and reporting filters.
+	Parser *parser.Config `mapstructure:"parser"`
 }
 
 // Validate checks that required fields are present. It assumes applyDefaults has
@@ -68,7 +62,7 @@ func (c *Config) Validate() error {
 	if c.Mode != ModeReport {
 		return fmt.Errorf("config: mode must be %q; got %q", ModeReport, c.Mode)
 	}
-	if c.Mongo == nil || c.Mongo.URI == "" {
+	if c.Dao == nil || c.Dao.Mongo == nil || c.Dao.Mongo.URI == "" {
 		return fmt.Errorf("config: mongo.uri is required (set runtime.mongo.uri in the config file, via TANGO_RUNTIME_MONGO_URI, or via --runtime.mongo.uri)")
 	}
 	if c.Source == nil {
@@ -92,7 +86,7 @@ func (c *Config) Validate() error {
 				c.Pipeline.BatchSize, c.Pipeline.BatchSizeMax)
 		}
 	}
-	if _, err := c.Filter.Build(); err != nil {
+	if _, err := c.Parser.Build(); err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
 	return nil

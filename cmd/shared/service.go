@@ -30,7 +30,7 @@ func RunStandaloneService(cmd *cobra.Command, path string) error {
 	log.WithFields(log.Fields{
 		"pid":       os.Getpid(),
 		"go_procs":  runtime.GOMAXPROCS(0),
-		"mongo_uri": MaskURI(rt.Mongo.URI),
+		"mongo_uri": MaskURI(rt.Dao.Mongo.URI),
 		"role":      "standalone",
 	}).Info("tango standalone: starting")
 

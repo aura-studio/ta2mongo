@@ -39,8 +39,8 @@ func GatewayConfig(cmd *cobra.Command) (config.ClientConfig, error) {
 // functional options on top of the config-derived connection settings.
 func BuildClient(cmd *cobra.Command, cc config.ClientConfig, extra ...sdk.Option) (*sdk.Client, error) {
 	opts := append([]sdk.Option{
-		sdk.WithURI(cc.Mongo.URI),
-		sdk.WithMaxElapsedTime(cc.Store.MaxElapsedTime),
+		sdk.WithURI(cc.Dao.Mongo.URI),
+		sdk.WithMaxElapsedTime(cc.Dao.Store.MaxElapsedTime),
 	}, extra...)
 	return sdk.New(cmd.Context(), opts...)
 }

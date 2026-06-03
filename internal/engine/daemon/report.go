@@ -32,18 +32,18 @@ type Service struct {
 // New connects to MongoDB and creates a ready-to-run Service.
 // The caller must call Shutdown after Run returns to disconnect from MongoDB.
 func New(ctx context.Context, cfg config.Config) (*Service, error) {
-	flt, err := cfg.BuildFilter()
+	src, err := cfg.BuildParser()
 	if err != nil {
 		return nil, fmt.Errorf("report: %w", err)
 	}
 
-	res, err := daomongo.ConnectMongo(ctx, cfg.Mongo)
+	res, err := daomongo.ConnectMongo(ctx, cfg.Dao.Mongo)
 	if err != nil {
 		return nil, fmt.Errorf("report: %w", err)
 	}
-	da := dao.New(res.DB, cfg)
+	da := dao.New(res, cfg.Dao)
 
-	return &Service{cfg: cfg, dao: da, source: parser.New(flt), mongo: res}, nil
+	return &Service{cfg: cfg, dao: da, source: src, mongo: res}, nil
 }
 
 // Shutdown disconnects the MongoDB client. It must be called after Run returns
@@ -54,7 +54,7 @@ func (d *Service) Shutdown() error {
 
 // EnsureIndexes creates all required MongoDB indexes (idempotent).
 func (d *Service) EnsureIndexes(ctx context.Context) error {
-	return d.dao.EnsureIndexes(ctx)
+	return d.dao.Store.EnsureIndexes(ctx)
 }
 
 // Run starts the daemon pipeline and blocks until ctx is cancelled.

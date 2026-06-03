@@ -52,6 +52,8 @@
 
 > 注：`maxElapsedTime` 自 v1.1 起从 `runtime.mongo.*` 迁移到 `runtime.store.*`（重试预算归属 store 模块）。旧配置文件需把该键改名。
 
+> 内部说明：文件 schema 仍保持 `runtime.mongo.*` 和 `runtime.store.*`；加载后会投影到 `dao.Config`。`report.filter.*` / `upload.*.filter.*` 会投影到 `parser.Config`。
+
 ### report（standalone service）
 
 | 键 | required/optional | 默认 | 说明 |

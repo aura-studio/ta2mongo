@@ -29,8 +29,10 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"rocket-nano/tools/tango/config"
+	"rocket-nano/tools/tango/internal/dao"
 	daomongo "rocket-nano/tools/tango/internal/dao/mongo"
 	"rocket-nano/tools/tango/internal/dao/store"
+	"rocket-nano/tools/tango/internal/parser"
 	"rocket-nano/tools/tango/internal/parser/filter"
 	"rocket-nano/tools/tango/internal/process"
 )
@@ -148,12 +150,14 @@ func New(ctx context.Context, optFns ...Option) (*Client, error) {
 	// settings matter; the synchronous ingester does not use the daemon's batch
 	// flusher, so no pipeline section is needed).
 	cfg := config.Config{
-		Mongo:  &daomongo.Config{URI: opts.URI},
-		Store:  &store.Config{MaxElapsedTime: opts.MaxElapsedTime},
-		Filter: &filter.Config{Include: opts.FilterInclude, Exclude: opts.FilterExclude},
+		Dao: &dao.Config{
+			Mongo: &daomongo.Config{URI: opts.URI},
+			Store: &store.Config{MaxElapsedTime: opts.MaxElapsedTime},
+		},
+		Parser: &parser.Config{Filter: &filter.Config{Include: opts.FilterInclude, Exclude: opts.FilterExclude}},
 	}
 
-	st := store.New(db, &store.Config{MaxElapsedTime: opts.MaxElapsedTime})
+	st := store.New(db, cfg.Dao.Store)
 	ig, err := process.NewIngesterFromClient(mongoClient, cfg)
 	if err != nil {
 		_ = mongoClient.Disconnect(ctx)

@@ -30,11 +30,11 @@ report:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rt.Mongo.URI != "mongodb://localhost/report" {
-		t.Errorf("LoadStandalone Mongo.URI = %q", rt.Mongo.URI)
+	if rt.Dao.Mongo.URI != "mongodb://localhost/report" {
+		t.Errorf("LoadStandalone Mongo.URI = %q", rt.Dao.Mongo.URI)
 	}
-	if len(rt.Filter.Include) != 1 || rt.Filter.Include[0] != `#type == "track"` {
-		t.Errorf("report.filter -> runtime Filter = %v", rt.Filter.Include)
+	if len(rt.Parser.Filter.Include) != 1 || rt.Parser.Filter.Include[0] != `#type == "track"` {
+		t.Errorf("report.filter -> runtime Filter = %v", rt.Parser.Filter.Include)
 	}
 	if len(rc.Report.Source.LogPattern) != 1 {
 		t.Errorf("RoleConfig logPattern = %v", rc.Report.Source.LogPattern)
@@ -89,8 +89,8 @@ upload:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cc.Mongo.URI != "mongodb://localhost/gw" {
-		t.Errorf("gateway Mongo.URI = %q", cc.Mongo.URI)
+	if cc.Dao.Mongo.URI != "mongodb://localhost/gw" {
+		t.Errorf("gateway Mongo.URI = %q", cc.Dao.Mongo.URI)
 	}
 	if cc.Server.Addr != ":9090" {
 		t.Errorf("gateway addr = %q", cc.Server.Addr)

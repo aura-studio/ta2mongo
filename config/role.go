@@ -6,6 +6,7 @@ import (
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 
+	"rocket-nano/tools/tango/internal/dao"
 	"rocket-nano/tools/tango/internal/dao/mongo"
 	"rocket-nano/tools/tango/internal/dao/store"
 	"rocket-nano/tools/tango/internal/log"
@@ -38,6 +39,10 @@ type RuntimeConfig struct {
 	Logging *log.Config   `mapstructure:"logging"`
 	Mongo   *mongo.Config `mapstructure:"mongo"`
 	Store   *store.Config `mapstructure:"store"`
+}
+
+func (r RuntimeConfig) Dao() *dao.Config {
+	return &dao.Config{Mongo: r.Mongo, Store: r.Store}
 }
 
 // RoleReportConfig is the reporting pipeline block for the standalone service.
@@ -79,11 +84,10 @@ func (r RoleConfig) ReportRuntime() Config {
 	return Config{
 		Mode:     ModeReport,
 		Logging:  r.Runtime.Logging,
-		Mongo:    r.Runtime.Mongo,
-		Store:    r.Runtime.Store,
+		Dao:      r.Runtime.Dao(),
 		Source:   r.Report.Source,
 		Pipeline: r.Report.Pipeline,
-		Filter:   r.Report.Filter,
+		Parser:   parserConfigFromFilter(r.Report.Filter),
 	}
 }
 
@@ -92,8 +96,7 @@ func (r RoleConfig) ReportRuntime() Config {
 func (r RoleConfig) Client() ClientConfig {
 	cc := ClientConfig{
 		Logging: r.Runtime.Logging,
-		Mongo:   r.Runtime.Mongo,
-		Store:   r.Runtime.Store,
+		Dao:     r.Runtime.Dao(),
 		StringUpload: StringUploadConfig{
 			BatchSize: r.Upload.String.BatchSize,
 			Filter:    r.Upload.String.Filter,
