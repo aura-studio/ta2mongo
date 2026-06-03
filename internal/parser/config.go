@@ -1,6 +1,10 @@
 package parser
 
-import "rocket-nano/tools/tango/internal/parser/filter"
+import (
+	"fmt"
+
+	"rocket-nano/tools/tango/internal/parser/filter"
+)
 
 // Config composes parser-layer configuration. Filter owns the reporting filter
 // rules; talog currently has no tunable configuration.
@@ -13,6 +17,14 @@ func (c *Config) ApplyDefaults() {
 	if c.Filter == nil {
 		c.Filter = &filter.Config{}
 	}
+}
+
+// Validate delegates to the filter sub-config (the only parser knob with rules).
+func (c *Config) Validate() error {
+	if err := c.Filter.Validate(); err != nil {
+		return fmt.Errorf("filter: %w", err)
+	}
+	return nil
 }
 
 // Build compiles the configured filter and returns a ready parser.

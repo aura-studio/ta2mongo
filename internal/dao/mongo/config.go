@@ -24,6 +24,15 @@ type Config struct {
 	ServerSelectionTimeout time.Duration `mapstructure:"serverSelectionTimeout"`
 }
 
+// Validate checks the MongoDB connection settings. The URI is required for any
+// role. A nil receiver is treated as "missing".
+func (c *Config) Validate() error {
+	if c == nil || c.URI == "" {
+		return fmt.Errorf("uri is required")
+	}
+	return nil
+}
+
 // ApplyDefaults fills unset MongoDB connection options.
 func (c *Config) ApplyDefaults() {
 	if c.ConnectTimeout <= 0 {

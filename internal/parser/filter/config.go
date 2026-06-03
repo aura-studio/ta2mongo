@@ -24,3 +24,10 @@ func (c *Config) Build() (*Filter, error) {
 	}
 	return New(c.Include, c.Exclude)
 }
+
+// Validate checks that the include/exclude expressions compile. A nil receiver
+// is valid (no-op filter).
+func (c *Config) Validate() error {
+	_, err := c.Build()
+	return err
+}

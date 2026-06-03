@@ -1,6 +1,8 @@
 package process
 
 import (
+	"fmt"
+
 	"rocket-nano/tools/tango/internal/process/batch"
 	"rocket-nano/tools/tango/internal/process/pipeline"
 )
@@ -12,6 +14,14 @@ type Config struct {
 	BatchSize int `mapstructure:"batchSize"`
 	// Pipeline configures batching and parallel write workers (pipeline mode).
 	Pipeline *pipeline.Config `mapstructure:"pipeline"`
+}
+
+// Validate delegates to the pipeline sub-config.
+func (c *Config) Validate() error {
+	if err := c.Pipeline.Validate(); err != nil {
+		return fmt.Errorf("pipeline: %w", err)
+	}
+	return nil
 }
 
 // ApplyDefaults allocates child configs and lets them own their defaults.

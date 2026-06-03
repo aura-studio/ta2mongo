@@ -5,6 +5,8 @@
 package gateway
 
 import (
+	"fmt"
+
 	"rocket-nano/tools/tango/internal/parser/filter"
 	"rocket-nano/tools/tango/internal/process"
 	"rocket-nano/tools/tango/internal/process/pipeline"
@@ -45,6 +47,23 @@ type UploadConfig struct {
 // the api engine.
 func (c UploadConfig) ProcessConfig() *process.Config {
 	return &process.Config{BatchSize: c.BatchSize, Pipeline: c.Pipeline}
+}
+
+// Validate checks the gateway upload settings: the default mode must be a valid
+// strategy, and the pipeline / filter sub-configs must validate.
+func (c *Config) Validate() error {
+	if c.Upload.DefaultMode != "" {
+		if _, err := process.ParseMode(c.Upload.DefaultMode); err != nil {
+			return fmt.Errorf("upload.defaultMode: %w", err)
+		}
+	}
+	if err := c.Upload.Pipeline.Validate(); err != nil {
+		return fmt.Errorf("upload.pipeline: %w", err)
+	}
+	if err := c.Upload.Filter.Validate(); err != nil {
+		return fmt.Errorf("upload.filter: %w", err)
+	}
+	return nil
 }
 
 // ApplyDefaults fills unset options with sensible defaults.

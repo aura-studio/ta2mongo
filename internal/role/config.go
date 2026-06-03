@@ -5,12 +5,26 @@
 // sections and carry no role-specific file config.
 package role
 
-import "rocket-nano/tools/tango/internal/role/gateway"
+import (
+	"fmt"
+
+	"rocket-nano/tools/tango/internal/role/gateway"
+)
 
 // Config aggregates role-specific configuration (file key role.*).
 type Config struct {
 	// Gateway is the HTTP gateway role config (file key role.gateway.*).
 	Gateway *gateway.Config `mapstructure:"gateway"`
+}
+
+// Validate delegates to the configured role sub-configs.
+func (c *Config) Validate() error {
+	if c.Gateway != nil {
+		if err := c.Gateway.Validate(); err != nil {
+			return fmt.Errorf("gateway: %w", err)
+		}
+	}
+	return nil
 }
 
 // ApplyDefaults allocates child configs and lets them own their defaults.

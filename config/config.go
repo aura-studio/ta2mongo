@@ -29,7 +29,6 @@ import (
 	"rocket-nano/tools/tango/internal/process"
 	"rocket-nano/tools/tango/internal/role"
 	"rocket-nano/tools/tango/internal/source"
-	"rocket-nano/tools/tango/internal/source/tailer"
 )
 
 // Config is the unified configuration schema. Each section is a pointer to the
@@ -44,36 +43,40 @@ type Config struct {
 	Role    *role.Config    `mapstructure:"role"`
 }
 
-// Validate checks fields required by the daemon report pipeline. It assumes
-// applyDefaults has run (section pointers non-nil) but guards defensively.
+// Validate validates the whole configuration by delegating to each present
+// section's own Validate. The config package owns no validation rules of its
+// own — they live in the modules. The wrapped error path mirrors the key path
+// (e.g. "dao: mongo: uri is required"). It assumes applyDefaults has run but
+// guards nil sections defensively.
 func (c *Config) Validate() error {
-	if c.Dao == nil || c.Dao.Mongo == nil || c.Dao.Mongo.URI == "" {
-		return fmt.Errorf("config: dao.mongo.uri is required (set it in the config file, via TANGO_DAO_MONGO_URI, or via --dao.mongo.uri)")
-	}
-	if c.Source == nil || c.Source.Tailer == nil {
-		return fmt.Errorf("config: source.tailer configuration is required")
-	}
-	switch c.Source.Tailer.TailMode {
-	case tailer.TailModeHybrid, tailer.TailModePoll, tailer.TailModeEvent:
-		// valid
-	default:
-		return fmt.Errorf("config: source.tailer.tailMode must be %q, %q or %q; got %q",
-			tailer.TailModeHybrid, tailer.TailModePoll, tailer.TailModeEvent, c.Source.Tailer.TailMode)
-	}
-	if c.Process != nil && c.Process.Pipeline != nil {
-		p := c.Process.Pipeline
-		if p.BatchSizeMin > 0 && p.BatchSizeMin > p.BatchSize {
-			return fmt.Errorf("config: process.pipeline.batchSizeMin (%d) cannot exceed process.pipeline.batchSize (%d)",
-				p.BatchSizeMin, p.BatchSize)
+	if c.Logging != nil {
+		if err := c.Logging.Validate(); err != nil {
+			return fmt.Errorf("logging: %w", err)
 		}
-		if p.BatchSizeMax > 0 && p.BatchSize > p.BatchSizeMax {
-			return fmt.Errorf("config: process.pipeline.batchSize (%d) cannot exceed process.pipeline.batchSizeMax (%d)",
-				p.BatchSize, p.BatchSizeMax)
+	}
+	if c.Dao != nil {
+		if err := c.Dao.Validate(); err != nil {
+			return fmt.Errorf("dao: %w", err)
 		}
 	}
 	if c.Parser != nil {
-		if _, err := c.Parser.Build(); err != nil {
-			return fmt.Errorf("config: %w", err)
+		if err := c.Parser.Validate(); err != nil {
+			return fmt.Errorf("parser: %w", err)
+		}
+	}
+	if c.Source != nil {
+		if err := c.Source.Validate(); err != nil {
+			return fmt.Errorf("source: %w", err)
+		}
+	}
+	if c.Process != nil {
+		if err := c.Process.Validate(); err != nil {
+			return fmt.Errorf("process: %w", err)
+		}
+	}
+	if c.Role != nil {
+		if err := c.Role.Validate(); err != nil {
+			return fmt.Errorf("role: %w", err)
 		}
 	}
 	return nil

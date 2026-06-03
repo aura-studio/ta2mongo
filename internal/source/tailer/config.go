@@ -1,6 +1,9 @@
 package tailer
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // TailMode constants control how the tailer watches for file changes.
 const (
@@ -35,6 +38,19 @@ type Config struct {
 	PollInterval time.Duration `mapstructure:"pollInterval"`
 	// MaxLineBytes caps a single log line's length. Default 10485760 (10 MB).
 	MaxLineBytes int `mapstructure:"maxLineBytes"`
+}
+
+// Validate checks the tail mode is recognised (empty = use default). The log
+// pattern is not required here — an empty pattern is a valid tailer config that
+// simply matches nothing; roles that require it (daemon) check separately.
+func (c *Config) Validate() error {
+	switch c.TailMode {
+	case "", TailModeHybrid, TailModePoll, TailModeEvent:
+		return nil
+	default:
+		return fmt.Errorf("tailMode must be %q/%q/%q, got %q",
+			TailModeHybrid, TailModePoll, TailModeEvent, c.TailMode)
+	}
 }
 
 // ApplyDefaults fills unset tailer options.

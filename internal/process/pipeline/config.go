@@ -1,6 +1,9 @@
 package pipeline
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // Config configures batching and parallel write workers. It is the pipeline
 // module's own configuration; the top-level config package references it by
@@ -25,6 +28,22 @@ type Config struct {
 	ChannelBuffer int `mapstructure:"channelBuffer"`
 	// DeadLetterCap is the per-worker dead-letter batch capacity. Default 128.
 	DeadLetterCap int `mapstructure:"deadLetterCap"`
+}
+
+// Validate checks the explicit adaptive batch bounds are consistent with the
+// target batch size. A nil receiver is valid. Note ApplyDefaults clamps these,
+// so post-default configs always pass; Validate guards pre-default callers.
+func (c *Config) Validate() error {
+	if c == nil {
+		return nil
+	}
+	if c.BatchSizeMin > 0 && c.BatchSizeMin > c.BatchSize {
+		return fmt.Errorf("batchSizeMin (%d) cannot exceed batchSize (%d)", c.BatchSizeMin, c.BatchSize)
+	}
+	if c.BatchSizeMax > 0 && c.BatchSize > c.BatchSizeMax {
+		return fmt.Errorf("batchSize (%d) cannot exceed batchSizeMax (%d)", c.BatchSize, c.BatchSizeMax)
+	}
+	return nil
 }
 
 // ApplyDefaults fills unset pipeline options and clamps explicit batch bounds.
