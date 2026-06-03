@@ -1,16 +1,17 @@
 // Package ingest provides a synchronous, blocking API for processing
 // individual ThinkingData JSON log lines.
 //
-// Unlike the daemon package which tails log files, batches records, and
-// writes them asynchronously via background workers, the ingest package
-// processes one line at a time and blocks until the MongoDB write completes.
+// Unlike the async pipeline (which tails log files, batches records, and writes
+// them via background workers), the ingest package processes one line at a time
+// and blocks until the MongoDB write completes.
 //
 // This is designed for request-response scenarios such as HTTP API handlers,
 // CLI one-shot imports, or SDK integrations where the caller needs to know
 // immediately whether the write succeeded.
 //
-// Both modes (daemon and ingest) coexist and share the same underlying
-// components: talog.Parser, store.Store, and store.IdentityResolver.
+// The per-line rules (parse → filter → identity → write model / dead letter)
+// are shared with the pipeline via internal/process/ingestion.Processor; this
+// package only differs in lifecycle (synchronous, immediate writes).
 package ingest
 
 import (
@@ -26,14 +27,14 @@ import (
 	"rocket-nano/tools/tango/internal/core/runtime"
 	"rocket-nano/tools/tango/internal/core/store"
 	"rocket-nano/tools/tango/internal/core/talog"
+	"rocket-nano/tools/tango/internal/process/ingestion"
 )
 
 // Ingester processes individual JSON log lines synchronously.
 // It is safe for concurrent use from multiple goroutines.
 type Ingester struct {
+	proc   *ingestion.Processor
 	store  *store.Store
-	parser *talog.Parser
-	filter *filter.Holder
 	mongo  *runtime.MongoResource
 	logger *logrus.Logger
 }
@@ -49,46 +50,37 @@ func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Ingest
 	if err != nil {
 		return nil, fmt.Errorf("ingest: %w", err)
 	}
-
 	res, err := runtime.ConnectMongo(ctx, cfg.Mongo)
 	if err != nil {
 		return nil, fmt.Errorf("ingest: %w", err)
 	}
-	st := runtime.NewStore(res.DB, cfg, logger)
-
-	return &Ingester{
-		store:  st,
-		parser: talog.NewParser(),
-		filter: filter.NewHolder(flt),
-		mongo:  res,
-		logger: logger,
-	}, nil
+	return newIngester(res, flt, cfg, logger), nil
 }
 
-// NewFromClient creates an Ingester from an existing MongoDB client, avoiding
-// a second connection. This is useful when the caller already manages the
-// MongoDB lifecycle (e.g., when both daemon and ingest modes run in the same
-// process). Returns an error if the configured filter expressions fail to
-// compile.
+// NewFromClient creates an Ingester from an existing MongoDB client, avoiding a
+// second connection. The client is borrowed: Close will not disconnect it (the
+// caller owns its lifecycle). Returns an error if the configured filter
+// expressions fail to compile.
 func NewFromClient(client *mongo.Client, cfg config.Config, logger *logrus.Logger) (*Ingester, error) {
 	flt, err := cfg.BuildFilter()
 	if err != nil {
 		return nil, fmt.Errorf("ingest: %w", err)
 	}
-
 	res, err := runtime.Borrow(client, cfg.Mongo.URI)
 	if err != nil {
 		return nil, fmt.Errorf("ingest: %w", err)
 	}
-	st := runtime.NewStore(res.DB, cfg, logger)
+	return newIngester(res, flt, cfg, logger), nil
+}
 
+func newIngester(res *runtime.MongoResource, flt *filter.Filter, cfg config.Config, logger *logrus.Logger) *Ingester {
+	st := runtime.NewStore(res.DB, cfg, logger)
 	return &Ingester{
+		proc:   ingestion.NewProcessor(talog.NewParser(), filter.NewHolder(flt), st, ingestion.NoopStats{}, ingestion.WriteOptions{}),
 		store:  st,
-		parser: talog.NewParser(),
-		filter: filter.NewHolder(flt),
 		mongo:  res,
 		logger: logger,
-	}, nil
+	}
 }
 
 // Close releases the MongoDB connection when the Ingester owns it (created with
@@ -103,76 +95,47 @@ func (ig *Ingester) EnsureIndexes(ctx context.Context) error {
 	return ig.store.EnsureIndexes(ctx)
 }
 
-// Ingest parses a single JSON log line, resolves user identity, and writes
-// the result to MongoDB. It blocks until the write is confirmed or fails.
+// Ingest parses a single JSON log line, resolves user identity, and writes the
+// result to MongoDB. It blocks until the write is confirmed or fails.
 //
-// The line must be a valid ThinkingData JSON payload (direct or envelope format).
-// On parse failure the line is written to the dead_letter collection and
-// the parse error is returned.
-//
-// This method is safe for concurrent use.
+// On parse failure the line is written to dead_letter and the parse error is
+// returned. On filter drop it returns ErrFiltered. This method is safe for
+// concurrent use.
 func (ig *Ingester) Ingest(ctx context.Context, line string) error {
-	rec, err := ig.parser.ParseLine(line)
-	if err != nil {
-		// Write to dead letter so the failed line is persisted for inspection,
-		// then return the parse error to the caller.
-		dlModel := store.DeadLetterModel(line, err)
-		if wErr := ig.store.BulkWrite(ctx, ig.store.DeadLetterCollection(), []mongo.WriteModel{dlModel}); wErr != nil {
-			ig.logger.WithError(wErr).Warn("ingest: failed to write dead letter")
-		}
-		return fmt.Errorf("ingest: parse: %w", err)
-	}
-
-	// Apply user-defined filter; dropped records are not written anywhere.
-	if !ig.filter.Empty() {
-		keep, ferr := ig.filter.Keep(rec.Doc)
-		if ferr != nil {
-			ig.logger.WithError(ferr).Debug("ingest: filter evaluation error")
-		}
-		if !keep {
-			return ErrFiltered
-		}
-	}
-
-	// Resolve user identity.
-	userID, err := ig.store.Identity().Resolve(ctx, rec.AccountID, rec.DistinctID)
-	if err != nil {
-		// Identity resolution failure is also persisted to dead letter.
-		dlModel := store.DeadLetterModel(line, err)
-		if wErr := ig.store.BulkWrite(ctx, ig.store.DeadLetterCollection(), []mongo.WriteModel{dlModel}); wErr != nil {
-			ig.logger.WithError(wErr).Warn("ingest: failed to write dead letter")
-		}
-		return fmt.Errorf("ingest: identity resolve: %w", err)
-	}
-
-	// Route to the appropriate collection and write.
-	switch rec.Category() {
-	case talog.CategoryUser:
-		model := store.UserWriteModel(rec.Type, userID, rec.Doc)
-		if err := ig.store.BulkWriteOrdered(ctx, ig.store.UserCollection(), []mongo.WriteModel{model}); err != nil {
+	res := ig.proc.Process(ctx, line)
+	switch res.Kind {
+	case ingestion.KindParseError:
+		ig.writeDeadLetter(ctx, res.Model)
+		return fmt.Errorf("ingest: parse: %w", res.Err)
+	case ingestion.KindFiltered:
+		return ErrFiltered
+	case ingestion.KindIdentityError:
+		ig.writeDeadLetter(ctx, res.Model)
+		return fmt.Errorf("ingest: identity resolve: %w", res.Err)
+	case ingestion.KindUser:
+		if err := ig.store.BulkWriteOrdered(ctx, ig.store.UserCollection(), []mongo.WriteModel{res.Model}); err != nil {
 			return fmt.Errorf("ingest: write user: %w", err)
 		}
-
-	case talog.CategoryEvent:
-		rec.Doc["#user_id"] = userID
-		model := store.EventWriteModel(rec.Type, rec.UUID, rec.Doc)
-		if err := ig.store.BulkWrite(ctx, ig.store.EventCollection(), []mongo.WriteModel{model}); err != nil {
+	case ingestion.KindEvent:
+		if err := ig.store.BulkWrite(ctx, ig.store.EventCollection(), []mongo.WriteModel{res.Model}); err != nil {
 			return fmt.Errorf("ingest: write event: %w", err)
 		}
 	}
-
 	return nil
 }
 
-// IngestBatch parses and writes multiple JSON log lines in a single batch.
-// It processes all lines, collecting write models, then flushes them together.
-// Lines that fail to parse are sent to the dead_letter collection.
+func (ig *Ingester) writeDeadLetter(ctx context.Context, model mongo.WriteModel) {
+	if err := ig.store.BulkWrite(ctx, ig.store.DeadLetterCollection(), []mongo.WriteModel{model}); err != nil {
+		ig.logger.WithError(err).Warn("ingest: failed to write dead letter")
+	}
+}
+
+// IngestBatch parses and writes multiple JSON log lines in a single batch. It
+// processes all lines, collecting write models, then flushes them together.
+// Lines that fail to parse or resolve identity are sent to dead_letter.
 //
-// Returns an error if any batch write to MongoDB fails. Parse errors for
-// individual lines are logged but do not prevent other lines from being processed.
-//
-// This is a convenience method for callers that have multiple lines available
-// at once but still want synchronous confirmation of the writes.
+// Returns an error if any batch write to MongoDB fails. Per-line parse/identity
+// errors are logged but do not prevent other lines from being processed.
 func (ig *Ingester) IngestBatch(ctx context.Context, lines []string) error {
 	var (
 		userModels  []mongo.WriteModel
@@ -181,36 +144,20 @@ func (ig *Ingester) IngestBatch(ctx context.Context, lines []string) error {
 	)
 
 	for _, line := range lines {
-		rec, err := ig.parser.ParseLine(line)
-		if err != nil {
-			ig.logger.WithError(err).Debug("ingest batch: invalid line")
-			deadModels = append(deadModels, store.DeadLetterModel(line, err))
-			continue
-		}
-
-		if !ig.filter.Empty() {
-			keep, ferr := ig.filter.Keep(rec.Doc)
-			if ferr != nil {
-				ig.logger.WithError(ferr).Debug("ingest batch: filter evaluation error")
-			}
-			if !keep {
-				continue
-			}
-		}
-
-		userID, err := ig.store.Identity().Resolve(ctx, rec.AccountID, rec.DistinctID)
-		if err != nil {
-			ig.logger.WithError(err).Warn("ingest batch: identity resolve failed")
-			deadModels = append(deadModels, store.DeadLetterModel(line, err))
-			continue
-		}
-
-		switch rec.Category() {
-		case talog.CategoryUser:
-			userModels = append(userModels, store.UserWriteModel(rec.Type, userID, rec.Doc))
-		case talog.CategoryEvent:
-			rec.Doc["#user_id"] = userID
-			eventModels = append(eventModels, store.EventWriteModel(rec.Type, rec.UUID, rec.Doc))
+		res := ig.proc.Process(ctx, line)
+		switch res.Kind {
+		case ingestion.KindParseError:
+			ig.logger.WithError(res.Err).Debug("ingest batch: invalid line")
+			deadModels = append(deadModels, res.Model)
+		case ingestion.KindIdentityError:
+			ig.logger.WithError(res.Err).Warn("ingest batch: identity resolve failed")
+			deadModels = append(deadModels, res.Model)
+		case ingestion.KindFiltered:
+			// intentionally discarded
+		case ingestion.KindUser:
+			userModels = append(userModels, res.Model)
+		case ingestion.KindEvent:
+			eventModels = append(eventModels, res.Model)
 		}
 	}
 

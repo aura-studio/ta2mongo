@@ -13,65 +13,18 @@ import (
 	"rocket-nano/tools/tango/internal/core/filter"
 	"rocket-nano/tools/tango/internal/core/store"
 	"rocket-nano/tools/tango/internal/core/talog"
+	"rocket-nano/tools/tango/internal/process/ingestion"
 )
-
-// StatsCollector is an optional callback interface for recording processing
-// statistics. Implementations must be safe for concurrent use.
-type StatsCollector interface {
-	// OnLine is called for every line received.
-	OnLine()
-	// OnParseOK is called when a line is successfully parsed.
-	OnParseOK()
-	// OnParseError is called when a line fails to parse.
-	OnParseError()
-	// OnIdentityError is called when identity resolution fails.
-	OnIdentityError()
-	// OnUserWrite is called when a user write model is enqueued.
-	OnUserWrite()
-	// OnEventWrite is called when an event write model is enqueued.
-	OnEventWrite()
-	// OnDeadLetter is called when a line is sent to dead letter.
-	OnDeadLetter()
-	// OnWriteError is called when a bulk write fails.
-	OnWriteError()
-	// OnFiltered is called when a parsed record is dropped by filter rules.
-	OnFiltered()
-	// OnFilterError is called when a filter expression evaluation fails.
-	OnFilterError()
-}
-
-// NoopStats is a StatsCollector that does nothing.
-type NoopStats struct{}
-
-func (NoopStats) OnLine()          {}
-func (NoopStats) OnParseOK()       {}
-func (NoopStats) OnParseError()    {}
-func (NoopStats) OnIdentityError() {}
-func (NoopStats) OnUserWrite()     {}
-func (NoopStats) OnEventWrite()    {}
-func (NoopStats) OnDeadLetter()    {}
-func (NoopStats) OnWriteError()    {}
-func (NoopStats) OnFiltered()      {}
-func (NoopStats) OnFilterError()   {}
-
-// WriteOptions tunes write-side behaviour for callers that need to deviate
-// from the default per-#type semantics (notably backfill).
-type WriteOptions struct {
-	// ForceSkipExisting routes every event write through $setOnInsert keyed
-	// by #uuid, regardless of the record's #type. Existing documents are
-	// never modified — duplicates become no-ops. Recommended for backfill.
-	ForceSkipExisting bool
-}
 
 // RunWorkers launches N workers with affinity-based dispatch and blocks
 // until all workers finish. A nil flt is treated as a no-op filter. flt is a
 // Holder so the active filter can be hot-swapped while workers run.
 func RunWorkers(ctx context.Context, cfg config.Config, st *store.Store,
 	parser *talog.Parser, flt *filter.Holder, logger *logrus.Logger,
-	lineCh <-chan string, stats StatsCollector, opts WriteOptions,
+	lineCh <-chan string, stats ingestion.StatsCollector, opts ingestion.WriteOptions,
 ) {
 	if stats == nil {
-		stats = NoopStats{}
+		stats = ingestion.NoopStats{}
 	}
 
 	workerCount := cfg.Pipeline.BatchWorkers
@@ -100,10 +53,15 @@ func RunWorkers(ctx context.Context, cfg config.Config, st *store.Store,
 }
 
 // worker processes lines from a channel, batches them, and flushes to MongoDB.
+// Per-line parse/filter/identity/route rules live in ingestion.Processor; the
+// worker owns only batching, the dynamic flush cadence, and the affinity-local
+// dead-letter logging.
 func worker(ctx context.Context, cfg config.Config, st *store.Store,
 	parser *talog.Parser, flt *filter.Holder, logger *logrus.Logger,
-	lineCh <-chan string, stats StatsCollector, opts WriteOptions,
+	lineCh <-chan string, stats ingestion.StatsCollector, opts ingestion.WriteOptions,
 ) {
+	proc := ingestion.NewProcessor(parser, flt, st, stats, opts)
+
 	userBatch := NewBatch(cfg.BatchSizeMax())
 	eventBatch := NewBatch(cfg.BatchSizeMax())
 	deadBatch := NewBatch(cfg.Pipeline.DeadLetterCap)
@@ -134,61 +92,28 @@ func worker(ctx context.Context, cfg config.Config, st *store.Store,
 				return
 			}
 
-			stats.OnLine()
-
-			rec, err := parser.ParseLine(line)
-			if err != nil {
+			res := proc.Process(ctx, line)
+			switch res.Kind {
+			case ingestion.KindParseError:
 				invalidCount++
-				stats.OnParseError()
-				stats.OnDeadLetter()
 				if invalidCount%1000 == 0 {
-					logger.WithError(err).Warnf("dropped invalid line (total invalid=%d)", invalidCount)
+					logger.WithError(res.Err).Warnf("dropped invalid line (total invalid=%d)", invalidCount)
 				}
-				deadBatch.Add(store.DeadLetterModel(line, err))
+				deadBatch.Add(res.Model)
 				if deadBatch.Full() || time.Since(lastFlush) >= flushInterval {
 					flush(ctx)
 				}
 				continue
-			}
-			stats.OnParseOK()
-
-			// Apply user-defined include/exclude filter. Dropped records are
-			// not written to dead letter — they are intentionally discarded.
-			if !flt.Empty() {
-				keep, ferr := flt.Keep(rec.Doc)
-				if ferr != nil {
-					stats.OnFilterError()
-					logger.WithError(ferr).Debug("filter: expression evaluation error")
-				}
-				if !keep {
-					stats.OnFiltered()
-					continue
-				}
-			}
-
-			// Resolve user identity for both user and event records.
-			userID, err := st.Identity().Resolve(ctx, rec.AccountID, rec.DistinctID)
-			if err != nil {
-				stats.OnIdentityError()
-				stats.OnDeadLetter()
-				logger.WithError(err).Warn("identity resolve failed, sending to dead letter")
-				deadBatch.Add(store.DeadLetterModel(line, err))
+			case ingestion.KindIdentityError:
+				logger.WithError(res.Err).Warn("identity resolve failed, sending to dead letter")
+				deadBatch.Add(res.Model)
 				continue
-			}
-
-			// Route the record to the appropriate batch.
-			switch rec.Category() {
-			case talog.CategoryUser:
-				userBatch.Add(store.UserWriteModel(rec.Type, userID, rec.Doc))
-				stats.OnUserWrite()
-			case talog.CategoryEvent:
-				rec.Doc["#user_id"] = userID
-				if opts.ForceSkipExisting {
-					eventBatch.Add(store.EventWriteModelSkipExisting(rec.UUID, rec.Doc))
-				} else {
-					eventBatch.Add(store.EventWriteModel(rec.Type, rec.UUID, rec.Doc))
-				}
-				stats.OnEventWrite()
+			case ingestion.KindFiltered:
+				continue
+			case ingestion.KindUser:
+				userBatch.Add(res.Model)
+			case ingestion.KindEvent:
+				eventBatch.Add(res.Model)
 			}
 
 			// Flush on dynamic batch threshold (derived from current backlog)
@@ -225,7 +150,7 @@ func worker(ctx context.Context, cfg config.Config, st *store.Store,
 
 // flushBatch writes a batch to the given collection (unordered) and resets it.
 func flushBatch(ctx context.Context, st *store.Store, logger *logrus.Logger,
-	coll *mongo.Collection, b *Batch, stats StatsCollector,
+	coll *mongo.Collection, b *Batch, stats ingestion.StatsCollector,
 ) {
 	if b.Empty() {
 		return
@@ -241,7 +166,7 @@ func flushBatch(ctx context.Context, st *store.Store, logger *logrus.Logger,
 // flushBatchOrdered writes a batch to the given collection with ordered writes
 // to guarantee that operations within the batch are applied sequentially.
 func flushBatchOrdered(ctx context.Context, st *store.Store, logger *logrus.Logger,
-	coll *mongo.Collection, b *Batch, stats StatsCollector,
+	coll *mongo.Collection, b *Batch, stats ingestion.StatsCollector,
 ) {
 	if b.Empty() {
 		return

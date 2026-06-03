@@ -3,6 +3,7 @@ package backfill
 import (
 	"context"
 
+	"rocket-nano/tools/tango/internal/process/ingestion"
 	"rocket-nano/tools/tango/internal/process/pipeline"
 )
 
@@ -26,7 +27,7 @@ func (r *Runner) fetchAndIngestEventPage(ctx context.Context, taskID string, pag
 		defer close(workerDone)
 		pipeline.RunWorkers(ctx, r.cfg, r.store, r.parser, r.filter, r.logger,
 			lineCh, &statsCollector{s: &r.stats},
-			pipeline.WriteOptions{ForceSkipExisting: r.cfg.Backfill.ForceSkip()})
+			ingestion.WriteOptions{ForceSkipExisting: r.cfg.Backfill.ForceSkip()})
 	}()
 
 	rows := 0

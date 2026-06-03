@@ -19,6 +19,7 @@ import (
 	"rocket-nano/tools/tango/internal/core/store"
 	"rocket-nano/tools/tango/internal/core/tailer"
 	"rocket-nano/tools/tango/internal/core/talog"
+	"rocket-nano/tools/tango/internal/process/ingestion"
 	"rocket-nano/tools/tango/internal/process/pipeline"
 )
 
@@ -153,7 +154,7 @@ func (d *Service) Run(ctx context.Context) error {
 	}
 
 	// Block until all workers finish.
-	pipeline.RunWorkers(ctx, d.cfg, d.store, d.parser, d.filter, d.logger, lineCh, stats, pipeline.WriteOptions{})
+	pipeline.RunWorkers(ctx, d.cfg, d.store, d.parser, d.filter, d.logger, lineCh, stats, ingestion.WriteOptions{})
 
 	// Wait for the reporter goroutine to exit.
 	<-reportDone
