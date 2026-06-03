@@ -53,6 +53,16 @@ func (c *Config) Validate() error {
 	}
 }
 
+// RegisterDefaults registers this module's config keys (under prefix) with the
+// given setter so env binding works.
+func (c *Config) RegisterDefaults(set func(key string, value any), prefix string) {
+	set(prefix+".logPattern", []string{})
+	set(prefix+".tailMode", "")
+	set(prefix+".rescanInterval", "0s")
+	set(prefix+".pollInterval", "0s")
+	set(prefix+".maxLineBytes", 0)
+}
+
 // ApplyDefaults fills unset tailer options.
 func (c *Config) ApplyDefaults() {
 	if c.RescanInterval <= 0 {

@@ -25,6 +25,11 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// RegisterDefaults cascades default-key registration to the source sub-configs.
+func (c *Config) RegisterDefaults(set func(key string, value any), prefix string) {
+	new(tailer.Config).RegisterDefaults(set, prefix+".tailer")
+}
+
 // ApplyDefaults allocates child configs and lets them own their defaults.
 func (c *Config) ApplyDefaults() {
 	if c.Tailer == nil {

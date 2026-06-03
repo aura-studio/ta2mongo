@@ -22,6 +22,12 @@ type Config struct {
 	MaxElapsedTime time.Duration `mapstructure:"maxElapsedTime"`
 }
 
+// RegisterDefaults registers this module's config keys (under prefix) with the
+// given setter so env binding works.
+func (c *Config) RegisterDefaults(set func(key string, value any), prefix string) {
+	set(prefix+".maxElapsedTime", "0s")
+}
+
 // ApplyDefaults fills unset store options.
 func (c *Config) ApplyDefaults() {
 	if c.MaxElapsedTime <= 0 {

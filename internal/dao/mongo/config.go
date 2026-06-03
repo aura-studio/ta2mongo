@@ -33,6 +33,14 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// RegisterDefaults registers this module's config keys (under prefix) with the
+// given setter so env binding works.
+func (c *Config) RegisterDefaults(set func(key string, value any), prefix string) {
+	set(prefix+".uri", "")
+	set(prefix+".connectTimeout", "0s")
+	set(prefix+".serverSelectionTimeout", "0s")
+}
+
 // ApplyDefaults fills unset MongoDB connection options.
 func (c *Config) ApplyDefaults() {
 	if c.ConnectTimeout <= 0 {

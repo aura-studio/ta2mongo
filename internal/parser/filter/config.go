@@ -31,3 +31,10 @@ func (c *Config) Validate() error {
 	_, err := c.Build()
 	return err
 }
+
+// RegisterDefaults registers this module's config keys (under prefix) with the
+// given setter so env binding works.
+func (c *Config) RegisterDefaults(set func(key string, value any), prefix string) {
+	set(prefix+".include", []string{})
+	set(prefix+".exclude", []string{})
+}

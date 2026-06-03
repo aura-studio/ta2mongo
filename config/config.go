@@ -43,6 +43,18 @@ type Config struct {
 	Role    *role.Config    `mapstructure:"role"`
 }
 
+// RegisterDefaults cascades default-key registration to each section, owning
+// only the top-level segment names (its own field tags) and delegating the rest.
+// set is typically viper's SetDefault, used so AutomaticEnv binds every key.
+func (c *Config) RegisterDefaults(set func(key string, value any)) {
+	new(logging.Config).RegisterDefaults(set, "logging")
+	new(dao.Config).RegisterDefaults(set, "dao")
+	new(parser.Config).RegisterDefaults(set, "parser")
+	new(source.Config).RegisterDefaults(set, "source")
+	new(process.Config).RegisterDefaults(set, "process")
+	new(role.Config).RegisterDefaults(set, "role")
+}
+
 // Validate validates the whole configuration by delegating to each present
 // section's own Validate. The config package owns no validation rules of its
 // own — they live in the modules. The wrapped error path mirrors the key path

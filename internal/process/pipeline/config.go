@@ -46,6 +46,20 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// RegisterDefaults registers this module's config keys (under prefix) with the
+// given setter so env binding works. The pipeline config appears at more than
+// one prefix (process.pipeline and role.gateway.upload.pipeline), so the prefix
+// is supplied by the parent.
+func (c *Config) RegisterDefaults(set func(key string, value any), prefix string) {
+	set(prefix+".batchSize", 0)
+	set(prefix+".batchSizeMin", 0)
+	set(prefix+".batchSizeMax", 0)
+	set(prefix+".batchWorkers", 0)
+	set(prefix+".flushInterval", "0s")
+	set(prefix+".channelBuffer", 0)
+	set(prefix+".deadLetterCap", 0)
+}
+
 // ApplyDefaults fills unset pipeline options and clamps explicit batch bounds.
 func (c *Config) ApplyDefaults() {
 	if c.BatchSize <= 0 {

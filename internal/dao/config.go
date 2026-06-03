@@ -27,6 +27,12 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// RegisterDefaults cascades default-key registration to the sub-configs.
+func (c *Config) RegisterDefaults(set func(key string, value any), prefix string) {
+	new(mongo.Config).RegisterDefaults(set, prefix+".mongo")
+	new(store.Config).RegisterDefaults(set, prefix+".store")
+}
+
 // ApplyDefaults allocates child configs and lets them own their defaults.
 func (c *Config) ApplyDefaults() {
 	if c.Mongo == nil {

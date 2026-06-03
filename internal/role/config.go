@@ -27,6 +27,11 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// RegisterDefaults cascades default-key registration to the role sub-configs.
+func (c *Config) RegisterDefaults(set func(key string, value any), prefix string) {
+	new(gateway.Config).RegisterDefaults(set, prefix+".gateway")
+}
+
 // ApplyDefaults allocates child configs and lets them own their defaults.
 func (c *Config) ApplyDefaults() {
 	if c.Gateway == nil {

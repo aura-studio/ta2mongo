@@ -66,6 +66,20 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// RegisterDefaults registers the gateway role keys and cascades to upload.
+func (c *Config) RegisterDefaults(set func(key string, value any), prefix string) {
+	set(prefix+".addr", "")
+	new(UploadConfig).RegisterDefaults(set, prefix+".upload")
+}
+
+// RegisterDefaults registers the upload keys and cascades to filter/pipeline.
+func (c *UploadConfig) RegisterDefaults(set func(key string, value any), prefix string) {
+	set(prefix+".defaultMode", "")
+	set(prefix+".batchSize", 0)
+	new(filter.Config).RegisterDefaults(set, prefix+".filter")
+	new(pipeline.Config).RegisterDefaults(set, prefix+".pipeline")
+}
+
 // ApplyDefaults fills unset options with sensible defaults.
 func (c *Config) ApplyDefaults() {
 	if c.Addr == "" {

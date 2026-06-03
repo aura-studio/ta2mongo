@@ -24,6 +24,13 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// RegisterDefaults registers the process keys and cascades to the pipeline
+// sub-config.
+func (c *Config) RegisterDefaults(set func(key string, value any), prefix string) {
+	set(prefix+".batchSize", 0)
+	new(pipeline.Config).RegisterDefaults(set, prefix+".pipeline")
+}
+
 // ApplyDefaults allocates child configs and lets them own their defaults.
 func (c *Config) ApplyDefaults() {
 	if c.BatchSize <= 0 {

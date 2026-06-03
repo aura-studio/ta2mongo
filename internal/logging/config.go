@@ -27,6 +27,14 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// RegisterDefaults registers this module's config keys (under prefix) with the
+// given setter so env binding works. It owns its leaf keys; the parent owns the
+// prefix.
+func (c *Config) RegisterDefaults(set func(key string, value any), prefix string) {
+	set(prefix+".level", "")
+	set(prefix+".format", "")
+}
+
 // ApplyDefaults fills unset logging options.
 func (c *Config) ApplyDefaults() {
 	if c.Level == "" {

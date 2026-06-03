@@ -27,6 +27,11 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// RegisterDefaults cascades default-key registration to the filter sub-config.
+func (c *Config) RegisterDefaults(set func(key string, value any), prefix string) {
+	new(filter.Config).RegisterDefaults(set, prefix+".filter")
+}
+
 // Build compiles the configured filter and returns a ready parser.
 func (c *Config) Build() (*Parser, error) {
 	var fc *filter.Config
