@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -29,7 +28,6 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
-	"golang.org/x/net/proxy"
 )
 
 // Task lifecycle states returned by /open/sql-task-info.
@@ -83,55 +81,6 @@ func NewClient(baseURL, token string, httpClient *http.Client) *Client {
 		token:   token,
 		http:    httpClient,
 	}
-}
-
-// NewHTTPClient builds an HTTP client honouring an optional proxy URL. Empty
-// proxyURL means direct connection. http://, https://, and socks5:// schemes
-// are accepted; embedded user:pass is parsed for both HTTP CONNECT and
-// SOCKS5 auth.
-//
-// A timeout of 0 disables Client.Timeout so that arbitrarily long streaming
-// responses (e.g. multi-million-row result-page bodies) are not killed
-// mid-stream; cancellation must come from the request context instead.
-func NewHTTPClient(proxyURL string, timeout time.Duration) (*http.Client, error) {
-	if proxyURL == "" {
-		return &http.Client{Timeout: timeout}, nil
-	}
-
-	u, err := url.Parse(proxyURL)
-	if err != nil {
-		return nil, fmt.Errorf("parse proxy url: %w", err)
-	}
-
-	transport := &http.Transport{
-		MaxIdleConns:        16,
-		IdleConnTimeout:     90 * time.Second,
-		TLSHandshakeTimeout: 15 * time.Second,
-	}
-
-	switch u.Scheme {
-	case "http", "https":
-		transport.Proxy = http.ProxyURL(u)
-	case "socks5":
-		var auth *proxy.Auth
-		if u.User != nil {
-			pw, _ := u.User.Password()
-			auth = &proxy.Auth{User: u.User.Username(), Password: pw}
-		}
-		dialer, err := proxy.SOCKS5("tcp", u.Host, auth, &net.Dialer{Timeout: 15 * time.Second})
-		if err != nil {
-			return nil, fmt.Errorf("socks5 dialer: %w", err)
-		}
-		cd, ok := dialer.(proxy.ContextDialer)
-		if !ok {
-			return nil, fmt.Errorf("socks5 dialer does not implement ContextDialer")
-		}
-		transport.DialContext = cd.DialContext
-	default:
-		return nil, fmt.Errorf("unsupported proxy scheme %q", u.Scheme)
-	}
-
-	return &http.Client{Transport: transport, Timeout: timeout}, nil
 }
 
 // SubmitResult is the unmarshalled "data" body of /open/submit-sql.
@@ -258,106 +207,6 @@ func (c *Client) StreamResultPage(ctx context.Context, taskID string, pageID, pa
 	}
 
 	return streamResultPageBody(resp.Body, onRow)
-}
-
-// streamResultPageBody consumes an NDJSON result-page body and yields each
-// row through onRow. An envelope-shaped JSON object on the first token is
-// treated as an API error (typical for "task expired" responses returned
-// with HTTP 200).
-func streamResultPageBody(body io.Reader, onRow func(row []interface{}) error) error {
-	dec := json.NewDecoder(body)
-	dec.UseNumber()
-
-	var rowsSeen int
-	for dec.More() {
-		tok, err := dec.Token()
-		if err != nil {
-			return fmt.Errorf("decode result-page: %w", err)
-		}
-		if d, ok := tok.(json.Delim); ok && d == '{' {
-			obj, err := readObjectRemainder(dec)
-			if err != nil {
-				return fmt.Errorf("decode envelope error: %w", err)
-			}
-			env := envelope{}
-			if rc, ok := obj["return_code"]; ok {
-				switch v := rc.(type) {
-				case json.Number:
-					n, _ := v.Int64()
-					env.ReturnCode = int(n)
-				case float64:
-					env.ReturnCode = int(v)
-				}
-			}
-			if rm, ok := obj["return_message"].(string); ok {
-				env.ReturnMessage = rm
-			}
-			if env.ReturnCode != 0 {
-				apiErr := &APIError{Code: env.ReturnCode, Message: env.ReturnMessage}
-				if isExpired(apiErr) {
-					return ErrTaskExpired
-				}
-				return apiErr
-			}
-			continue
-		}
-		if d, ok := tok.(json.Delim); !ok || d != '[' {
-			return fmt.Errorf("decode result-page: unexpected token %v", tok)
-		}
-		row, err := readArrayRemainder(dec)
-		if err != nil {
-			return fmt.Errorf("decode row %d: %w", rowsSeen, err)
-		}
-		if err := onRow(row); err != nil {
-			return err
-		}
-		rowsSeen++
-	}
-	return nil
-}
-
-// readObjectRemainder reads JSON object members until the closing '}',
-// returning a generic map. The decoder must have already consumed the
-// opening '{'.
-func readObjectRemainder(dec *json.Decoder) (map[string]any, error) {
-	out := make(map[string]any)
-	for dec.More() {
-		keyTok, err := dec.Token()
-		if err != nil {
-			return nil, err
-		}
-		key, ok := keyTok.(string)
-		if !ok {
-			return nil, fmt.Errorf("expected string key, got %T", keyTok)
-		}
-		var val any
-		if err := dec.Decode(&val); err != nil {
-			return nil, err
-		}
-		out[key] = val
-	}
-	// Consume the closing '}'.
-	if _, err := dec.Token(); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-// readArrayRemainder reads JSON array elements until the closing ']'. The
-// decoder must have already consumed the opening '['.
-func readArrayRemainder(dec *json.Decoder) ([]interface{}, error) {
-	var out []interface{}
-	for dec.More() {
-		var v any
-		if err := dec.Decode(&v); err != nil {
-			return nil, err
-		}
-		out = append(out, v)
-	}
-	if _, err := dec.Token(); err != nil {
-		return nil, err
-	}
-	return out, nil
 }
 
 // CancelTask asks TA to cancel an in-flight SQL task. Errors are surfaced but
