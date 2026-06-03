@@ -9,11 +9,11 @@ import (
 	"rocket-nano/tools/tango/internal/dao"
 	"rocket-nano/tools/tango/internal/dao/mongo"
 	"rocket-nano/tools/tango/internal/dao/store"
-	"rocket-nano/tools/tango/internal/engine"
 	"rocket-nano/tools/tango/internal/logging"
 	"rocket-nano/tools/tango/internal/parser/filter"
 	"rocket-nano/tools/tango/internal/process"
 	"rocket-nano/tools/tango/internal/process/pipeline"
+	"rocket-nano/tools/tango/internal/role"
 	"rocket-nano/tools/tango/internal/source/tailer"
 )
 
@@ -85,9 +85,9 @@ type UploadFileConfig struct {
 func (r RoleConfig) ReportRuntime() Config {
 	return Config{
 		Dao:     r.Runtime.Dao(),
-		Engine:  &engine.Config{Mode: ModeReport},
 		Parser:  parserConfigFromFilter(r.Report.Filter),
 		Process: &process.Config{Pipeline: r.Report.Pipeline},
+		Role:    &role.Config{Mode: ModeReport},
 		Runtime: &r.Runtime,
 		Source:  r.Report.Source,
 	}

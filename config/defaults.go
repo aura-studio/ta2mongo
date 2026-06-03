@@ -6,12 +6,12 @@ import (
 	"rocket-nano/tools/tango/internal/dao"
 	"rocket-nano/tools/tango/internal/dao/mongo"
 	"rocket-nano/tools/tango/internal/dao/store"
-	"rocket-nano/tools/tango/internal/engine"
 	"rocket-nano/tools/tango/internal/logging"
 	"rocket-nano/tools/tango/internal/parser"
 	"rocket-nano/tools/tango/internal/parser/filter"
 	"rocket-nano/tools/tango/internal/process"
 	"rocket-nano/tools/tango/internal/process/pipeline"
+	"rocket-nano/tools/tango/internal/role"
 	"rocket-nano/tools/tango/internal/source/tailer"
 )
 
@@ -19,11 +19,11 @@ import (
 // any section pointer that is nil so callers can rely on every section being
 // present after this runs.
 func applyDefaults(c *Config) {
-	if c.Engine == nil {
-		c.Engine = &engine.Config{}
+	if c.Role == nil {
+		c.Role = &role.Config{}
 	}
-	if c.Engine.Mode == "" {
-		c.Engine.Mode = ModeReport
+	if c.Role.Mode == "" {
+		c.Role.Mode = ModeReport
 	}
 
 	if c.Runtime == nil {

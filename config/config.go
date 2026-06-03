@@ -8,7 +8,7 @@
 // TANGO_* env + flag loading helpers.
 //
 // Each runtime concern owns its own config struct in its module (dao.Config,
-// engine.Config, parser.Config, process.Config, tailer.Config); the top-level
+// parser.Config, process.Config, role.Config, tailer.Config); the top-level
 // Config merely references them by pointer.
 //
 // Sources, in increasing priority: built-in defaults < config file (YAML or
@@ -19,9 +19,9 @@ import (
 	"fmt"
 
 	"rocket-nano/tools/tango/internal/dao"
-	"rocket-nano/tools/tango/internal/engine"
 	"rocket-nano/tools/tango/internal/parser"
 	"rocket-nano/tools/tango/internal/process"
+	"rocket-nano/tools/tango/internal/role"
 	"rocket-nano/tools/tango/internal/source/tailer"
 )
 
@@ -39,14 +39,14 @@ type Config struct {
 	// Dao configures data access: MongoDB connection and store write behaviour.
 	Dao *dao.Config `mapstructure:"dao"`
 
-	// Engine configures runtime engine behavior.
-	Engine *engine.Config `mapstructure:"engine"`
-
 	// Parser configures log parsing and reporting filters.
 	Parser *parser.Config `mapstructure:"parser"`
 
 	// Process configures ingestion processing.
 	Process *process.Config `mapstructure:"process"`
+
+	// Role configures runtime role behavior.
+	Role *role.Config `mapstructure:"role"`
 
 	// Runtime configures process-wide settings loaded from runtime.* keys.
 	Runtime *RuntimeConfig `mapstructure:"runtime"`
@@ -58,12 +58,12 @@ type Config struct {
 // Validate checks that required fields are present. It assumes applyDefaults has
 // run (so the section pointers are non-nil) but still guards them defensively.
 func (c *Config) Validate() error {
-	if c.Engine == nil || c.Engine.Mode != ModeReport {
+	if c.Role == nil || c.Role.Mode != ModeReport {
 		got := ""
-		if c.Engine != nil {
-			got = c.Engine.Mode
+		if c.Role != nil {
+			got = c.Role.Mode
 		}
-		return fmt.Errorf("config: engine.mode must be %q; got %q", ModeReport, got)
+		return fmt.Errorf("config: role.mode must be %q; got %q", ModeReport, got)
 	}
 	if c.Dao == nil || c.Dao.Mongo == nil || c.Dao.Mongo.URI == "" {
 		return fmt.Errorf("config: mongo.uri is required (set runtime.mongo.uri in the config file, via TANGO_RUNTIME_MONGO_URI, or via --runtime.mongo.uri)")
