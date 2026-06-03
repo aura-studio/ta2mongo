@@ -10,17 +10,11 @@ import (
 	"os"
 	"time"
 
-	"github.com/go-viper/mapstructure/v2"
 	"github.com/sirupsen/logrus"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"rocket-nano/tools/tango/config"
-	"rocket-nano/tools/tango/internal/core/filter"
 	"rocket-nano/tools/tango/internal/core/runtime"
 	"rocket-nano/tools/tango/internal/core/taskqueue"
-	"rocket-nano/tools/tango/internal/service/backfill"
 )
 
 // Service is the task worker runtime: it registers a heartbeat, claims
@@ -30,10 +24,10 @@ type Service struct {
 	cfg      config.Config
 	logger   *logrus.Logger
 	mongo    *runtime.MongoResource
-	db       *mongo.Database
 	queue    *taskqueue.Queue
 	registry *taskqueue.Registry
 	hostname string
+	handlers map[taskqueue.TaskType]Handler
 }
 
 // New connects to MongoDB and constructs a worker Service. Caller must call
@@ -53,10 +47,10 @@ func New(ctx context.Context, cfg config.Config, logger *logrus.Logger) (*Servic
 		cfg:      cfg,
 		logger:   logger,
 		mongo:    res,
-		db:       db,
 		queue:    taskqueue.NewQueue(db.Collection(cfg.Worker.TasksCollection)),
 		registry: taskqueue.NewRegistry(db.Collection(cfg.Worker.InstancesCollection), cfg.Worker.InstanceTTL),
 		hostname: hostname,
+		handlers: buildHandlers(cfg, db, logger),
 	}, nil
 }
 
@@ -242,192 +236,13 @@ func (a *Service) startLeaseRenewer(ctx context.Context, cancel context.CancelFu
 	return done
 }
 
-// execute dispatches a task to the right handler and returns a result payload.
+// execute dispatches a task to its registered handler and returns the result
+// payload. Handlers are pure executors; the surrounding claim/lease/report
+// lifecycle stays in runTask.
 func (a *Service) execute(ctx context.Context, task *taskqueue.Task) (map[string]any, error) {
-	switch task.Type {
-	case taskqueue.TaskReportSync:
-		return a.executeReportSync(ctx, task)
-	case taskqueue.TaskBackfill:
-		return a.executeBackfill(ctx, task)
-	case taskqueue.TaskSQL:
-		return a.executeSQL(ctx, task)
-	default:
+	h, ok := a.handlers[task.Type]
+	if !ok {
 		return nil, fmt.Errorf("worker: unknown task type %q", task.Type)
 	}
-}
-
-// executeReportSync publishes a new reporting (upload) filter to the control
-// plane: it compiles the payload's include/exclude expressions to validate
-// them, then writes the remote-config override document. It does NOT apply the
-// filter in-process — report services watch the remote-config document and
-// hot-reload their own filter.Holder on their next sync tick. The task's
-// completion therefore means "written to remote config", not "applied by every
-// report service" (see the plan's report-sync semantics note).
-func (a *Service) executeReportSync(ctx context.Context, task *taskqueue.Task) (map[string]any, error) {
-	include, exclude := reportSyncFilters(task.Payload)
-	if _, err := filter.New(include, exclude); err != nil {
-		return nil, fmt.Errorf("worker: report-sync filter does not compile: %w", err)
-	}
-	// Persist to the remote-config override document so report services converge
-	// on the same filter via their sync loop, surviving restarts.
-	_, err := a.db.Collection(a.cfg.RemoteConfig.Collection).UpdateOne(ctx,
-		bson.M{"_id": a.cfg.RemoteConfig.DocumentID},
-		bson.M{"$set": bson.M{"filter": bson.M{"include": include, "exclude": exclude}}},
-		options.Update().SetUpsert(true),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("worker: persist report-sync filter: %w", err)
-	}
-	return map[string]any{
-		"persisted":      true,
-		"collection":     a.cfg.RemoteConfig.Collection,
-		"documentID":     a.cfg.RemoteConfig.DocumentID,
-		"filter_include": include,
-		"filter_exclude": exclude,
-	}, nil
-}
-
-// reportSyncFilters extracts include/exclude expression lists from a report-sync
-// payload, accepting either top-level filterInclude/filterExclude arrays or a
-// nested filter:{include,exclude} object (the remote-config document shape).
-func reportSyncFilters(payload map[string]any) (include, exclude []string) {
-	if f, ok := payload["filter"].(map[string]any); ok {
-		return toStringSlice(f["include"]), toStringSlice(f["exclude"])
-	}
-	return toStringSlice(payload["filterInclude"]), toStringSlice(payload["filterExclude"])
-}
-
-// executeBackfill builds a config from the agent's base settings overlaid with
-// the task payload (table / range / filter / runID …) and runs a full
-// checkpointed backfill.
-func (a *Service) executeBackfill(ctx context.Context, task *taskqueue.Task) (map[string]any, error) {
-	cfg := a.cfg // copy; Backfill is a value, so this copies it too
-	if err := decodePayload(task.Payload, &cfg.Backfill); err != nil {
-		return nil, fmt.Errorf("worker: decode backfill payload: %w", err)
-	}
-	// Overlay the backfill selection filter (table / events / include /
-	// exclude) from the payload — backfill never uses the reporting filter.
-	if err := overlayBackfillFilter(task.Payload, &cfg); err != nil {
-		return nil, fmt.Errorf("worker: decode backfill filter: %w", err)
-	}
-	if cfg.Backfill.RunID == "" {
-		cfg.Backfill.RunID = task.ID // checkpoint keyed by task id
-	}
-	cfg.Mode = config.ModeBackfill
-
-	r, err := backfill.New(ctx, cfg, a.logger)
-	if err != nil {
-		return nil, err
-	}
-	defer r.Shutdown()
-	if err := r.EnsureIndexes(ctx); err != nil {
-		return nil, err
-	}
-	if err := r.Run(ctx); err != nil {
-		return nil, err
-	}
-	s := r.Stats()
-	return map[string]any{
-		"user_writes":  s.UserWrites.Load(),
-		"event_writes": s.EventWrites.Load(),
-		"filtered":     s.Filtered.Load(),
-		"days_failed":  s.DaysFailed.Load(),
-	}, nil
-}
-
-// executeSQL runs an explicit SQL statement from the payload.
-func (a *Service) executeSQL(ctx context.Context, task *taskqueue.Task) (map[string]any, error) {
-	sql, _ := task.Payload["sql"].(string)
-	if sql == "" {
-		return nil, fmt.Errorf("worker: sql task missing 'sql' field")
-	}
-	cfg := a.cfg
-	if t, ok := task.Payload["table"].(string); ok && t != "" {
-		cfg.BackfillFilter.Table = t
-	}
-	if sp, ok := task.Payload["schemaPrefix"].(string); ok {
-		cfg.Backfill.SchemaPrefix = sp
-	}
-	if err := overlayBackfillFilter(task.Payload, &cfg); err != nil {
-		return nil, fmt.Errorf("worker: decode sql filter: %w", err)
-	}
-	cfg.Mode = config.ModeBackfill
-
-	r, err := backfill.NewExecutor(ctx, cfg, a.logger)
-	if err != nil {
-		return nil, err
-	}
-	defer r.Shutdown()
-	if err := r.EnsureIndexes(ctx); err != nil {
-		return nil, err
-	}
-	rows, err := r.ExecuteSQL(ctx, sql)
-	if err != nil {
-		return nil, err
-	}
-	return map[string]any{"rows": rows}, nil
-}
-
-// decodePayload maps the task payload onto a struct via mapstructure with the
-// duration/slice hooks, leaving unset fields at their incoming value.
-func decodePayload(payload map[string]any, target any) error {
-	if len(payload) == 0 {
-		return nil
-	}
-	dec, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
-		Result:           target,
-		TagName:          "mapstructure",
-		WeaklyTypedInput: true,
-		DecodeHook: mapstructure.ComposeDecodeHookFunc(
-			mapstructure.StringToTimeDurationHookFunc(),
-			mapstructure.StringToSliceHookFunc(","),
-		),
-	})
-	if err != nil {
-		return err
-	}
-	return dec.Decode(payload)
-}
-
-// overlayBackfillFilter populates the backfill selection filter from a task
-// payload. It accepts a nested backfillFilter:{table,events,include,exclude}
-// object and/or top-level conveniences (table, events, filterInclude,
-// filterExclude). Backfill never uses the reporting filter, so nothing here
-// touches cfg.Filter.
-func overlayBackfillFilter(payload map[string]any, cfg *config.Config) error {
-	if bf, ok := payload["backfillFilter"].(map[string]any); ok {
-		if err := decodePayload(bf, &cfg.BackfillFilter); err != nil {
-			return err
-		}
-	}
-	if v, ok := payload["table"].(string); ok && v != "" {
-		cfg.BackfillFilter.Table = v
-	}
-	if v, ok := payload["events"]; ok {
-		cfg.BackfillFilter.Events = toStringSlice(v)
-	}
-	if v, ok := payload["filterInclude"]; ok {
-		cfg.BackfillFilter.Include = toStringSlice(v)
-	}
-	if v, ok := payload["filterExclude"]; ok {
-		cfg.BackfillFilter.Exclude = toStringSlice(v)
-	}
-	return nil
-}
-
-func toStringSlice(v any) []string {
-	switch s := v.(type) {
-	case []string:
-		return s
-	case []any:
-		out := make([]string, 0, len(s))
-		for _, e := range s {
-			if str, ok := e.(string); ok {
-				out = append(out, str)
-			}
-		}
-		return out
-	default:
-		return nil
-	}
+	return h.Execute(ctx, task)
 }

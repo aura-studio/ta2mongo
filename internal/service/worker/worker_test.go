@@ -133,11 +133,49 @@ func TestDecodePayload(t *testing.T) {
 }
 
 func TestExecute_UnknownTaskType(t *testing.T) {
-	// execute hits the default branch before touching any Mongo-backed field,
-	// so a zero Service is enough to exercise the unknown-type path.
+	// execute looks up the handler registry; an empty Service has no handlers,
+	// so any type is "unknown" — no Mongo-backed field is touched.
 	s := &Service{}
 	_, err := s.execute(context.Background(), &taskqueue.Task{Type: taskqueue.TaskType("bogus")})
 	if err == nil {
 		t.Fatal("expected error for unknown task type")
+	}
+}
+
+func TestHandlerTypes(t *testing.T) {
+	if got := (&reportSyncHandler{}).Type(); got != taskqueue.TaskReportSync {
+		t.Errorf("reportSyncHandler.Type() = %q", got)
+	}
+	if got := (&backfillHandler{}).Type(); got != taskqueue.TaskBackfill {
+		t.Errorf("backfillHandler.Type() = %q", got)
+	}
+	if got := (&sqlHandler{}).Type(); got != taskqueue.TaskSQL {
+		t.Errorf("sqlHandler.Type() = %q", got)
+	}
+}
+
+type fakeHandler struct {
+	typ    taskqueue.TaskType
+	called bool
+}
+
+func (f *fakeHandler) Type() taskqueue.TaskType { return f.typ }
+func (f *fakeHandler) Execute(context.Context, *taskqueue.Task) (map[string]any, error) {
+	f.called = true
+	return map[string]any{"ok": true}, nil
+}
+
+func TestExecute_DispatchesToRegisteredHandler(t *testing.T) {
+	fh := &fakeHandler{typ: taskqueue.TaskReportSync}
+	s := &Service{handlers: map[taskqueue.TaskType]Handler{fh.typ: fh}}
+	res, err := s.execute(context.Background(), &taskqueue.Task{Type: taskqueue.TaskReportSync})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fh.called {
+		t.Error("handler was not invoked")
+	}
+	if res["ok"] != true {
+		t.Errorf("result = %v", res)
 	}
 }
