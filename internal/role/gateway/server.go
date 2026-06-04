@@ -56,6 +56,7 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 	httpSrv := &http.Server{Addr: addr, Handler: mux}
 	errCh := make(chan error, 1)
 	go func() {
+		defer logging.Recover("gateway http server")
 		logging.WithField("addr", addr).Info("tango gateway: HTTP server listening")
 		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err

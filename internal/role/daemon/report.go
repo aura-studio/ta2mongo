@@ -119,6 +119,7 @@ func (d *Service) Run(ctx context.Context) error {
 // reportStats periodically logs processing statistics every statsReportInterval.
 func (d *Service) reportStats(ctx context.Context, stats *process.Counters, startTime time.Time, done chan<- struct{}) {
 	defer close(done)
+	defer logging.Recover("daemon stats reporter")
 
 	ticker := time.NewTicker(statsReportInterval)
 	defer ticker.Stop()
