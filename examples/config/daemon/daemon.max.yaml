@@ -1,15 +1,15 @@
-# daemon.max.yaml — `tango daemon` 全量配置（含每个字段说明）。
+# daemon.max.yaml — 全量配置参考（统一 schema 的全部 6 个段，逐字段说明）。
 #
 # 启动：tango daemon --config daemon.max.yaml
 #
-# daemon = 常驻上报服务：追尾日志 → 解析 → 上报 filter → identity → 写入 MongoDB。
+# tango 是单一二进制、统一配置 schema：键路径 = internal/ 下的包路径。同一份 max
+# 配置对每个角色都完整可用，角色只取自己需要的段、忽略其余（例如 daemon 用
+# logging/dao/parser/source/process，忽略 role.gateway；gateway 用 logging/dao/
+# parser/process/role.gateway，忽略 source）。
 #
-# 配置键路径 = 消费它的包路径（internal/ 下）。例如 logging.level → internal/logging，
-# dao.mongo.uri → internal/dao/mongo，source.tailer.* → internal/source/tailer。
-#
-# 标注：[required] 无默认值必须提供；[optional] 省略即走默认值（括号内为默认值）。
-# 所有键也可用 TANGO_* 环境变量覆盖（嵌套键 . → _，如 dao.mongo.uri → TANGO_DAO_MONGO_URI）；
-# 命令行用完整层级名 flag 覆盖，如 --dao.mongo.uri、--logging.level。
+# 6 个段：logging · dao · parser · source · process · role。
+# 标注：[required] 必填；[required:daemon] 仅 daemon 必填；其余 [optional]（括号内默认值）。
+# 环境变量覆盖：键 . → _ 加 TANGO_ 前缀（dao.mongo.uri → TANGO_DAO_MONGO_URI）。
 
 logging:                          # internal/logging
   level: info                     # [optional]（默认 info）debug / info / warn / error
@@ -23,7 +23,7 @@ dao:                              # internal/dao
   store:                          # internal/dao/store
     maxElapsedTime: 10s           # [optional]（默认 10s）单次 bulk-write 退避重试总时长上限
 
-parser:                           # internal/parser
+parser:                           # internal/parser（上报 filter，作用于每行）
   filter:                         # internal/parser/filter
     include:                      # [optional]（默认 [] = 全放行）OR 语义命中其一即保留
       - '#type == "track"'
@@ -32,15 +32,16 @@ parser:                           # internal/parser
       - 'debug == true'
 
 source:                           # internal/source
-  tailer:                         # internal/source/tailer
-    logPattern:                   # [required] 至少一条 glob/正则，匹配要追尾的日志文件路径
+  tailer:                         # internal/source/tailer（daemon 的文件来源）
+    logPattern:                   # [required:daemon] 至少一条 glob/正则，匹配要追尾的日志文件
       - '/var/log/ta/.*\.log'
     tailMode: hybrid              # [optional]（默认 hybrid）hybrid / poll / event
     rescanInterval: 30s           # [optional]（默认 30s）重新扫描新文件的间隔
     pollInterval: 200ms           # [optional]（默认 200ms）poll/hybrid 轮询节奏
     maxLineBytes: 10485760        # [optional]（默认 10485760 = 10MB）单行最大字节
 
-process:                          # internal/process
+process:                          # internal/process（上传策略处理参数，daemon=pipeline）
+  batchSize: 1000                 # [optional]（默认 1000）single/batch 模式 bulk-write 批大小
   pipeline:                       # internal/process/pipeline
     batchSize: 1000               # [optional]（默认 1000）单次 bulk-write 目标条数
     batchSizeMin: 0               # [optional]（默认 0 = 自动 batchSize/4）自适应下限
@@ -51,5 +52,7 @@ process:                          # internal/process
     deadLetterCap: 128            # [optional]（默认 128）每 worker 死信批容量
 
 role:                             # internal/role
-  daemon: {}                      # internal/role/daemon —— daemon 角色专属配置（暂无字段，
-                                  # 因为 daemon 完全由顶层 logging/dao/parser/source/process 驱动）
+  daemon: {}                      # internal/role/daemon —— daemon 角色专属配置（暂无字段）
+  gateway:                        # internal/role/gateway —— gateway 角色专属配置
+    addr: ":8080"                 # [optional]（默认 :8080）HTTP 监听地址；--addr 覆盖
+    defaultMode: batch            # [optional]（默认 batch）请求未带 mode 时的策略：single/batch/pipeline

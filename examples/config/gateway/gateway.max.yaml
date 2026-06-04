@@ -1,16 +1,15 @@
-# gateway.max.yaml — `tango gateway` 全量配置（含每个字段说明）。
+# gateway.max.yaml — 全量配置参考（统一 schema 的全部 6 个段，逐字段说明）。
 #
 # 启动：tango gateway --config gateway.max.yaml --addr :8080
 #
-# gateway = 常驻 HTTP 服务，暴露单个 /upload REST 接口（请求体携带日志数组 +
-# 可选 mode：single/batch/pipeline），底层把请求体包成 httpbody 源后复用 api 引擎。
+# gateway = 常驻 HTTP 服务，暴露单个 /upload（请求体携带日志数组 + 可选 mode：
+# single/batch/pipeline），底层把请求体包成 httpbody 源后复用 api 引擎。它读取
+# logging/dao/parser/process 共享段 + role.gateway 专属段，忽略 source（不追尾文件）。
 #
-# 配置结构与 internal/ 包层级一致：共享模块（logging/dao/parser/process）在顶层，
-# 角色专属配置在 role.gateway。gateway 的上传处理直接复用顶层 process.* 与
-# parser.filter.*，不在角色下重复定义。
-#
-# 标注：[required] 无默认值必须提供；[optional] 省略即走默认值（括号内为默认值）。
-# 环境变量覆盖如 dao.mongo.uri → TANGO_DAO_MONGO_URI、role.gateway.addr → TANGO_ROLE_GATEWAY_ADDR。
+# tango 配置是统一 schema：键路径 = internal/ 下的包路径，同一份 max 配置对每个角色
+# 都完整可用。6 个段：logging · dao · parser · source · process · role。
+# 标注：[required] 必填；[required:daemon] 仅 daemon 必填；其余 [optional]（括号内默认值）。
+# 环境变量覆盖：键 . → _ 加 TANGO_ 前缀（dao.mongo.uri → TANGO_DAO_MONGO_URI）。
 
 logging:                          # internal/logging
   level: info                     # [optional]（默认 info）debug / info / warn / error
@@ -24,20 +23,36 @@ dao:                              # internal/dao
   store:                          # internal/dao/store
     maxElapsedTime: 10s           # [optional]（默认 10s）单次 bulk-write 退避重试总时长上限
 
-parser:                           # internal/parser（上传时作用于每行的上报 filter）
+parser:                           # internal/parser（上报 filter，作用于每行）
   filter:                         # internal/parser/filter
-    include: []                   # [optional]（默认 [] = 全放行）
-    exclude: []                   # [optional]（默认 []）
+    include:                      # [optional]（默认 [] = 全放行）OR 语义命中其一即保留
+      - '#type == "track"'
+      - '#type == "user_set"'
+    exclude:                      # [optional]（默认 []）命中其一即丢弃（在 include 之后）
+      - 'debug == true'
 
-process:                          # internal/process（上传策略的处理参数）
+source:                           # internal/source
+  tailer:                         # internal/source/tailer（daemon 的文件来源；gateway 忽略）
+    logPattern:                   # [required:daemon] 至少一条 glob/正则，匹配要追尾的日志文件
+      - '/var/log/ta/.*\.log'
+    tailMode: hybrid              # [optional]（默认 hybrid）hybrid / poll / event
+    rescanInterval: 30s           # [optional]（默认 30s）重新扫描新文件的间隔
+    pollInterval: 200ms           # [optional]（默认 200ms）poll/hybrid 轮询节奏
+    maxLineBytes: 10485760        # [optional]（默认 10485760 = 10MB）单行最大字节
+
+process:                          # internal/process（上传策略处理参数）
   batchSize: 1000                 # [optional]（默认 1000）single/batch 模式 bulk-write 批大小
-  pipeline:                       # internal/process/pipeline（pipeline 模式的异步 worker 池）
-    batchSize: 1000               # [optional]（默认 1000）目标批大小
-    batchWorkers: 2               # [optional]（默认 2）并发写 worker 数
-    flushInterval: 1s             # [optional]（默认 1s）部分批刷新间隔
+  pipeline:                       # internal/process/pipeline
+    batchSize: 1000               # [optional]（默认 1000）单次 bulk-write 目标条数
+    batchSizeMin: 0               # [optional]（默认 0 = 自动 batchSize/4）自适应下限
+    batchSizeMax: 0               # [optional]（默认 0 = 自动 batchSize*2）自适应上限
+    batchWorkers: 2               # [optional]（默认 2）并行写 worker 数
+    flushInterval: 1s             # [optional]（默认 1s）未满批次刷新间隔
+    channelBuffer: 0              # [optional]（默认 0 = 自动 batchSize*2）每 worker 通道缓冲
     deadLetterCap: 128            # [optional]（默认 128）每 worker 死信批容量
 
 role:                             # internal/role
-  gateway:                        # internal/role/gateway（仅 gateway 专属：监听地址 + 默认策略）
+  daemon: {}                      # internal/role/daemon —— daemon 角色专属配置（暂无字段）
+  gateway:                        # internal/role/gateway —— gateway 角色专属配置
     addr: ":8080"                 # [optional]（默认 :8080）HTTP 监听地址；--addr 覆盖
     defaultMode: batch            # [optional]（默认 batch）请求未带 mode 时的策略：single/batch/pipeline
