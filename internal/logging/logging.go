@@ -29,14 +29,28 @@ func newDefault() *logrus.Logger {
 // can build field maps without importing logrus directly.
 type Fields = logrus.Fields
 
-// Init sets the shared logger's level from a string (e.g. "debug", "info").
-// An unparseable level falls back to info. Call once during startup.
-func Init(level string) {
+// Init configures the shared logger from cfg: log level and output format. Call
+// once during startup; everything logged afterwards uses these settings. A nil
+// cfg or any empty/unrecognised field falls back to its default (info level,
+// text format), so Init is always safe to call.
+func Init(cfg *Config) {
+	var level, format string
+	if cfg != nil {
+		level, format = cfg.Level, cfg.Format
+	}
+
 	lvl, err := logrus.ParseLevel(strings.ToLower(level))
 	if err != nil {
 		lvl = logrus.InfoLevel
 	}
 	std.SetLevel(lvl)
+
+	switch strings.ToLower(format) {
+	case "json":
+		std.SetFormatter(&logrus.JSONFormatter{})
+	default:
+		std.SetFormatter(&logrus.TextFormatter{FullTimestamp: true})
+	}
 }
 
 // L returns the shared logger for the rare caller that needs the *logrus.Logger

@@ -6,6 +6,14 @@ import (
 	"testing"
 
 	"github.com/spf13/pflag"
+
+	"rocket-nano/tools/tango/internal/cfgtree"
+	"rocket-nano/tools/tango/internal/dao"
+	"rocket-nano/tools/tango/internal/logging"
+	"rocket-nano/tools/tango/internal/parser"
+	"rocket-nano/tools/tango/internal/process"
+	"rocket-nano/tools/tango/internal/role"
+	"rocket-nano/tools/tango/internal/source"
 )
 
 func writeFile(t *testing.T, name, content string) string {
@@ -17,8 +25,75 @@ func writeFile(t *testing.T, name, content string) string {
 	return p
 }
 
+// treeFromYAML writes y to a temp config file and loads it through the real Load
+// path (defaults + file + TANGO_* env + flags), returning the config tree.
+func treeFromYAML(t *testing.T, y string) cfgtree.Tree {
+	t.Helper()
+	tree, err := Load(writeFile(t, "tango.yaml", y), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tree
+}
+
+// Per-section decode helpers: each slices its module branch from the tree,
+// applying that module's own defaults + validation, and fails the test on error.
+func daoCfg(t *testing.T, tr cfgtree.Tree) *dao.Config {
+	t.Helper()
+	c, err := dao.FromTree(tr)
+	if err != nil {
+		t.Fatalf("dao.FromTree: %v", err)
+	}
+	return c
+}
+
+func srcCfg(t *testing.T, tr cfgtree.Tree) *source.Config {
+	t.Helper()
+	c, err := source.FromTree(tr)
+	if err != nil {
+		t.Fatalf("source.FromTree: %v", err)
+	}
+	return c
+}
+
+func procCfg(t *testing.T, tr cfgtree.Tree) *process.Config {
+	t.Helper()
+	c, err := process.FromTree(tr)
+	if err != nil {
+		t.Fatalf("process.FromTree: %v", err)
+	}
+	return c
+}
+
+func parserCfg(t *testing.T, tr cfgtree.Tree) *parser.Config {
+	t.Helper()
+	c, err := parser.FromTree(tr)
+	if err != nil {
+		t.Fatalf("parser.FromTree: %v", err)
+	}
+	return c
+}
+
+func roleCfg(t *testing.T, tr cfgtree.Tree) *role.Config {
+	t.Helper()
+	c, err := role.FromTree(tr)
+	if err != nil {
+		t.Fatalf("role.FromTree: %v", err)
+	}
+	return c
+}
+
+func logCfg(t *testing.T, tr cfgtree.Tree) *logging.Config {
+	t.Helper()
+	c, err := logging.FromTree(tr)
+	if err != nil {
+		t.Fatalf("logging.FromTree: %v", err)
+	}
+	return c
+}
+
 func TestLoad_Unified(t *testing.T) {
-	yaml := `
+	tree := treeFromYAML(t, `
 dao:
   mongo:
     uri: "mongodb://localhost/report"
@@ -28,28 +103,24 @@ parser:
 source:
   tailer:
     logPattern: ["/tmp/.*\\.log"]
-`
-	c, err := Load(writeFile(t, "tango.yaml", yaml), nil)
-	if err != nil {
-		t.Fatal(err)
+`)
+	if got := daoCfg(t, tree).Mongo.URI; got != "mongodb://localhost/report" {
+		t.Errorf("dao.mongo.uri = %q", got)
 	}
-	if c.Dao.Mongo.URI != "mongodb://localhost/report" {
-		t.Errorf("dao.mongo.uri = %q", c.Dao.Mongo.URI)
+	if inc := parserCfg(t, tree).Filter.Include; len(inc) != 1 || inc[0] != `#type == "track"` {
+		t.Errorf("parser.filter.include = %v", inc)
 	}
-	if len(c.Parser.Filter.Include) != 1 || c.Parser.Filter.Include[0] != `#type == "track"` {
-		t.Errorf("parser.filter.include = %v", c.Parser.Filter.Include)
-	}
-	if len(c.Source.Tailer.LogPattern) != 1 {
-		t.Errorf("source.tailer.logPattern = %v", c.Source.Tailer.LogPattern)
+	if len(srcCfg(t, tree).Tailer.LogPattern) != 1 {
+		t.Errorf("source.tailer.logPattern = %v", srcCfg(t, tree).Tailer.LogPattern)
 	}
 }
 
 func TestLoad_TypedEnvOverrides(t *testing.T) {
-	// Environment variables arrive as strings; Load must coerce them into int
-	// fields (weak typing) as well as string / duration ones.
+	// Environment variables arrive as strings; the tree decode must coerce them
+	// into int fields (weak typing) as well as string / duration ones.
 	os.Setenv("TANGO_PROCESS_PIPELINE_BATCHSIZE", "2500") // int
 	defer os.Unsetenv("TANGO_PROCESS_PIPELINE_BATCHSIZE")
-	yaml := `
+	tree := treeFromYAML(t, `
 dao:
   mongo:
     uri: "mongodb://localhost/report"
@@ -59,13 +130,9 @@ source:
 process:
   pipeline:
     batchSize: 1000
-`
-	c, err := Load(writeFile(t, "tango.yaml", yaml), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.Process.Pipeline.BatchSize != 2500 {
-		t.Errorf("process.pipeline.batchSize via int env = %d, want 2500", c.Process.Pipeline.BatchSize)
+`)
+	if got := procCfg(t, tree).Pipeline.BatchSize; got != 2500 {
+		t.Errorf("process.pipeline.batchSize via int env = %d, want 2500", got)
 	}
 }
 
@@ -75,13 +142,7 @@ process:
 func TestFlagOverridesEnvAndFile(t *testing.T) {
 	os.Setenv("TANGO_LOGGING_LEVEL", "warn")
 	defer os.Unsetenv("TANGO_LOGGING_LEVEL")
-	yaml := `
-dao:
-  mongo:
-    uri: "mongodb://localhost/x"
-logging:
-  level: error
-`
+
 	flags := pflag.NewFlagSet("test", pflag.ContinueOnError)
 	RegisterFlags(flags)
 	// every key is a flag
@@ -95,18 +156,24 @@ logging:
 		t.Fatal(err)
 	}
 
-	c, err := Load(writeFile(t, "tango.yaml", yaml), flags)
+	tree, err := Load(writeFile(t, "tango.yaml", `
+dao:
+  mongo:
+    uri: "mongodb://localhost/x"
+logging:
+  level: error
+`), flags)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// flag (debug) beats env (warn) beats file (error)
-	if c.Logging.Level != "debug" {
-		t.Errorf("logging.level = %q, want debug (flag should win)", c.Logging.Level)
+	if got := logCfg(t, tree).Level; got != "debug" {
+		t.Errorf("logging.level = %q, want debug (flag should win)", got)
 	}
 }
 
 func TestLoad_Gateway(t *testing.T) {
-	yaml := `
+	tree := treeFromYAML(t, `
 dao:
   mongo:
     uri: "mongodb://localhost/gw"
@@ -116,21 +183,18 @@ process:
 role:
   gateway:
     addr: ":9090"
-`
-	c, err := Load(writeFile(t, "tango.yaml", yaml), nil)
-	if err != nil {
-		t.Fatal(err)
+`)
+	if got := daoCfg(t, tree).Mongo.URI; got != "mongodb://localhost/gw" {
+		t.Errorf("dao.mongo.uri = %q", got)
 	}
-	if c.Dao.Mongo.URI != "mongodb://localhost/gw" {
-		t.Errorf("dao.mongo.uri = %q", c.Dao.Mongo.URI)
+	if got := roleCfg(t, tree).Gateway.Addr; got != ":9090" {
+		t.Errorf("role.gateway.addr = %q", got)
 	}
-	if c.Role.Gateway.Addr != ":9090" {
-		t.Errorf("role.gateway.addr = %q", c.Role.Gateway.Addr)
+	pc := procCfg(t, tree)
+	if pc.Mode != "pipeline" {
+		t.Errorf("process.mode = %q", pc.Mode)
 	}
-	if c.Process.Mode != "pipeline" {
-		t.Errorf("process.mode = %q", c.Process.Mode)
-	}
-	if c.Process.BatchSize != 250 {
-		t.Errorf("process.batchSize = %d", c.Process.BatchSize)
+	if pc.BatchSize != 250 {
+		t.Errorf("process.batchSize = %d", pc.BatchSize)
 	}
 }

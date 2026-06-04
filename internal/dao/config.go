@@ -3,9 +3,24 @@ package dao
 import (
 	"fmt"
 
+	"rocket-nano/tools/tango/internal/cfgtree"
 	"rocket-nano/tools/tango/internal/dao/mongo"
 	"rocket-nano/tools/tango/internal/dao/store"
 )
+
+// FromTree decodes the dao.* branch of t into a Config, applies defaults and
+// validates it (which requires dao.mongo.uri).
+func FromTree(t cfgtree.Tree) (*Config, error) {
+	var c Config
+	if err := t.Sub("dao").Into(&c); err != nil {
+		return nil, fmt.Errorf("dao: %w", err)
+	}
+	c.ApplyDefaults()
+	if err := c.Validate(); err != nil {
+		return nil, fmt.Errorf("dao: %w", err)
+	}
+	return &c, nil
+}
 
 // Config composes the data-access configuration owned by dao. Mongo contains
 // connection settings, while Store contains persistence/write behaviour.

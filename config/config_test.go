@@ -2,38 +2,19 @@ package config
 
 import (
 	"os"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/spf13/viper"
+	"rocket-nano/tools/tango/internal/dao"
+	"rocket-nano/tools/tango/internal/parser"
 )
-
-// loadFlat unmarshals a YAML document straight into Config and applies defaults.
-// It exercises applyDefaults / Validate / the pipeline helpers directly,
-// independent of the env/flag loading path (covered in loader_test.go). Viper's
-// default decoder already handles string durations and comma slices.
-func loadFlat(t *testing.T, y string) Config {
-	t.Helper()
-	v := viper.New()
-	v.SetConfigType("yaml")
-	if err := v.ReadConfig(strings.NewReader(y)); err != nil {
-		t.Fatal(err)
-	}
-	var c Config
-	if err := v.Unmarshal(&c); err != nil {
-		t.Fatal(err)
-	}
-	applyDefaults(&c)
-	return c
-}
 
 // ---------------------------------------------------------------------------
 // source.tailer.rescanInterval
 // ---------------------------------------------------------------------------
 
 func TestRescanInterval_Default(t *testing.T) {
-	cfg := loadFlat(t, `
+	tree := treeFromYAML(t, `
 dao:
   mongo:
     uri: "mongodb://localhost"
@@ -42,13 +23,13 @@ source:
     logPattern:
       - "/tmp/.*\\.log"
 `)
-	if got, want := cfg.Source.Tailer.RescanInterval, 30*time.Second; got != want {
+	if got, want := srcCfg(t, tree).Tailer.RescanInterval, 30*time.Second; got != want {
 		t.Errorf("RescanInterval = %v, want %v", got, want)
 	}
 }
 
 func TestRescanInterval_CustomValue(t *testing.T) {
-	cfg := loadFlat(t, `
+	tree := treeFromYAML(t, `
 dao:
   mongo:
     uri: "mongodb://localhost"
@@ -56,13 +37,13 @@ source:
   tailer:
     rescanInterval: "60s"
 `)
-	if got, want := cfg.Source.Tailer.RescanInterval, 60*time.Second; got != want {
+	if got, want := srcCfg(t, tree).Tailer.RescanInterval, 60*time.Second; got != want {
 		t.Errorf("RescanInterval = %v, want %v", got, want)
 	}
 }
 
 func TestRescanInterval_ZeroFallsBackToDefault(t *testing.T) {
-	cfg := loadFlat(t, `
+	tree := treeFromYAML(t, `
 dao:
   mongo:
     uri: "mongodb://localhost"
@@ -70,7 +51,7 @@ source:
   tailer:
     rescanInterval: "0s"
 `)
-	if got, want := cfg.Source.Tailer.RescanInterval, 30*time.Second; got != want {
+	if got, want := srcCfg(t, tree).Tailer.RescanInterval, 30*time.Second; got != want {
 		t.Errorf("RescanInterval = %v, want %v (should fallback for zero)", got, want)
 	}
 }
@@ -80,67 +61,73 @@ source:
 // ---------------------------------------------------------------------------
 
 func TestMaxElapsedTime_Default(t *testing.T) {
-	cfg := loadFlat(t, `
+	tree := treeFromYAML(t, `
 dao:
   mongo:
     uri: "mongodb://localhost"
 `)
-	if got, want := cfg.Dao.Store.MaxElapsedTime, 10*time.Second; got != want {
+	if got, want := daoCfg(t, tree).Store.MaxElapsedTime, 10*time.Second; got != want {
 		t.Errorf("MaxElapsedTime = %v, want %v", got, want)
 	}
 }
 
 func TestMaxElapsedTime_CustomValue(t *testing.T) {
-	cfg := loadFlat(t, `
+	tree := treeFromYAML(t, `
 dao:
   mongo:
     uri: "mongodb://localhost"
   store:
     maxElapsedTime: "30s"
 `)
-	if got, want := cfg.Dao.Store.MaxElapsedTime, 30*time.Second; got != want {
+	if got, want := daoCfg(t, tree).Store.MaxElapsedTime, 30*time.Second; got != want {
 		t.Errorf("MaxElapsedTime = %v, want %v", got, want)
 	}
 }
 
 func TestMaxElapsedTime_FallbackForZero(t *testing.T) {
-	cfg := loadFlat(t, `
+	tree := treeFromYAML(t, `
 dao:
   mongo:
     uri: "mongodb://localhost"
   store:
     maxElapsedTime: "0s"
 `)
-	if got, want := cfg.Dao.Store.MaxElapsedTime, 10*time.Second; got != want {
+	if got, want := daoCfg(t, tree).Store.MaxElapsedTime, 10*time.Second; got != want {
 		t.Errorf("MaxElapsedTime = %v, want %v (should fallback for zero)", got, want)
 	}
 }
 
 // ---------------------------------------------------------------------------
-// Validation edge cases
+// Per-module validation (each FromTree validates its own branch)
 // ---------------------------------------------------------------------------
 
 func TestValidation_MissingMongoURI(t *testing.T) {
-	cfg := loadFlat(t, `
+	tree := treeFromYAML(t, `
 source:
   tailer:
     logPattern:
       - "/tmp/.*\\.log"
 `)
-	if err := cfg.Validate(); err == nil {
+	if _, err := dao.FromTree(tree); err == nil {
 		t.Fatal("expected error for missing dao.mongo.uri")
 	}
 }
 
 func TestValidation_MissingLogPattern_OK(t *testing.T) {
-	cfg := loadFlat(t, `
+	tree := treeFromYAML(t, `
 dao:
   mongo:
     uri: "mongodb://localhost"
 `)
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if _, err := dao.FromTree(tree); err != nil {
+		t.Fatalf("unexpected dao error: %v", err)
 	}
+	// An empty tailer log pattern is a valid source config (daemon checks it
+	// separately at run time), so source.FromTree must not fail.
+	if _, err := parser.FromTree(tree); err != nil {
+		t.Fatalf("unexpected parser error: %v", err)
+	}
+	_ = srcCfg(t, tree)
 }
 
 // ---------------------------------------------------------------------------
@@ -148,7 +135,7 @@ dao:
 // ---------------------------------------------------------------------------
 
 func TestFilter_LoadsFromYAML(t *testing.T) {
-	cfg := loadFlat(t, `
+	tree := treeFromYAML(t, `
 dao:
   mongo:
     uri: "mongodb://localhost"
@@ -160,19 +147,17 @@ parser:
     exclude:
       - 'debug == true'
 `)
-	if len(cfg.Parser.Filter.Include) != 2 {
-		t.Errorf("Filter.Include len = %d, want 2", len(cfg.Parser.Filter.Include))
+	f := parserCfg(t, tree).Filter
+	if len(f.Include) != 2 {
+		t.Errorf("Filter.Include len = %d, want 2", len(f.Include))
 	}
-	if len(cfg.Parser.Filter.Exclude) != 1 {
-		t.Errorf("Filter.Exclude len = %d, want 1", len(cfg.Parser.Filter.Exclude))
-	}
-	if err := cfg.Validate(); err != nil {
-		t.Errorf("Validate: %v", err)
+	if len(f.Exclude) != 1 {
+		t.Errorf("Filter.Exclude len = %d, want 1", len(f.Exclude))
 	}
 }
 
 func TestFilter_ValidationFailsForBadExpression(t *testing.T) {
-	cfg := loadFlat(t, `
+	tree := treeFromYAML(t, `
 dao:
   mongo:
     uri: "mongodb://localhost"
@@ -181,20 +166,20 @@ parser:
     include:
       - '#type =='
 `)
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected Validate to fail for malformed expression")
+	if _, err := parser.FromTree(tree); err == nil {
+		t.Fatal("expected parser.FromTree to fail for malformed expression")
 	}
 }
 
 func TestFilter_EmptyByDefault(t *testing.T) {
-	cfg := loadFlat(t, `
+	tree := treeFromYAML(t, `
 dao:
   mongo:
     uri: "mongodb://localhost"
 `)
-	if len(cfg.Parser.Filter.Include) != 0 || len(cfg.Parser.Filter.Exclude) != 0 {
-		t.Errorf("expected empty filter lists, got inc=%v exc=%v",
-			cfg.Parser.Filter.Include, cfg.Parser.Filter.Exclude)
+	f := parserCfg(t, tree).Filter
+	if len(f.Include) != 0 || len(f.Exclude) != 0 {
+		t.Errorf("expected empty filter lists, got inc=%v exc=%v", f.Include, f.Exclude)
 	}
 }
 
@@ -203,7 +188,7 @@ dao:
 // ---------------------------------------------------------------------------
 
 func TestFlushInterval(t *testing.T) {
-	cfg := loadFlat(t, `
+	tree := treeFromYAML(t, `
 dao:
   mongo:
     uri: "mongodb://localhost"
@@ -211,47 +196,49 @@ process:
   pipeline:
     flushInterval: "500ms"
 `)
-	if got, want := cfg.Process.Pipeline.FlushInterval, 500*time.Millisecond; got != want {
+	if got, want := procCfg(t, tree).Pipeline.FlushInterval, 500*time.Millisecond; got != want {
 		t.Errorf("FlushInterval = %v, want %v", got, want)
 	}
 }
 
 func TestNestedKnobs_Defaults(t *testing.T) {
-	cfg := loadFlat(t, `
+	tree := treeFromYAML(t, `
 dao:
   mongo:
     uri: "mongodb://localhost"
 `)
-	if cfg.Dao.Mongo.ConnectTimeout != 10*time.Second {
-		t.Errorf("connectTimeout = %v", cfg.Dao.Mongo.ConnectTimeout)
+	if got := daoCfg(t, tree).Mongo.ConnectTimeout; got != 10*time.Second {
+		t.Errorf("connectTimeout = %v", got)
 	}
-	if cfg.Source.Tailer.PollInterval != 200*time.Millisecond {
-		t.Errorf("pollInterval = %v", cfg.Source.Tailer.PollInterval)
+	src := srcCfg(t, tree)
+	if src.Tailer.PollInterval != 200*time.Millisecond {
+		t.Errorf("pollInterval = %v", src.Tailer.PollInterval)
 	}
-	if cfg.Source.Tailer.MaxLineBytes != 10*1024*1024 {
-		t.Errorf("maxLineBytes = %d", cfg.Source.Tailer.MaxLineBytes)
+	if src.Tailer.MaxLineBytes != 10*1024*1024 {
+		t.Errorf("maxLineBytes = %d", src.Tailer.MaxLineBytes)
 	}
-	if cfg.Process.Pipeline.DeadLetterCap != 128 {
-		t.Errorf("deadLetterCap = %d", cfg.Process.Pipeline.DeadLetterCap)
+	if got := procCfg(t, tree).Pipeline.DeadLetterCap; got != 128 {
+		t.Errorf("deadLetterCap = %d", got)
 	}
-	if cfg.Logging.Level != "info" || cfg.Logging.Format != "text" {
-		t.Errorf("logging = %+v", cfg.Logging)
+	lc := logCfg(t, tree)
+	if lc.Level != "info" || lc.Format != "text" {
+		t.Errorf("logging = %+v", lc)
 	}
 }
 
 func TestChannelBuffer_DerivedVsExplicit(t *testing.T) {
-	cfg := loadFlat(t, "dao:\n  mongo:\n    uri: x\nprocess:\n  pipeline:\n    batchSize: 500\n")
-	if got := cfg.Process.Pipeline.ChannelSize(); got != 1000 {
+	tree := treeFromYAML(t, "dao:\n  mongo:\n    uri: x\nprocess:\n  pipeline:\n    batchSize: 500\n")
+	if got := procCfg(t, tree).Pipeline.ChannelSize(); got != 1000 {
 		t.Errorf("derived channel size = %d, want 1000", got)
 	}
-	cfg = loadFlat(t, "dao:\n  mongo:\n    uri: x\nprocess:\n  pipeline:\n    batchSize: 500\n    channelBuffer: 4096\n")
-	if got := cfg.Process.Pipeline.ChannelSize(); got != 4096 {
+	tree = treeFromYAML(t, "dao:\n  mongo:\n    uri: x\nprocess:\n  pipeline:\n    batchSize: 500\n    channelBuffer: 4096\n")
+	if got := procCfg(t, tree).Pipeline.ChannelSize(); got != 4096 {
 		t.Errorf("explicit channel size = %d, want 4096", got)
 	}
 }
 
 func TestBatchSizeMinMax_AutoDerivation(t *testing.T) {
-	cfg := loadFlat(t, `
+	tree := treeFromYAML(t, `
 dao:
   mongo:
     uri: "mongodb://localhost"
@@ -259,10 +246,11 @@ process:
   pipeline:
     batchSize: 1000
 `)
-	if got := cfg.Process.Pipeline.MinBatchSize(); got != 250 {
+	p := procCfg(t, tree).Pipeline
+	if got := p.MinBatchSize(); got != 250 {
 		t.Errorf("MinBatchSize() = %d, want 250", got)
 	}
-	if got := cfg.Process.Pipeline.MaxBatchSize(); got != 2000 {
+	if got := p.MaxBatchSize(); got != 2000 {
 		t.Errorf("MaxBatchSize() = %d, want 2000", got)
 	}
 }
@@ -272,24 +260,24 @@ process:
 // ---------------------------------------------------------------------------
 
 func TestGatewayDefaults(t *testing.T) {
-	cfg := loadFlat(t, `
+	tree := treeFromYAML(t, `
 dao:
   mongo:
     uri: "mongodb://localhost"
 `)
-	if cfg.Role.Gateway.Addr != ":8080" {
-		t.Errorf("role.gateway.addr default = %q, want :8080", cfg.Role.Gateway.Addr)
+	if got := roleCfg(t, tree).Gateway.Addr; got != ":8080" {
+		t.Errorf("role.gateway.addr default = %q, want :8080", got)
 	}
-	if cfg.Process.Mode != "batch" {
-		t.Errorf("process.mode default = %q, want batch", cfg.Process.Mode)
+	if got := procCfg(t, tree).Mode; got != "batch" {
+		t.Errorf("process.mode default = %q, want batch", got)
 	}
 }
 
 func TestGatewayLoadsFromYAML(t *testing.T) {
-	// role.gateway holds only gateway-specific knobs (addr); the
-	// upload processing/filter come from the shared top-level process.* /
+	// role.gateway holds only gateway-specific knobs (addr); the upload
+	// processing/filter come from the shared top-level process.* /
 	// parser.filter.* modules.
-	cfg := loadFlat(t, `
+	tree := treeFromYAML(t, `
 dao:
   mongo:
     uri: "mongodb://localhost"
@@ -302,17 +290,18 @@ role:
   gateway:
     addr: ":9090"
 `)
-	if cfg.Role.Gateway.Addr != ":9090" {
-		t.Errorf("addr = %q", cfg.Role.Gateway.Addr)
+	if got := roleCfg(t, tree).Gateway.Addr; got != ":9090" {
+		t.Errorf("addr = %q", got)
 	}
-	if cfg.Process.Mode != "pipeline" {
-		t.Errorf("process.mode = %q", cfg.Process.Mode)
+	pc := procCfg(t, tree)
+	if pc.Mode != "pipeline" {
+		t.Errorf("process.mode = %q", pc.Mode)
 	}
-	if cfg.Process.BatchSize != 250 {
-		t.Errorf("process.batchSize = %d", cfg.Process.BatchSize)
+	if pc.BatchSize != 250 {
+		t.Errorf("process.batchSize = %d", pc.BatchSize)
 	}
-	if cfg.Process.Pipeline.BatchWorkers != 4 {
-		t.Errorf("process.pipeline.batchWorkers = %d", cfg.Process.Pipeline.BatchWorkers)
+	if pc.Pipeline.BatchWorkers != 4 {
+		t.Errorf("process.pipeline.batchWorkers = %d", pc.Pipeline.BatchWorkers)
 	}
 }
 
@@ -328,7 +317,7 @@ func TestEnvOverridesYAML(t *testing.T) {
 		os.Unsetenv("TANGO_SOURCE_TAILER_RESCANINTERVAL")
 	}()
 
-	yaml := `
+	tree := treeFromYAML(t, `
 logging:
   level: "error"
 dao:
@@ -338,15 +327,11 @@ source:
   tailer:
     logPattern: ["/tmp/x.log"]
     rescanInterval: "30s"
-`
-	c, err := Load(writeFile(t, "tango.yaml", yaml), nil)
-	if err != nil {
-		t.Fatal(err)
+`)
+	if got := logCfg(t, tree).Level; got != "debug" {
+		t.Errorf("logging.level = %q, want debug (ENV should override YAML)", got)
 	}
-	if c.Logging.Level != "debug" {
-		t.Errorf("logging.level = %q, want debug (ENV should override YAML)", c.Logging.Level)
-	}
-	if c.Source.Tailer.RescanInterval != 60*time.Second {
-		t.Errorf("rescanInterval = %v, want 60s (ENV should override YAML)", c.Source.Tailer.RescanInterval)
+	if got := srcCfg(t, tree).Tailer.RescanInterval; got != 60*time.Second {
+		t.Errorf("rescanInterval = %v, want 60s (ENV should override YAML)", got)
 	}
 }

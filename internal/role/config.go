@@ -3,9 +3,25 @@ package role
 import (
 	"fmt"
 
+	"rocket-nano/tools/tango/internal/cfgtree"
 	"rocket-nano/tools/tango/internal/role/daemon"
 	"rocket-nano/tools/tango/internal/role/gateway"
 )
+
+// FromTree decodes the role.* branch of t into a Config, applies defaults and
+// validates it (which checks role.mode). The runtime role is then selected from
+// Config.Mode via Get.
+func FromTree(t cfgtree.Tree) (*Config, error) {
+	var c Config
+	if err := t.Sub("role").Into(&c); err != nil {
+		return nil, fmt.Errorf("role: %w", err)
+	}
+	c.ApplyDefaults()
+	if err := c.Validate(); err != nil {
+		return nil, fmt.Errorf("role: %w", err)
+	}
+	return &c, nil
+}
 
 // DefaultMode is the runtime role used when role.mode is unset.
 const DefaultMode = Daemon
