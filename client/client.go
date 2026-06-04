@@ -24,11 +24,6 @@ package client
 import (
 	"context"
 
-	"rocket-nano/tools/tango/internal/dao"
-	"rocket-nano/tools/tango/internal/dao/mongo"
-	"rocket-nano/tools/tango/internal/dao/store"
-	"rocket-nano/tools/tango/internal/parser/filter"
-	"rocket-nano/tools/tango/internal/process"
 	"rocket-nano/tools/tango/internal/role/api"
 )
 
@@ -60,35 +55,20 @@ type client struct {
 }
 
 // New connects to MongoDB and builds a Client from the given options.
-// WithMongoURI is required; without it New returns an error. The caller must
+// WithDaoMongoURI is required; without it New returns an error. The caller must
 // Close the returned Client.
+//
+// The With* options populate the real tango module config structs held by
+// options, so New hands their addresses straight to api.New rather than copying
+// fields onto parallel structs. An all-empty filter config builds the no-op
+// "keep everything" filter, matching the engine's default.
 func New(opts ...Option) (Client, error) {
 	o := defaultOptions()
 	for _, opt := range opts {
 		opt(o)
 	}
 
-	daoCfg := &dao.Config{
-		Mongo: &mongo.Config{
-			URI:                    o.mongoURI,
-			ConnectTimeout:         o.connectTimeout,
-			ServerSelectionTimeout: o.serverSelectionTimeout,
-		},
-		Store: &store.Config{MaxElapsedTime: o.maxElapsedTime},
-	}
-
-	procCfg := &process.Config{
-		Mode:      o.mode,
-		BatchSize: o.batchSize,
-		Pipeline:  o.pipeline,
-	}
-
-	var filterCfg *filter.Config
-	if len(o.include) > 0 || len(o.exclude) > 0 {
-		filterCfg = &filter.Config{Include: o.include, Exclude: o.exclude}
-	}
-
-	engine, err := api.New(o.ctx, daoCfg, procCfg, filterCfg)
+	engine, err := api.New(o.ctx, &o.dao, &o.proc, &o.filter)
 	if err != nil {
 		return nil, err
 	}
