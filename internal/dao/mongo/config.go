@@ -10,7 +10,7 @@ import (
 // Config configures the MongoDB connection. It is the mongo module's own
 // configuration, owned here rather than in the top-level config package, so
 // callers depend on this module for its settings. The mapstructure tags let the
-// config loader unmarshal the runtime.mongo.* keys straight into it. Retry
+// config loader unmarshal the dao.mongo.* keys straight into it. Retry
 // budget (MaxElapsedTime) belongs to the store, not the connection — see
 // store.Config.
 type Config struct {

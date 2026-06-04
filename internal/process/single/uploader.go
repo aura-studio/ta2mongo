@@ -32,12 +32,12 @@ type Uploader struct {
 // NewUploader builds a single-mode Uploader. prs carries the parser and its
 // filter (a parser built with a nil filter keeps every record); a nil stats
 // collector is treated as a no-op.
-func NewUploader(st *dao.Store, prs *parser.Parser, stats core.StatsCollector, opts core.WriteOptions) *Uploader {
+func NewUploader(st *dao.Store, prs *parser.Parser, stats core.StatsCollector) *Uploader {
 	if stats == nil {
 		stats = core.NoopStats{}
 	}
 	return &Uploader{
-		proc:  core.NewProcessor(prs, st, stats, opts),
+		proc:  core.NewProcessor(prs, st, stats),
 		store: st,
 		stats: stats,
 	}

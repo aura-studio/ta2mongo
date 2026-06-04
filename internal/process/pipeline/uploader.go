@@ -19,7 +19,6 @@ type Uploader struct {
 	store *dao.Store
 	prs   *parser.Parser
 	stats core.StatsCollector
-	opts  core.WriteOptions
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -28,7 +27,7 @@ type Uploader struct {
 // NewUploader builds a pipeline-mode Uploader. A nil cfg is defaulted; prs
 // carries the parser and its filter (a parser built with a nil filter keeps
 // every record); a nil stats collector is treated as a no-op.
-func NewUploader(cfg *Config, st *dao.Store, prs *parser.Parser, stats core.StatsCollector, opts core.WriteOptions) *Uploader {
+func NewUploader(cfg *Config, st *dao.Store, prs *parser.Parser, stats core.StatsCollector) *Uploader {
 	if cfg == nil {
 		cfg = &Config{}
 	}
@@ -36,7 +35,7 @@ func NewUploader(cfg *Config, st *dao.Store, prs *parser.Parser, stats core.Stat
 	if stats == nil {
 		stats = core.NoopStats{}
 	}
-	return &Uploader{cfg: cfg, store: st, prs: prs, stats: stats, opts: opts}
+	return &Uploader{cfg: cfg, store: st, prs: prs, stats: stats}
 }
 
 // Run streams lines from src through the worker pool and blocks until src is
@@ -50,7 +49,7 @@ func (u *Uploader) Run(ctx context.Context, src source.Source) error {
 	defer cancel()
 
 	lineCh := src.Run(ctx)
-	RunWorkers(ctx, u.cfg, u.store, u.prs, lineCh, u.stats, u.opts)
+	RunWorkers(ctx, u.cfg, u.store, u.prs, lineCh, u.stats)
 	return nil
 }
 

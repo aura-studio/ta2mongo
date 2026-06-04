@@ -42,7 +42,7 @@ type Uploader struct {
 // to DefaultBatchSize; prs carries the parser and its filter (a parser built
 // with a nil filter keeps every record); a nil stats collector is treated as a
 // no-op.
-func NewUploader(st *dao.Store, prs *parser.Parser, batchSize int, stats core.StatsCollector, opts core.WriteOptions) *Uploader {
+func NewUploader(st *dao.Store, prs *parser.Parser, batchSize int, stats core.StatsCollector) *Uploader {
 	if batchSize <= 0 {
 		batchSize = DefaultBatchSize
 	}
@@ -50,7 +50,7 @@ func NewUploader(st *dao.Store, prs *parser.Parser, batchSize int, stats core.St
 		stats = core.NoopStats{}
 	}
 	return &Uploader{
-		proc:      core.NewProcessor(prs, st, stats, opts),
+		proc:      core.NewProcessor(prs, st, stats),
 		store:     st,
 		stats:     stats,
 		batchSize: batchSize,

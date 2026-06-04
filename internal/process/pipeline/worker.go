@@ -18,7 +18,7 @@ import (
 // active filter can be hot-swapped while workers run.
 func RunWorkers(ctx context.Context, cfg *Config, st *dao.Store,
 	prs *parser.Parser,
-	lineCh <-chan string, stats core.StatsCollector, opts core.WriteOptions,
+	lineCh <-chan string, stats core.StatsCollector,
 ) {
 	if stats == nil {
 		stats = core.NoopStats{}
@@ -40,7 +40,7 @@ func RunWorkers(ctx context.Context, cfg *Config, st *dao.Store,
 		go func(ch <-chan string) {
 			defer wg.Done()
 			defer logging.Recover("pipeline worker")
-			worker(ctx, cfg, st, prs, ch, stats, opts)
+			worker(ctx, cfg, st, prs, ch, stats)
 		}(workerChs[i])
 	}
 
@@ -59,9 +59,9 @@ func RunWorkers(ctx context.Context, cfg *Config, st *dao.Store,
 // dead-letter logging.
 func worker(ctx context.Context, cfg *Config, st *dao.Store,
 	prs *parser.Parser,
-	lineCh <-chan string, stats core.StatsCollector, opts core.WriteOptions,
+	lineCh <-chan string, stats core.StatsCollector,
 ) {
-	proc := core.NewProcessor(prs, st, stats, opts)
+	proc := core.NewProcessor(prs, st, stats)
 
 	userBatch := NewBatch(cfg.MaxBatchSize())
 	eventBatch := NewBatch(cfg.MaxBatchSize())

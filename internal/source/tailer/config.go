@@ -75,6 +75,6 @@ func (c *Config) ApplyDefaults() {
 		c.PollInterval = 200 * time.Millisecond
 	}
 	if c.MaxLineBytes <= 0 {
-		c.MaxLineBytes = 10 * 1024 * 1024
+		c.MaxLineBytes = defaultMaxLineSize
 	}
 }

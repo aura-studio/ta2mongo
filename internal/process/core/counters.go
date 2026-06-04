@@ -2,9 +2,9 @@ package core
 
 import "sync/atomic"
 
-// Counters is the canonical concurrent StatsCollector implementation shared by
-// the report service and backfill. It records the ten per-line ingestion
-// metrics; callers that need extra counters embed it (see backfill.Stats).
+// Counters is the canonical concurrent StatsCollector implementation used by
+// the report service. It records the ten per-line ingestion metrics; callers
+// that need extra counters can embed it.
 type Counters struct {
 	TotalLines     atomic.Int64
 	ParsedOK       atomic.Int64

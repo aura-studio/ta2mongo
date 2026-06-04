@@ -20,16 +20,23 @@ type MongoResource struct {
 	DB     *mongo.Database
 }
 
-// ConnectMongo opens a MongoDB connection from the given config, resolves the
-// database from the URI path, and returns an owned MongoResource. The caller
-// must Close it.
+// ConnectMongo opens a MongoDB connection from the given config, verifies it
+// with a Ping, resolves the database from the URI path, and returns an owned
+// MongoResource. The caller must Close it.
 func ConnectMongo(ctx context.Context, cfg *Config) (*MongoResource, error) {
 	client, err := mongo.Connect(ctx, options.Client().
 		ApplyURI(cfg.URI).
 		SetConnectTimeout(cfg.ConnectTimeout).
 		SetServerSelectionTimeout(cfg.ServerSelectionTimeout))
 	if err != nil {
-		return nil, fmt.Errorf("runtime: connect mongo: %w", err)
+		return nil, fmt.Errorf("mongo: connect: %w", err)
+	}
+	// mongo.Connect is lazy, so a Ping forces server selection: an unreachable or
+	// misconfigured server fails here (bounded by ServerSelectionTimeout) instead
+	// of surfacing later on the first real operation.
+	if err := client.Ping(ctx, nil); err != nil {
+		_ = client.Disconnect(context.Background())
+		return nil, fmt.Errorf("mongo: ping: %w", err)
 	}
 	db, err := DatabaseFromClient(client, cfg.URI)
 	if err != nil {
@@ -44,7 +51,7 @@ func ConnectMongo(ctx context.Context, cfg *Config) (*MongoResource, error) {
 func DatabaseFromClient(client *mongo.Client, uri string) (*mongo.Database, error) {
 	name, err := MongoDBFromURI(uri)
 	if err != nil {
-		return nil, fmt.Errorf("runtime: %w", err)
+		return nil, fmt.Errorf("mongo: %w", err)
 	}
 	return client.Database(name), nil
 }

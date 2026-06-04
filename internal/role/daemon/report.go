@@ -72,9 +72,13 @@ func (d *Service) EnsureIndexes(ctx context.Context) error {
 // Flow: tailer -> lineCh -> dispatcher (routes by user affinity) -> workerCh[i] -> worker_i -> MongoDB
 //
 // The dispatcher extracts #account_id (preferred) or #distinct_id from each line
-// and consistently hashes it to a fixed worker. This guarantees that all operations
-// for the same user are processed sequentially by a single worker, preventing
-// out-of-order overwrites across workers.
+// and consistently hashes it to a fixed worker, so on the common path all
+// operations for one user are handled in order by a single worker. This affinity
+// is best-effort: under backpressure (the target worker's channel is full) the
+// dispatcher spills the line to another worker to avoid head-of-line blocking,
+// so strict cross-worker ordering is not guaranteed. Correctness does not rely
+// on it — the write models use _ts conditional updates, so an older record can
+// never overwrite a newer one regardless of which worker applies it.
 func (d *Service) Run(ctx context.Context) error {
 	tcfg := d.srcCfg.Tailer
 	if len(tcfg.LogPattern) == 0 {
@@ -104,7 +108,7 @@ func (d *Service) Run(ctx context.Context) error {
 	// the workers flush and exit.
 	procCfg := *d.procCfg
 	procCfg.Mode = string(process.ModePipeline)
-	up, err := process.New(&procCfg, d.dao, d.parser, stats, process.WriteOptions{})
+	up, err := process.New(&procCfg, d.dao, d.parser, stats)
 	if err != nil {
 		return err
 	}
@@ -190,6 +194,7 @@ func (d *Service) logFinalStats(stats *process.Counters, startTime time.Time) {
 		"total_write_errors": cur.WriteErrors,
 		"total_filtered":     cur.Filtered,
 		"total_filter_err":   cur.FilterErrors,
+		"total_retries":      d.dao.Store.Stats().TotalRetries(),
 		"uptime":             duration,
 	}).Info("report: final stats")
 

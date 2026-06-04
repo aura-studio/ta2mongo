@@ -95,7 +95,7 @@ func (c *Engine) Run(ctx context.Context, src source.Source) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	up, err := process.New(c.procCfg, c.dao, c.parser, stats, process.WriteOptions{})
+	up, err := process.New(c.procCfg, c.dao, c.parser, stats)
 	if err != nil {
 		return Result{}, err
 	}

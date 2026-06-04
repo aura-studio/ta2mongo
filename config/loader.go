@@ -44,9 +44,9 @@ func readConfigFile(v *viper.Viper, path string) error {
 
 // bindFlagsTo binds the flags that were explicitly set on the CLI to the viper
 // key of the SAME name, using viper's native hierarchical model: a flag named
-// "generic.mongo.uri" sets the "generic.mongo.uri" key directly — no alias
-// table. The special --config flag is a file path, not a config key, so it is
-// skipped. Unset flags fall back to file/env/default.
+// "dao.mongo.uri" sets the "dao.mongo.uri" key directly — no alias table. The
+// special --config flag is a file path, not a config key, so it is skipped.
+// Unset flags fall back to file/env/default.
 func bindFlagsTo(v *viper.Viper, flags *pflag.FlagSet) error {
 	if flags == nil {
 		return nil

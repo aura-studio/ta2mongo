@@ -11,15 +11,6 @@ import (
 	"rocket-nano/tools/tango/internal/parser"
 )
 
-// WriteOptions tunes write-side behaviour for callers that need to deviate from
-// the default per-#type semantics (notably backfill).
-type WriteOptions struct {
-	// ForceSkipExisting routes every event write through $setOnInsert keyed by
-	// #uuid, regardless of the record's #type. Existing documents are never
-	// modified — duplicates become no-ops. Recommended for backfill.
-	ForceSkipExisting bool
-}
-
 // Kind classifies the outcome of processing one line.
 type Kind int
 
@@ -59,17 +50,16 @@ type Processor struct {
 	prs   *parser.Parser
 	store *dao.Store
 	stats StatsCollector
-	opts  WriteOptions
 }
 
 // NewProcessor builds a Processor. prs carries both the parser and its filter
 // (a parser built with a nil filter keeps every record); a nil stats collector
 // is treated as a no-op.
-func NewProcessor(prs *parser.Parser, st *dao.Store, stats StatsCollector, opts WriteOptions) *Processor {
+func NewProcessor(prs *parser.Parser, st *dao.Store, stats StatsCollector) *Processor {
 	if stats == nil {
 		stats = NoopStats{}
 	}
-	return &Processor{prs: prs, store: st, stats: stats, opts: opts}
+	return &Processor{prs: prs, store: st, stats: stats}
 }
 
 // Process runs one line through the ingestion rules and returns its
@@ -127,9 +117,6 @@ func (p *Processor) Process(ctx context.Context, line string) (res Result) {
 	default: // parser.CategoryEvent
 		rec.Doc["#user_id"] = userID
 		p.stats.OnEventWrite()
-		if p.opts.ForceSkipExisting {
-			return Result{Kind: KindEvent, Model: dao.EventWriteModelSkipExisting(rec.UUID, rec.Doc)}
-		}
 		return Result{Kind: KindEvent, Model: dao.EventWriteModel(rec.Type, rec.UUID, rec.Doc)}
 	}
 }

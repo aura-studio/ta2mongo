@@ -12,7 +12,6 @@ import (
 	daomongo "rocket-nano/tools/tango/internal/dao/mongo"
 	"rocket-nano/tools/tango/internal/dao/store"
 	"rocket-nano/tools/tango/internal/parser"
-	"rocket-nano/tools/tango/internal/process/core"
 	"rocket-nano/tools/tango/internal/process/single"
 	"rocket-nano/tools/tango/internal/source"
 
@@ -56,7 +55,7 @@ type tester struct {
 // single ingests lines via the single (per-line immediate write) strategy.
 func (tt *tester) single(lines ...string) {
 	tt.t.Helper()
-	up := single.NewUploader(tt.dao.Store, tt.p, nil, core.WriteOptions{})
+	up := single.NewUploader(tt.dao.Store, tt.p, nil)
 	if err := up.Run(context.Background(), source.NewLines(lines)); err != nil {
 		tt.t.Fatalf("single upload: %v", err)
 	}
@@ -65,7 +64,7 @@ func (tt *tester) single(lines ...string) {
 // batch ingests lines via the batch (accumulate + bulk flush) strategy.
 func (tt *tester) batch(lines []string) {
 	tt.t.Helper()
-	up := NewUploader(tt.dao.Store, tt.p, 1000, nil, core.WriteOptions{})
+	up := NewUploader(tt.dao.Store, tt.p, 1000, nil)
 	if err := up.Run(context.Background(), source.NewLines(lines)); err != nil {
 		tt.t.Fatalf("batch upload: %v", err)
 	}
