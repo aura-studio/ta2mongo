@@ -15,13 +15,13 @@ import (
 	"context"
 	"fmt"
 
-	"rocket-nano/tools/tango/internal/dao"
-	"rocket-nano/tools/tango/internal/parser"
-	"rocket-nano/tools/tango/internal/process/batch"
-	"rocket-nano/tools/tango/internal/process/core"
-	"rocket-nano/tools/tango/internal/process/pipeline"
-	"rocket-nano/tools/tango/internal/process/single"
-	"rocket-nano/tools/tango/internal/source"
+	"github.com/aura-studio/tango/internal/dao"
+	"github.com/aura-studio/tango/internal/parser"
+	"github.com/aura-studio/tango/internal/process/batch"
+	"github.com/aura-studio/tango/internal/process/core"
+	"github.com/aura-studio/tango/internal/process/pipeline"
+	"github.com/aura-studio/tango/internal/process/single"
+	"github.com/aura-studio/tango/internal/source"
 )
 
 // Counters accumulates per-line processing statistics shared by all three

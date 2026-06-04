@@ -3,7 +3,7 @@ package logging
 import (
 	"fmt"
 
-	"rocket-nano/tools/tango/internal/cfgtree"
+	"github.com/aura-studio/tango/internal/cfgtree"
 )
 
 // FromTree decodes the logging.* branch of t into a Config, applies defaults and

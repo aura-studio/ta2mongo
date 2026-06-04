@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	daomongo "rocket-nano/tools/tango/internal/dao/mongo"
+	daomongo "github.com/aura-studio/tango/internal/dao/mongo"
 )
 
 func TestDecodeBody_RequiresPOST(t *testing.T) {

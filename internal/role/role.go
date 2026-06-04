@@ -11,10 +11,10 @@ import (
 	"context"
 	"fmt"
 
-	"rocket-nano/tools/tango/internal/cfgtree"
-	"rocket-nano/tools/tango/internal/role/cli"
-	"rocket-nano/tools/tango/internal/role/daemon"
-	"rocket-nano/tools/tango/internal/role/gateway"
+	"github.com/aura-studio/tango/internal/cfgtree"
+	"github.com/aura-studio/tango/internal/role/cli"
+	"github.com/aura-studio/tango/internal/role/daemon"
+	"github.com/aura-studio/tango/internal/role/gateway"
 )
 
 // Canonical runtime-role identifiers (also the config role.mode values).

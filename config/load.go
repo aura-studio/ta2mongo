@@ -3,7 +3,7 @@ package config
 import (
 	"github.com/spf13/pflag"
 
-	"rocket-nano/tools/tango/internal/cfgtree"
+	"github.com/aura-studio/tango/internal/cfgtree"
 )
 
 // Load reads the unified config from path (+ TANGO_* env + CLI flags) and returns

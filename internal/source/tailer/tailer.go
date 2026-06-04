@@ -17,7 +17,7 @@ import (
 
 	"github.com/hpcloud/tail"
 
-	"rocket-nano/tools/tango/internal/logging"
+	"github.com/aura-studio/tango/internal/logging"
 )
 
 // ---------------------------------------------------------------------------

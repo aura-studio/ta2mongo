@@ -3,9 +3,9 @@ package process
 import (
 	"fmt"
 
-	"rocket-nano/tools/tango/internal/cfgtree"
-	"rocket-nano/tools/tango/internal/process/batch"
-	"rocket-nano/tools/tango/internal/process/pipeline"
+	"github.com/aura-studio/tango/internal/cfgtree"
+	"github.com/aura-studio/tango/internal/process/batch"
+	"github.com/aura-studio/tango/internal/process/pipeline"
 )
 
 // FromTree decodes the process.* branch of t into a Config, applies defaults and

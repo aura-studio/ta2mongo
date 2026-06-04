@@ -8,11 +8,11 @@ import (
 	"net/http"
 	"time"
 
-	"rocket-nano/tools/tango/internal/dao"
-	"rocket-nano/tools/tango/internal/logging"
-	"rocket-nano/tools/tango/internal/parser"
-	"rocket-nano/tools/tango/internal/process"
-	"rocket-nano/tools/tango/internal/role/api"
+	"github.com/aura-studio/tango/internal/dao"
+	"github.com/aura-studio/tango/internal/logging"
+	"github.com/aura-studio/tango/internal/parser"
+	"github.com/aura-studio/tango/internal/process"
+	"github.com/aura-studio/tango/internal/role/api"
 )
 
 // Server is the gateway runtime: the embedded api engine plus the HTTP face. It

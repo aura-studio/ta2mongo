@@ -3,9 +3,9 @@ package role
 import (
 	"fmt"
 
-	"rocket-nano/tools/tango/internal/cfgtree"
-	"rocket-nano/tools/tango/internal/role/daemon"
-	"rocket-nano/tools/tango/internal/role/gateway"
+	"github.com/aura-studio/tango/internal/cfgtree"
+	"github.com/aura-studio/tango/internal/role/daemon"
+	"github.com/aura-studio/tango/internal/role/gateway"
 )
 
 // FromTree decodes the role.* branch of t into a Config, applies defaults and

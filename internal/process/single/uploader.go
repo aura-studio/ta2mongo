@@ -6,11 +6,11 @@ import (
 
 	drivermongo "go.mongodb.org/mongo-driver/mongo"
 
-	"rocket-nano/tools/tango/internal/dao"
-	"rocket-nano/tools/tango/internal/logging"
-	"rocket-nano/tools/tango/internal/parser"
-	"rocket-nano/tools/tango/internal/process/core"
-	"rocket-nano/tools/tango/internal/source"
+	"github.com/aura-studio/tango/internal/dao"
+	"github.com/aura-studio/tango/internal/logging"
+	"github.com/aura-studio/tango/internal/parser"
+	"github.com/aura-studio/tango/internal/process/core"
+	"github.com/aura-studio/tango/internal/source"
 )
 
 // Uploader is the "single" upload strategy: it consumes a source and writes

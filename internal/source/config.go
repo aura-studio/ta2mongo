@@ -3,8 +3,8 @@ package source
 import (
 	"fmt"
 
-	"rocket-nano/tools/tango/internal/cfgtree"
-	"rocket-nano/tools/tango/internal/source/tailer"
+	"github.com/aura-studio/tango/internal/cfgtree"
+	"github.com/aura-studio/tango/internal/source/tailer"
 )
 
 // FromTree decodes the source.* branch of t into a Config, applies defaults and

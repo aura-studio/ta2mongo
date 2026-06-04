@@ -3,8 +3,8 @@ package parser
 import (
 	"fmt"
 
-	"rocket-nano/tools/tango/internal/cfgtree"
-	"rocket-nano/tools/tango/internal/parser/filter"
+	"github.com/aura-studio/tango/internal/cfgtree"
+	"github.com/aura-studio/tango/internal/parser/filter"
 )
 
 // FromTree decodes the parser.* branch of t into a Config, applies defaults and

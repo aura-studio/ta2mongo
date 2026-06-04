@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
-	"rocket-nano/tools/tango/internal/dao"
-	daomongo "rocket-nano/tools/tango/internal/dao/mongo"
-	"rocket-nano/tools/tango/internal/process"
+	"github.com/aura-studio/tango/internal/dao"
+	daomongo "github.com/aura-studio/tango/internal/dao/mongo"
+	"github.com/aura-studio/tango/internal/process"
 )
 
 func ExampleServer_Upload() {

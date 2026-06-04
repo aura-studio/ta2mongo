@@ -27,7 +27,7 @@
 | 任务 worker | `tango worker run` | 无 | 删除 task queue 消费、心跳、lease、reap、任务执行 |
 | HTTP 服务 | `tango gateway serve` | `tango gateway` | 保留 HTTP 服务，但接口从多功能控制面收窄到 `/upload` |
 | 一次性操作 | `tango operator ...` | `tango cli upload` | operator 删除；cli 子命令对齐 gateway `/upload`，从 stdin 读日志并上报 |
-| Go 库入口 | 公开 `rocket-nano/tools/tango/client` | 内部 `internal/role/api` | v1.1 只允许仓库内部 import，对外是 breaking change |
+| Go 库入口 | 公开 `github.com/aura-studio/tango/client` | 内部 `internal/role/api` | v1.1 只允许仓库内部 import，对外是 breaking change |
 | 根命令 | 挂载 report/worker/gateway/operator | 挂载 daemon/gateway/cli | 角色集合整体变更 |
 
 ### v1.0 命令集合
@@ -179,7 +179,7 @@ tango cli upload --process.mode pipeline
 v1.0 提供公开包：
 
 ```go
-import "rocket-nano/tools/tango/client"
+import "github.com/aura-studio/tango/client"
 ```
 
 主要能力：
@@ -209,7 +209,7 @@ import "rocket-nano/tools/tango/client"
 v1.1 删除公开 `client/` 目录，新增仓库内部包：
 
 ```go
-import "rocket-nano/tools/tango/internal/role/api"
+import "github.com/aura-studio/tango/internal/role/api"
 ```
 
 主要能力：
@@ -320,7 +320,7 @@ import "rocket-nano/tools/tango/internal/role/api"
 | 配置不兼容 | v1.0 配置文件不能直接用于 v1.1，需要迁移 key |
 | 环境变量不兼容 | `TANGO_RUNTIME_*`、`TANGO_REPORT_*`、`TANGO_TASKS_*` 等大量变量失效 |
 | HTTP API 不兼容 | `/upload` 的语义改变；其他控制面接口删除 |
-| Go import 不兼容 | `rocket-nano/tools/tango/client` 删除，外部调用方无法直接用 `internal/role/api` |
+| Go import 不兼容 | `github.com/aura-studio/tango/client` 删除，外部调用方无法直接用 `internal/role/api` |
 | 数据库辅助集合不兼容 | task/remote/backfill/fileupload 相关集合不再读写 |
 | 运行模型不兼容 | v1.1 不再支持“采集 + worker 控制面”组合部署 |
 | 功能范围不兼容 | backfill、SQL、任务发布、远程热更新若仍需要，必须重新引入或另建服务 |

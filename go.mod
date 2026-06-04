@@ -1,4 +1,4 @@
-module rocket-nano/tools/tango
+module github.com/aura-studio/tango
 
 go 1.25.0
 

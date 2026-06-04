@@ -11,10 +11,10 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
-	"rocket-nano/tools/tango/internal/dao"
-	daomongo "rocket-nano/tools/tango/internal/dao/mongo"
-	"rocket-nano/tools/tango/internal/process"
-	"rocket-nano/tools/tango/internal/role/api"
+	"github.com/aura-studio/tango/internal/dao"
+	daomongo "github.com/aura-studio/tango/internal/dao/mongo"
+	"github.com/aura-studio/tango/internal/process"
+	"github.com/aura-studio/tango/internal/role/api"
 )
 
 const testMongoURI = "mongodb://localhost:27017"
