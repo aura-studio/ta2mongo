@@ -31,8 +31,9 @@ func NewCommand() *cobra.Command {
 			return runDaemonService(cmd, path)
 		},
 	}
-	cmd.Flags().String("dao.mongo.uri", "", "MongoDB connection URI (config key dao.mongo.uri)")
-	cmd.Flags().String("logging.level", "", "log level: debug, info, warn, error (config key logging.level)")
+	// Every config key is also a --<key> flag (file / TANGO_* env / flag are
+	// interchangeable). The role is the subcommand; --config is the root flag.
+	config.RegisterFlags(cmd.Flags())
 	return cmd
 }
 

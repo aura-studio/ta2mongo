@@ -44,9 +44,10 @@ func NewCommand() *cobra.Command {
 			return enc.Encode(res)
 		},
 	}
+	// --mode is a runtime argument (which strategy to use for this run), not a
+	// config key. Every config key is also exposed as a --<key> flag below.
 	cmd.Flags().StringVar(&mode, "mode", "batch", "upload mode: single | batch | pipeline")
-	cmd.Flags().String("dao.mongo.uri", "", "MongoDB connection URI (config key dao.mongo.uri)")
-	cmd.Flags().String("logging.level", "", "log level: debug, info, warn, error (config key logging.level)")
+	config.RegisterFlags(cmd.Flags())
 	return cmd
 }
 

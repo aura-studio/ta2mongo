@@ -11,10 +11,14 @@ tango cli       # 一次性：从 stdin 读日志数组上报（--mode 选策略
 
 ## 通用规则
 
-- `--config <path>`：配置文件路径，支持 `.yaml` / `.yml` / `.json`。文件不存在时静默跳过，回退到默认值 + 环境变量 + flag。
-- 留空时各角色命令在二进制同级目录查找自己的默认文件。
-- **配置键路径 = 包路径**（`internal/` 下）。CLI flag 名即配置键，如 `--dao.mongo.uri`、`--logging.level`、`--role.gateway.addr`。
-- 所有键均可用 `TANGO_*` 环境变量覆盖，嵌套键 `.` 转 `_` 并大写（如 `dao.mongo.uri` → `TANGO_DAO_MONGO_URI`）。
+- **角色由子命令指定**（`daemon` / `gateway` / `cli`），不在配置里指明。
+- **三个途径完全一致**：每个配置键都可经 ① 配置文件、② `TANGO_*` 环境变量、③ `--<键>` 命令行参数 三种方式设置，键名一致。优先级（低→高）：默认值 < 文件 < 环境变量 < 命令行参数。
+  - 文件键：`dao.mongo.uri`
+  - 环境变量：嵌套键 `.` 转 `_` 并大写加 `TANGO_` 前缀 → `TANGO_DAO_MONGO_URI`
+  - 命令行：flag 名即键路径 → `--dao.mongo.uri`
+  - **配置键路径 = 包路径**（`internal/` 下）：`logging.*`、`dao.mongo.*`、`dao.store.*`、`parser.filter.*`、`source.tailer.*`、`process.*`、`role.gateway.*`。
+- **唯一的例外**：`--config <path>`（配置文件路径，`.yaml`/`.yml`/`.json`）只有命令行这一种途径；它不是配置键。留空时各命令在二进制同级目录查找 `<role>.{yaml,yml,json}`，缺失则静默回退到默认值 + 环境变量 + flag。
+- 另有运行参数 `--mode`（仅 `tango cli`，选择本次 single/batch/pipeline），它是运行时参数，也不是配置键。
 
 | 角色命令 | 默认配置文件 | 主要配置段 |
 |---|---|---|
@@ -31,22 +35,24 @@ tango daemon --dao.mongo.uri mongodb://localhost:27017/tango
 
 职责：追尾 `source.tailer.logPattern` 匹配的日志文件 → 解析 TA JSON → 上报 filter → identity resolve → 流水线批量写 MongoDB。
 
-常用参数：
+常用参数（任意配置键都有同名 flag，下面只列最常用的）：
 
 | 参数 | 说明 |
 |---|---|
 | `--dao.mongo.uri` | MongoDB 连接串（配置键 `dao.mongo.uri`） |
 | `--logging.level` | 日志级别（配置键 `logging.level`） |
+| `--source.tailer.logPattern` | 追尾文件模式（配置键 `source.tailer.logPattern`） |
 
 ## HTTP Gateway Service
 
 ```bash
-tango gateway --config gateway.yaml --addr :8080
+tango gateway --config gateway.yaml
+tango gateway --role.gateway.addr :8080      # 监听地址即普通配置键
 ```
 
 gateway 是常驻 HTTP 服务，读取共享段 `logging` + `dao` + `parser` + `process`，外加 gateway 专属的
 `role.gateway`（`addr` / `defaultMode`）。上传的批量/流水线参数与过滤器即顶层 `process.*` / `parser.filter.*`。
-`--addr` 覆盖 `role.gateway.addr`。
+监听地址用配置键 `role.gateway.addr`（文件 / `TANGO_ROLE_GATEWAY_ADDR` / `--role.gateway.addr` 三选一）。
 
 | 方法 | 路径 | body | 功能 |
 |---|---|---|---|

@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/spf13/pflag"
 )
 
 func writeFile(t *testing.T, name, content string) string {
@@ -64,6 +66,42 @@ process:
 	}
 	if c.Process.Pipeline.BatchSize != 2500 {
 		t.Errorf("process.pipeline.batchSize via int env = %d, want 2500", c.Process.Pipeline.BatchSize)
+	}
+}
+
+// TestFlagOverridesEnvAndFile verifies the three input paths are consistent and
+// correctly ordered: a --<key> flag (registered for every key) overrides both
+// the TANGO_* env var and the config file value.
+func TestFlagOverridesEnvAndFile(t *testing.T) {
+	os.Setenv("TANGO_LOGGING_LEVEL", "warn")
+	defer os.Unsetenv("TANGO_LOGGING_LEVEL")
+	yaml := `
+dao:
+  mongo:
+    uri: "mongodb://localhost/x"
+logging:
+  level: error
+`
+	flags := pflag.NewFlagSet("test", pflag.ContinueOnError)
+	RegisterFlags(flags)
+	// every key is a flag
+	if flags.Lookup("dao.mongo.uri") == nil {
+		t.Fatal("expected --dao.mongo.uri flag to be registered")
+	}
+	if flags.Lookup("process.pipeline.batchWorkers") == nil {
+		t.Fatal("expected --process.pipeline.batchWorkers flag to be registered")
+	}
+	if err := flags.Parse([]string{"--logging.level", "debug"}); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := Load(writeFile(t, "tango.yaml", yaml), flags)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// flag (debug) beats env (warn) beats file (error)
+	if c.Logging.Level != "debug" {
+		t.Errorf("logging.level = %q, want debug (flag should win)", c.Logging.Level)
 	}
 }
 

@@ -16,7 +16,6 @@ import (
 // NewCommand builds the `tango gateway` command. It loads the unified config
 // (gateway.{yaml,yml,json}) and runs the HTTP server until interrupted.
 func NewCommand() *cobra.Command {
-	var addr string
 	cmd := &cobra.Command{
 		Use:   "gateway",
 		Short: "HTTP gateway exposing the /upload log-reporting API",
@@ -36,16 +35,14 @@ func NewCommand() *cobra.Command {
 			if err := srv.EnsureIndexes(cmd.Context()); err != nil {
 				return err
 			}
-			if addr == "" {
-				addr = c.Role.Gateway.Addr
-			}
-			return srv.Run(cmd.Context(), addr)
+			// Listen address comes from the config key role.gateway.addr,
+			// settable via file / TANGO_ROLE_GATEWAY_ADDR / --role.gateway.addr.
+			return srv.Run(cmd.Context(), c.Role.Gateway.Addr)
 		},
 	}
-	cmd.Flags().String("dao.mongo.uri", "", "MongoDB connection URI (config key dao.mongo.uri)")
-	cmd.Flags().String("logging.level", "", "log level: debug, info, warn, error (config key logging.level)")
-	cmd.Flags().String("role.gateway.addr", "", "HTTP listen address (config key role.gateway.addr)")
-	cmd.Flags().StringVar(&addr, "addr", "", "HTTP listen address; overrides the config addr")
+	// Every config key is also a --<key> flag (file / TANGO_* env / flag are
+	// interchangeable). The role is the subcommand; --config is the root flag.
+	config.RegisterFlags(cmd.Flags())
 	return cmd
 }
 

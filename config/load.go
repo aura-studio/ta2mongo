@@ -36,3 +36,21 @@ func Load(path string, flags *pflag.FlagSet) (*Config, error) {
 func setDefaults(v *viper.Viper) {
 	(&Config{}).RegisterDefaults(v.SetDefault)
 }
+
+// RegisterFlags defines a CLI flag for every config key, named identically to
+// the dotted key path (e.g. --dao.mongo.uri), so the three input paths are fully
+// interchangeable: config file value, TANGO_* env var, and --<key> flag all set
+// the same key. Precedence (low→high) is default < file < env < flag — only a
+// flag the user actually sets overrides file/env (see bindFlagsTo).
+//
+// The runtime role is chosen by the subcommand, not a flag; the --config file
+// path is registered separately by the root command. Both are intentionally not
+// config keys. The key list is owned by the modules (same cascade as
+// setDefaults), so this enumerates nothing itself.
+func RegisterFlags(flags *pflag.FlagSet) {
+	(&Config{}).RegisterDefaults(func(key string, _ any) {
+		if flags.Lookup(key) == nil {
+			flags.String(key, "", "config key "+key+" (overrides file / TANGO_* env)")
+		}
+	})
+}

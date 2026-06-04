@@ -35,7 +35,9 @@ daemon 是长驻的 pipeline 流水线。api 只作为库使用，没有对应�
    **指针字段**引用这些根包配置，使**每个文件键路径都等于消费它的包路径**（`internal/` 下）：
    `logging.level`、`dao.mongo.uri`、`dao.store.maxElapsedTime`、`parser.filter.*`、
    `source.tailer.*`、`process.pipeline.*`、`role.gateway.*`。最外层 `config` 包**不定义任何具体字段**，
-   只负责加载/覆盖机制（`Load` = 文件 < `TANGO_*` env < flag，外加 `setDefaults`/`applyDefaults`）。
+   只负责加载/覆盖机制（`Load` = 文件 < `TANGO_*` env < flag，外加 `setDefaults`/`applyDefaults`/`RegisterFlags`）。
+   **三个途径一致**：`RegisterFlags` 为每个键注册同名 `--<键>` flag，故 文件/env/flag 可互换；
+   角色由子命令指定（不在配置里），`--config`（文件路径）与 `--mode`（cli 运行参数）是仅有的非配置键 flag。
    叶子模块**不得 import 顶层 `config` 包**。依赖方向：`config` → 各模块；各模块 ↛ `config`。
 3. **`process` 是三种上传方式的唯一对外入口**：`single`（逐行即时写）/`batch`（同步批量）/
    `pipeline`（异步流水线）不被外部直接 import，三者实现同一 `process.Uploader` 接口
@@ -124,7 +126,7 @@ config   -> 各模块 Config 类型（logging/dao/parser/source/process/role(→
 | 文件 | 职责 |
 |---|---|
 | `config/config.go` | 统一 `Config`（指针引用各模块 Config，键=包路径）+ `Validate` |
-| `config/load.go` | `Load`（文件<env<flag）+ `setDefaults`（注册键供 env 绑定） |
+| `config/load.go` | `Load`（文件<env<flag）+ `setDefaults`（env 绑定）+ `RegisterFlags`（每键注册同名 flag） |
 | `config/defaults.go` | `applyDefaults`：分配 nil 指针段并委托子模块默认值 |
 | `config/loader.go` | viper 装配 helper（env 前缀、decode hook、flag 绑定） |
 
