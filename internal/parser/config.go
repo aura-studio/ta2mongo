@@ -3,8 +3,23 @@ package parser
 import (
 	"fmt"
 
+	"rocket-nano/tools/tango/internal/cfgtree"
 	"rocket-nano/tools/tango/internal/parser/filter"
 )
+
+// FromTree decodes the parser.* branch of t into a Config, applies defaults and
+// validates it (which compiles the parser.filter.* expressions).
+func FromTree(t cfgtree.Tree) (*Config, error) {
+	var c Config
+	if err := t.Sub("parser").Into(&c); err != nil {
+		return nil, fmt.Errorf("parser: %w", err)
+	}
+	c.ApplyDefaults()
+	if err := c.Validate(); err != nil {
+		return nil, fmt.Errorf("parser: %w", err)
+	}
+	return &c, nil
+}
 
 // Config composes parser-layer configuration. Filter owns the reporting filter
 // rules; talog currently has no tunable configuration.

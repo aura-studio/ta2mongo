@@ -10,7 +10,7 @@ import (
 
 	"rocket-nano/tools/tango/internal/dao"
 	"rocket-nano/tools/tango/internal/logging"
-	"rocket-nano/tools/tango/internal/parser/filter"
+	"rocket-nano/tools/tango/internal/parser"
 	"rocket-nano/tools/tango/internal/process"
 	"rocket-nano/tools/tango/internal/role/api"
 )
@@ -23,11 +23,11 @@ type Server struct {
 
 // New builds a Server, connecting to MongoDB via the api engine. It is wired
 // from the shared top-level module configs (dao, the process strategy config,
-// and the reporting filter) plus the gateway role config. The caller must
-// Close it.
-func New(ctx context.Context, daoCfg *dao.Config, procCfg *process.Config, filterCfg *filter.Config, cfg Config) (*Server, error) {
+// and the parser config carrying the reporting filter) plus the gateway role
+// config. The caller must Close it.
+func New(ctx context.Context, daoCfg *dao.Config, procCfg *process.Config, parserCfg *parser.Config, cfg Config) (*Server, error) {
 	cfg.ApplyDefaults()
-	eng, err := api.New(ctx, daoCfg, procCfg, filterCfg)
+	eng, err := api.New(ctx, daoCfg, procCfg, parserCfg)
 	if err != nil {
 		return nil, err
 	}

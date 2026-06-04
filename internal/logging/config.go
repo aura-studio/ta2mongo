@@ -1,6 +1,25 @@
 package logging
 
-import "fmt"
+import (
+	"fmt"
+
+	"rocket-nano/tools/tango/internal/cfgtree"
+)
+
+// FromTree decodes the logging.* branch of t into a Config, applies defaults and
+// validates it. The module owns its own section name ("logging"), so callers
+// hand it the whole tree and it slices its own branch.
+func FromTree(t cfgtree.Tree) (*Config, error) {
+	var c Config
+	if err := t.Sub("logging").Into(&c); err != nil {
+		return nil, fmt.Errorf("logging: %w", err)
+	}
+	c.ApplyDefaults()
+	if err := c.Validate(); err != nil {
+		return nil, fmt.Errorf("logging: %w", err)
+	}
+	return &c, nil
+}
 
 // Config configures log output. It is the logging module's own configuration; the
 // top-level config package references it by pointer and the loader unmarshals

@@ -3,8 +3,23 @@ package source
 import (
 	"fmt"
 
+	"rocket-nano/tools/tango/internal/cfgtree"
 	"rocket-nano/tools/tango/internal/source/tailer"
 )
+
+// FromTree decodes the source.* branch of t into a Config, applies defaults and
+// validates it.
+func FromTree(t cfgtree.Tree) (*Config, error) {
+	var c Config
+	if err := t.Sub("source").Into(&c); err != nil {
+		return nil, fmt.Errorf("source: %w", err)
+	}
+	c.ApplyDefaults()
+	if err := c.Validate(); err != nil {
+		return nil, fmt.Errorf("source: %w", err)
+	}
+	return &c, nil
+}
 
 // Config aggregates the data-source configurations, fronting the source
 // subpackages so the file schema key (source.*) maps to the package path. Only

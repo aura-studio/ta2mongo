@@ -6,10 +6,9 @@ import (
 
 	drivermongo "go.mongodb.org/mongo-driver/mongo"
 
-	daostore "rocket-nano/tools/tango/internal/dao/store"
+	"rocket-nano/tools/tango/internal/dao"
 	"rocket-nano/tools/tango/internal/logging"
-	"rocket-nano/tools/tango/internal/parser/filter"
-	"rocket-nano/tools/tango/internal/parser/talog"
+	"rocket-nano/tools/tango/internal/parser"
 	"rocket-nano/tools/tango/internal/process/core"
 	"rocket-nano/tools/tango/internal/source"
 )
@@ -23,21 +22,22 @@ import (
 // commits each line on its own rather than accumulating a batch.
 type Uploader struct {
 	proc  *core.Processor
-	store *daostore.Store
+	store *dao.Store
 	stats core.StatsCollector
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
 }
 
-// NewUploader builds a single-mode Uploader. A nil filter holder keeps every
-// record; a nil stats collector is treated as a no-op.
-func NewUploader(st *daostore.Store, parser *talog.Parser, flt *filter.Holder, stats core.StatsCollector, opts core.WriteOptions) *Uploader {
+// NewUploader builds a single-mode Uploader. prs carries the parser and its
+// filter (a parser built with a nil filter keeps every record); a nil stats
+// collector is treated as a no-op.
+func NewUploader(st *dao.Store, prs *parser.Parser, stats core.StatsCollector) *Uploader {
 	if stats == nil {
 		stats = core.NoopStats{}
 	}
 	return &Uploader{
-		proc:  core.NewProcessor(parser, flt, st, stats, opts),
+		proc:  core.NewProcessor(prs, st, stats),
 		store: st,
 		stats: stats,
 	}

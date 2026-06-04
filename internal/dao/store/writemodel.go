@@ -320,52 +320,6 @@ func trackTsCondReplacePipeline(ts any, doc bson.M) bson.A {
 	}}
 }
 
-// UserSnapshotWriteModel builds an upsert keyed by #user_id for a single row
-// of the TA user-state virtual table (v_user_<pid>). Unlike UserWriteModel
-// — which interprets #type and applies user_set / user_add / ... semantics —
-// this model treats each row as a one-shot snapshot: every field in doc is
-// $set on the matching #user_id document, or written once via $setOnInsert
-// when skipExisting is true. Intended for the backfill mode.
-func UserSnapshotWriteModel(userID any, doc bson.M, skipExisting bool) mongo.WriteModel {
-	if doc == nil {
-		doc = bson.M{}
-	}
-	doc["#user_id"] = userID
-	if _, ok := doc["_ts"]; !ok {
-		doc["_ts"] = time.Now().UnixNano()
-	}
-	op := "$set"
-	if skipExisting {
-		op = "$setOnInsert"
-	}
-	return mongo.NewUpdateOneModel().
-		SetFilter(bson.M{"#user_id": userID}).
-		SetUpdate(bson.M{op: doc}).
-		SetUpsert(true)
-}
-
-// EventWriteModelSkipExisting builds a write model that always uses
-// $setOnInsert keyed by #uuid, regardless of the record's #type. This is
-// intended for the backfill mode where historical data should never overwrite
-// the currently-stored copy of an event — even if the historical record was
-// labelled track_update or track_overwrite (whose normal semantics mutate
-// existing documents). The #uuid unique index makes duplicates a no-op.
-func EventWriteModelSkipExisting(uuid string, doc bson.M) mongo.WriteModel {
-	if doc == nil {
-		doc = bson.M{}
-	}
-	if v, ok := doc["#uuid"].(string); !ok || v == "" {
-		doc["#uuid"] = uuid
-	}
-	if _, ok := doc["_ts"]; !ok {
-		doc["_ts"] = time.Now().UnixNano()
-	}
-	return mongo.NewUpdateOneModel().
-		SetFilter(bson.M{"#uuid": uuid}).
-		SetUpdate(bson.M{"$setOnInsert": doc}).
-		SetUpsert(true)
-}
-
 // EventWriteModel builds the appropriate MongoDB write model for an event operation.
 func EventWriteModel(typ, uuid string, doc bson.M) mongo.WriteModel {
 	// Ensure required meta fields are present for ordering and upsert.

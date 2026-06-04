@@ -203,8 +203,9 @@ func doGlobMatch(patParts, nameParts []string) bool {
 const defaultPollInterval = 200 * time.Millisecond
 
 // defaultMaxLineSize is the maximum line length (bytes) the scanner accepts
-// when none is configured.
-const defaultMaxLineSize = 1 << 20 // 1 MiB
+// when none is configured. It matches tailer.Config.MaxLineBytes's default
+// (see config.go's ApplyDefaults) so the standalone and config-driven paths agree.
+const defaultMaxLineSize = 10 * 1024 * 1024 // 10 MiB
 
 // Tailer watches for log files matching glob patterns and tails them,
 // sending new lines to an output channel.

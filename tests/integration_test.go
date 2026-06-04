@@ -28,6 +28,7 @@ import (
 	clirole "rocket-nano/tools/tango/internal/role/cli"
 	"rocket-nano/tools/tango/internal/role/daemon"
 	"rocket-nano/tools/tango/internal/role/gateway"
+	"rocket-nano/tools/tango/internal/source"
 	"rocket-nano/tools/tango/internal/source/tailer"
 )
 
@@ -177,11 +178,13 @@ func TestDaemonContinuousReport(t *testing.T) {
 		t.Fatalf("create log: %v", err)
 	}
 
-	srcCfg := &tailer.Config{
-		LogPattern:     []string{filepath.Join(dir, "*.log")},
-		TailMode:       tailer.TailModePoll,
-		RescanInterval: 200 * time.Millisecond,
-		PollInterval:   50 * time.Millisecond,
+	srcCfg := &source.Config{
+		Tailer: &tailer.Config{
+			LogPattern:     []string{filepath.Join(dir, "*.log")},
+			TailMode:       tailer.TailModePoll,
+			RescanInterval: 200 * time.Millisecond,
+			PollInterval:   50 * time.Millisecond,
+		},
 	}
 	srcCfg.ApplyDefaults()
 	procCfg := &process.Config{Pipeline: &pipeline.Config{BatchWorkers: 1, FlushInterval: 100 * time.Millisecond}}

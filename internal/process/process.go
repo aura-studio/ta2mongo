@@ -31,9 +31,6 @@ type Counters = core.Counters
 // Snapshot is an immutable read of a Counters at a point in time.
 type Snapshot = core.Snapshot
 
-// WriteOptions tunes write-side behaviour shared by all three strategies.
-type WriteOptions = core.WriteOptions
-
 // Source is the line-source contract the uploaders consume. source/httpbody and
 // source/tailer satisfy it.
 type Source = source.Source
@@ -77,7 +74,7 @@ type Uploader interface {
 // and the shared parser. A nil cfg is defaulted; a nil stats collector is
 // treated as a no-op. Connection lifecycle (dao.New / Close) is owned by the
 // caller, not by the uploader.
-func New(cfg *Config, d *dao.Dao, p *parser.Parser, stats *Counters, opts WriteOptions) (Uploader, error) {
+func New(cfg *Config, d *dao.Dao, p *parser.Parser, stats *Counters) (Uploader, error) {
 	if cfg == nil {
 		cfg = &Config{}
 	}
@@ -94,11 +91,11 @@ func New(cfg *Config, d *dao.Dao, p *parser.Parser, stats *Counters, opts WriteO
 
 	switch mode {
 	case ModeSingle:
-		return single.NewUploader(d.Store, p.Parser, p.Filter(), sc, opts), nil
+		return single.NewUploader(d.Store, p, sc), nil
 	case ModeBatch:
-		return batch.NewUploader(d.Store, p.Parser, p.Filter(), cfg.BatchSize, sc, opts), nil
+		return batch.NewUploader(d.Store, p, cfg.BatchSize, sc), nil
 	case ModePipeline:
-		return pipeline.NewUploader(cfg.Pipeline, d.Store, p.Parser, p.Filter(), sc, opts), nil
+		return pipeline.NewUploader(cfg.Pipeline, d.Store, p, sc), nil
 	default:
 		return nil, fmt.Errorf("process: unknown upload mode %q", mode)
 	}

@@ -47,9 +47,8 @@ func (c *Config) Validate() error {
 }
 
 // RegisterDefaults registers this module's config keys (under prefix) with the
-// given setter so env binding works. The pipeline config appears at more than
-// one prefix (process.pipeline and role.gateway.upload.pipeline), so the prefix
-// is supplied by the parent.
+// given setter so env binding works. The prefix is supplied by the parent
+// (process.Config registers it under process.pipeline).
 func (c *Config) RegisterDefaults(set func(key string, value any), prefix string) {
 	set(prefix+".batchSize", 0)
 	set(prefix+".batchSizeMin", 0)

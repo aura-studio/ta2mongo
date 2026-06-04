@@ -3,9 +3,24 @@ package process
 import (
 	"fmt"
 
+	"rocket-nano/tools/tango/internal/cfgtree"
 	"rocket-nano/tools/tango/internal/process/batch"
 	"rocket-nano/tools/tango/internal/process/pipeline"
 )
+
+// FromTree decodes the process.* branch of t into a Config, applies defaults and
+// validates it.
+func FromTree(t cfgtree.Tree) (*Config, error) {
+	var c Config
+	if err := t.Sub("process").Into(&c); err != nil {
+		return nil, fmt.Errorf("process: %w", err)
+	}
+	c.ApplyDefaults()
+	if err := c.Validate(); err != nil {
+		return nil, fmt.Errorf("process: %w", err)
+	}
+	return &c, nil
+}
 
 // Config configures process-level upload behavior across the three strategies.
 type Config struct {

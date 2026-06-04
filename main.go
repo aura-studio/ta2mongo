@@ -4,15 +4,11 @@
 package main
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/spf13/cobra"
 
-	clicmd "rocket-nano/tools/tango/cmd/cli"
-	daemoncmd "rocket-nano/tools/tango/cmd/daemon"
-	gatewaycmd "rocket-nano/tools/tango/cmd/gateway"
 	"rocket-nano/tools/tango/config"
 	"rocket-nano/tools/tango/internal/logging"
 	"rocket-nano/tools/tango/internal/role"
@@ -43,29 +39,30 @@ func newRoot() *cobra.Command {
 	return root
 }
 
-// run loads the unified config, then dispatches to the role named by role.mode.
+// run loads the config tree, configures logging, then dispatches to the role
+// named by role.mode, handing it the whole tree to slice its own branches from.
 func run(cmd *cobra.Command, _ []string) error {
 	path := resolveConfigPath(configFlag(cmd), "tango.yaml", "tango.yml", "tango.json")
-	c, err := config.Load(path, cmd.Flags())
+	tree, err := config.Load(path, cmd.Flags())
 	if err != nil {
 		return err
 	}
-	if err := c.Validate(); err != nil {
+
+	logCfg, err := logging.FromTree(tree)
+	if err != nil {
 		return err
 	}
-	logging.Init(c.Logging.Level)
+	logging.Init(logCfg)
 
-	switch c.Role.Mode {
-	case role.Daemon:
-		return daemoncmd.Run(cmd, c)
-	case role.Gateway:
-		return gatewaycmd.Run(cmd, c)
-	case role.CLI:
-		return clicmd.Run(cmd, c)
-	default:
-		return fmt.Errorf("role.mode %q is not runnable (want %q / %q / %q)",
-			c.Role.Mode, role.Daemon, role.Gateway, role.CLI)
+	roleCfg, err := role.FromTree(tree)
+	if err != nil {
+		return err
 	}
+	r, err := role.Get(roleCfg.Mode)
+	if err != nil {
+		return err
+	}
+	return r.Run(cmd.Context(), tree)
 }
 
 // configFlag reads the --config persistent flag (empty when unset).

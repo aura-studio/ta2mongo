@@ -6,20 +6,10 @@ import (
 
 	"go.mongodb.org/mongo-driver/mongo"
 
-	daostore "rocket-nano/tools/tango/internal/dao/store"
+	"rocket-nano/tools/tango/internal/dao"
 	"rocket-nano/tools/tango/internal/logging"
-	"rocket-nano/tools/tango/internal/parser/filter"
-	"rocket-nano/tools/tango/internal/parser/talog"
+	"rocket-nano/tools/tango/internal/parser"
 )
-
-// WriteOptions tunes write-side behaviour for callers that need to deviate from
-// the default per-#type semantics (notably backfill).
-type WriteOptions struct {
-	// ForceSkipExisting routes every event write through $setOnInsert keyed by
-	// #uuid, regardless of the record's #type. Existing documents are never
-	// modified — duplicates become no-ops. Recommended for backfill.
-	ForceSkipExisting bool
-}
 
 // Kind classifies the outcome of processing one line.
 type Kind int
@@ -51,21 +41,25 @@ type Result struct {
 // a single line, recording uniform per-line stats. It never writes to MongoDB
 // and never logs — the caller owns batching/writing and any caller-specific
 // logging, driven by the returned Result.
+//
+// It depends only on the dao and parser packages (not their store/talog/filter
+// subpackages): prs supplies both line parsing and the reporting filter, and
+// store supplies identity resolution plus the write-model constructors fronted
+// by dao.
 type Processor struct {
-	parser *talog.Parser
-	filter *filter.Holder
-	store  *daostore.Store
-	stats  StatsCollector
-	opts   WriteOptions
+	prs   *parser.Parser
+	store *dao.Store
+	stats StatsCollector
 }
 
-// NewProcessor builds a Processor. A nil filter holder is treated as "keep
-// everything"; a nil stats collector is treated as a no-op.
-func NewProcessor(parser *talog.Parser, flt *filter.Holder, st *daostore.Store, stats StatsCollector, opts WriteOptions) *Processor {
+// NewProcessor builds a Processor. prs carries both the parser and its filter
+// (a parser built with a nil filter keeps every record); a nil stats collector
+// is treated as a no-op.
+func NewProcessor(prs *parser.Parser, st *dao.Store, stats StatsCollector) *Processor {
 	if stats == nil {
 		stats = NoopStats{}
 	}
-	return &Processor{parser: parser, filter: flt, store: st, stats: stats, opts: opts}
+	return &Processor{prs: prs, store: st, stats: stats}
 }
 
 // Process runs one line through the ingestion rules and returns its
@@ -84,22 +78,22 @@ func (p *Processor) Process(ctx context.Context, line string) (res Result) {
 			p.stats.OnDeadLetter()
 			err := fmt.Errorf("panic processing line: %v", r)
 			logging.WithField("panic", r).Warn("process: recovered panic on line, sent to dead_letter")
-			res = Result{Kind: KindParseError, Model: daostore.DeadLetterModel(line, err), Err: err}
+			res = Result{Kind: KindParseError, Model: dao.DeadLetterModel(line, err), Err: err}
 		}
 	}()
 
-	rec, err := p.parser.ParseLine(line)
+	rec, err := p.prs.ParseLine(line)
 	if err != nil {
 		p.stats.OnParseError()
 		p.stats.OnDeadLetter()
-		return Result{Kind: KindParseError, Model: daostore.DeadLetterModel(line, err), Err: err}
+		return Result{Kind: KindParseError, Model: dao.DeadLetterModel(line, err), Err: err}
 	}
 	p.stats.OnParseOK()
 
 	// Apply the user-defined include/exclude filter. Dropped records are not
 	// written anywhere — they are intentionally discarded, not dead-lettered.
-	if p.filter != nil && !p.filter.Empty() {
-		keep, ferr := p.filter.Keep(rec.Doc)
+	if flt := p.prs.Filter(); flt != nil && !flt.Empty() {
+		keep, ferr := flt.Keep(rec.Doc)
 		if ferr != nil {
 			p.stats.OnFilterError()
 		}
@@ -113,19 +107,16 @@ func (p *Processor) Process(ctx context.Context, line string) (res Result) {
 	if err != nil {
 		p.stats.OnIdentityError()
 		p.stats.OnDeadLetter()
-		return Result{Kind: KindIdentityError, Model: daostore.DeadLetterModel(line, err), Err: err}
+		return Result{Kind: KindIdentityError, Model: dao.DeadLetterModel(line, err), Err: err}
 	}
 
 	switch rec.Category() {
-	case talog.CategoryUser:
+	case parser.CategoryUser:
 		p.stats.OnUserWrite()
-		return Result{Kind: KindUser, Model: daostore.UserWriteModel(rec.Type, userID, rec.Doc)}
-	default: // talog.CategoryEvent
+		return Result{Kind: KindUser, Model: dao.UserWriteModel(rec.Type, userID, rec.Doc)}
+	default: // parser.CategoryEvent
 		rec.Doc["#user_id"] = userID
 		p.stats.OnEventWrite()
-		if p.opts.ForceSkipExisting {
-			return Result{Kind: KindEvent, Model: daostore.EventWriteModelSkipExisting(rec.UUID, rec.Doc)}
-		}
-		return Result{Kind: KindEvent, Model: daostore.EventWriteModel(rec.Type, rec.UUID, rec.Doc)}
+		return Result{Kind: KindEvent, Model: dao.EventWriteModel(rec.Type, rec.UUID, rec.Doc)}
 	}
 }

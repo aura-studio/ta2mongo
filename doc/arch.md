@@ -6,15 +6,16 @@
 `dead_letter` 集合。它是单一二进制，按运行角色组织，只保留**上报日志**能力。
 所有上报角色共享同一个引擎（`internal/role/api`），区别只在数据**来源**与**入口形态**：
 
-| 角色 | 命令 | 来源 | 职责 |
+| 角色 | `role.mode` | 来源 | 职责 |
 |---|---|---|---|
-| **Daemon** | `tango daemon` | tailer（文件） | 常驻：文件追尾、解析、filter、identity、流水线批量写 MongoDB |
-| **Gateway** | `tango gateway` | httpbody（HTTP 请求体） | 常驻 HTTP：单个 `/upload`，按 `process.mode` 选 single/batch/pipeline |
-| **CLI** | `tango cli upload` | stdin（控制台） | 一次性：对齐 gateway `/upload`，从 stdin 读日志数组，按 `process.mode` 上报 |
-| **API** | （无 cmd，库） | httpbody（调用方传入） | 作为 Go 库被业务代码 import：`api.New(...).Upload(lines)` |
+| **Daemon** | `daemon` | tailer（文件） | 常驻：文件追尾、解析、filter、identity、流水线批量写 MongoDB |
+| **Gateway** | `gateway` | httpbody（HTTP 请求体） | 常驻 HTTP：单个 `/upload`，按 `process.mode` 选 single/batch/pipeline |
+| **CLI** | `cli` | stdin（控制台） | 一次性：对齐 gateway `/upload`，从 stdin 读日志数组，按 `process.mode` 上报 |
+| **API** | （库，不可派发） | httpbody（调用方传入） | 作为 Go 库被业务代码 import：`api.New(...).Upload(lines)` |
 
+运行角色由配置键 `role.mode` 选定（不是子命令），`role.Get(mode)` 取对应 `Role` 对象执行。
 gateway / cli / api 三者都通过同一个 `process.mode` 配置选择 single/batch/pipeline（都内嵌 api 引擎）；
-daemon 是长驻的 pipeline 流水线。api 只作为库使用，没有对应的 `cmd/`。
+daemon 是长驻的 pipeline 流水线。api 只作为库使用，不由 `role.mode` 派发。
 
 ## 2. 设计约定（其他会话务必遵守）
 
@@ -29,23 +30,33 @@ daemon 是长驻的 pipeline 流水线。api 只作为库使用，没有对应�
    - `internal/source` 是数据来源集合：`source.Source` 契约（`Run(ctx) <-chan string`）+ `source/httpbody`（HTTP 请求体，gateway/api 用）/ `source/tailer`（文件追尾，daemon 用）/ `source/stdin`（控制台，cli 用）/ `source/taapi`（占位）
    - 6 个根包统一文件形态：`<包名>.go`（主类型/逻辑/包文档）+ `config.go`（该领域的 `Config` 聚合）。
      即 `logging/logging.go`、`dao/dao.go`、`parser/parser.go`、`source/source.go`、`process/process.go`、`role/role.go`，各配 `config.go`。
-2. **配置键路径 = 包路径，config 只做覆盖**：配置结构体下沉到各自模块并由领域根包聚合
+   - **该约定现已端到端强制：领域之间只经根包接口互相引用，任何包都不再 import 兄弟领域的子包**
+     （即不存在 `process/* → dao/store`、`process/* → parser/talog|filter`、`role/* → source/httpbody|stdin|tailer`、
+     `role/* → parser/filter` 这类跨领域子包引用）。为此每个根包把子包里被跨领域复用的符号在 `<包名>.go` 里**重导出成门面**：
+     - `dao.go`：`type Store = store.Store`（别名）+ `UserWriteModel`/`EventWriteModel`/`EventWriteModelSkipExisting`/`DeadLetterModel`（薄包装，返回值 `mongo.WriteModel` 是驱动类型，按设计不再隐藏）。
+     - `parser.go`：`type Record = talog.Record`、`type RecordCategory = talog.RecordCategory`、`CategoryUser`/`CategoryEvent`、`EnvelopeKeys`（重导出）；过滤器经 `Parser.Filter()` 取 `*filter.Holder`，故消费方无需 import `parser/filter`。
+     - `source.go`：`NewLines`（httpbody）/`NewReader`（stdin）/`NewTailer`（tailer）三个构造器门面，role 经它们建源。
+     唯一被允许的"跨界"是 `client → role/api`（公共门面包装引擎，见 §7）；领域**自身的**子包之间（如 `process/single → process/core`、`role/cli → role/api`）不受此限。
+2. **配置键路径 = 包路径；config 只产出一棵 Tree**：配置结构体下沉到各自模块并由领域根包聚合
    （`dao.Config` 聚合 `mongo`/`store`，`parser.Config` 聚合 `filter`，`process.Config` 聚合 `pipeline`，
-   `source.Config` 聚合 `tailer`，`role.Config` 聚合 `gateway`）。统一 schema `config.Config` 用
-   **指针字段**引用这些根包配置，使**每个文件键路径都等于消费它的包路径**（`internal/` 下）：
+   `source.Config` 聚合 `tailer`，`role.Config` 聚合 `gateway`），使**每个文件键路径都等于消费它的包路径**（`internal/` 下）：
    `logging.level`、`dao.mongo.uri`、`dao.store.maxElapsedTime`、`parser.filter.*`、
-   `source.tailer.*`、`process.pipeline.*`、`role.gateway.*`。最外层 `config` 包**不定义任何具体字段**，
-   只负责加载/覆盖机制（`Load` = 文件 < `TANGO_*` env < flag，外加 `setDefaults`/`applyDefaults`/`RegisterFlags`）。
+   `source.tailer.*`、`process.pipeline.*`、`role.gateway.*`。**没有顶层 typed 聚合结构体**：
+   `config.Load` 把 文件 < `TANGO_*` env < flag 解析后，用 `viper.AllSettings` 物化成一棵**依赖中立**的
+   `cfgtree.Tree`（只依赖 `mapstructure`，不依赖 viper；viper 只困在 `config` 包内）。每个模块提供
+   `FromTree(t) = t.Sub("<前缀>").Into(&cfg) + ApplyDefaults + Validate`，自取并校验**自己那棵子树**
+   （模块拥有"前缀 + 解码 + 默认 + 校验"）。
    **三个途径一致**：`RegisterFlags` 为每个键注册同名 `--<键>` flag，故 文件/env/flag 可互换；
-   角色由子命令指定（不在配置里），CLI 操作子命令与 gateway path 对齐（如 `cli upload` ↔ `POST /upload`），`--config` 是文件路径、非配置键。上传策略是普通配置键 `process.mode`，不是请求字段或独立运行参数。
-   叶子模块**不得 import 顶层 `config` 包**。依赖方向：`config` → 各模块；各模块 ↛ `config`。
+   运行角色由配置键 `role.mode` 选定（不是子命令），上传策略由配置键 `process.mode` 选定；`--config` 是文件路径、非配置键。
+   叶子模块**不得 import 顶层 `config` 包**，只依赖叶子载体 `cfgtree`。依赖方向：`config` → `cfgtree` + 各模块；各模块 ↛ `config`。
 3. **`process` 是三种上传方式的唯一对外入口**：`single`（逐行即时写）/`batch`（同步批量）/
    `pipeline`（异步流水线）不被外部直接 import，三者实现同一 `process.Uploader` 接口
    （`Run(ctx, source.Source) error` + `Stop()`，可启动可停止，都消费一个日志源）；
    role 与 client SDK 只用 `process` 的 `New(cfg, …)` / `Mode` / `ParseMode` /
    `Source` / `Counters` / `Snapshot` / `WriteOptions`。
 4. **日志是全局底层**：统一用 `internal/logging` 的包级函数（`logging.WithError`、`logging.Info`…），
-   不要把 `*logrus.Logger` 当对象到处透传。`logging.Init(level)` 在启动时配置一次。
+   不要把 `*logrus.Logger` 当对象到处透传。`logging.Init(cfg)` 在启动时配置一次
+   （接收完整的 `*logging.Config`，应用 level 与 format）。
 5. **MaxElapsedTime（bulk-write 重试预算）属于 store**，不属于 mongo 连接配置；
    配置文件键为 `dao.store.maxElapsedTime`。
 6. **配置结构 = internal 包层级；角色不重复 host 模块配置**：模块配置都在各自包路径的顶层
@@ -53,83 +64,90 @@ daemon 是长驻的 pipeline 流水线。api 只作为库使用，没有对应�
    `role.<name>.*` 只放该角色**专属**的字段（如 `role.gateway.addr`）。
    例如 gateway 的上传处理直接用顶层 `process.*` 与 `parser.filter.*`，不在 `role.gateway` 下再开
    `process`/`filter`。`role.daemon` 暂为空（daemon 完全由顶层模块驱动）。
-7. **cmd 层独立调用**：`cmd/` 下各入口文件不引用共享胶水包（如 `cmdshared`）；
-   每个 cmd 入口内联自己的配置解析、client 构建、服务启动逻辑。
-8. **cmdShared 做内联**：`internal/cmdshared/` 的逻辑已内联到 `cmd/daemon/` 和 `cmd/gateway/`，
-   不再保留为独立模块。
+   角色拿到整棵 `cfgtree.Tree`，通过各模块 `FromTree` **按枝叶裁剪**自己需要的子树
+   （如 gateway 取 `dao`/`process`/`parser.filter` + `role.gateway`），而不是接收一个预先拆好的聚合结构。
+7. **角色统一为 `Role` 接口，外层按 `role.mode` 派发**：`internal/role` 定义
+   `Role`（`Run(ctx, cfgtree.Tree) error`）与 `Get(mode) (Role, error)`；`daemon`/`gateway`/`cli` 各实现 `Role`，
+   并把启动编排（daemon 的信号处理/启动日志、cli 的 stdin→JSON stdout）折入各自的角色实现。
+   `main.go` 只做 `Load→Tree → logging.FromTree+Init → role.FromTree 取 mode → role.Get(mode).Run(ctx, tree)`，
+   **不再有 `cmd/` 包**。`api` 仍是被 gateway/cli 内嵌的引擎库，不是可派发角色。
 
 ## 3. 目录结构
 
 ```text
 .
-├── main.go
-├── cmd/         # 控制台入口（api 是库，无 cmd）
-│   ├── daemon/  # tango daemon（内联配置解析 + 服务启动）
-│   ├── gateway/ # tango gateway（内联配置解析 + HTTP 启动）
-│   └── cli/     # tango cli upload（内联配置解析 + 读 stdin 上报）
-├── config/      # 单一包路径映射 schema + Load/override；只聚合各模块 Config，不定义字段
+├── main.go      # Load→Tree → logging.Init → role.Get(role.mode).Run(ctx, tree)（无 cmd/ 子命令）
+├── config/      # 构建并物化 cfgtree.Tree（Load/RegisterFlags）；不定义任何配置字段，viper 只在此
 ├── doc/ examples/
 └── internal/
-    ├── logging/    # 全局 logger + logging.Config
-    ├── parser/     # parser.go 整合 talog + filter（日志解析层）
+    ├── cfgtree/    # 依赖中立的配置载体 cfgtree.Tree（Sub/Into；只依赖 mapstructure）
+    ├── logging/    # 全局 logger + logging.Config（+ FromTree）
+    ├── parser/     # parser.go 整合 talog + filter（日志解析层）+ talog 门面（Record/categories/EnvelopeKeys 重导出）
     │   ├── config.go # parser.Config：聚合 parser 子模块配置
     │   ├── talog/    # TA JSON 行解析 -> Record
     │   └── filter/   # expr-lang include/exclude 上报过滤器 + filter.Config
-    ├── source/     # 数据来源集合（source.Source 契约 + source.Config 聚合 tailer）
-    │   ├── httpbody/ # HTTP 请求体来源（gateway/api 用）
-    │   ├── tailer/  # 文件追尾来源 + tailer.Config / TailMode 常量（daemon 用）
-    │   ├── stdin/   # 控制台 stdin 来源（cli 用）
+    ├── source/     # 数据来源集合（source.Source 契约 + source.Config 聚合 tailer）+ New{Lines,Reader,Tailer} 构造器门面
+    │   ├── httpbody/ # HTTP 请求体来源（NewLines；gateway/api 用）
+    │   ├── tailer/  # 文件追尾来源 + tailer.Config / TailMode 常量（NewTailer；daemon 用）
+    │   ├── stdin/   # 控制台 stdin 来源（NewReader；cli 用）
     │   └── taapi/   # 占位（未来 TA API 来源）
-    ├── dao/        # dao.go 整合 store + mongo
+    ├── dao/        # dao.go 整合 store + mongo + store 门面（Store 别名 + 写模型构造器重导出）
     │   ├── config.go # dao.Config：聚合 mongo.Config + store.Config
     │   ├── store/    # MongoDB 持久化 + store.Config
     │   └── mongo/    # 连接装配 + mongo.Config + MongoDBFromURI
     ├── process/    # process.go 统一管理三种上传方式（唯一对外入口；Uploader 接口 + New）
-    │   ├── core/    # 共享 Processor（parse→filter→identity→写模型）+ stats（Counters/StatsCollector）
+    │   ├── core/    # 共享 Processor（parse→filter→identity→写模型；经 dao/parser 根包门面）+ stats（Counters/StatsCollector）
     │   ├── single/  # 逐行即时写 Uploader
     │   ├── batch/   # 同步批量 Uploader（累积 + bulk flush）
     │   └── pipeline/# 异步 N-worker 流水线 Uploader + pipeline.Config + dynamicbatch
-    └── role/       # 运行角色（role.Config 聚合 daemon/gateway）
-        ├── api/     # 可复用引擎库：api.Engine（New/Upload/Run/EnsureIndexes/Close）
-        ├── daemon/  # daemon 常驻服务（report.Service，pipeline + tailer）
-        ├── gateway/ # HTTP gateway：内嵌 api.Engine + /upload；gateway.Config（role.gateway.*）
-        └── cli/     # 命令行：内嵌 api.Engine + stdin 源
+    └── role/       # 运行角色：Role 接口 + Get(mode) 派发；role.Config 聚合 daemon/gateway
+        ├── api/     # 可复用引擎库：api.Engine（New/Upload/Run/EnsureIndexes/Close）——非可派发角色
+        ├── daemon/  # daemon.Role + daemon.Service（pipeline + tailer；含信号处理/启动日志）
+        ├── gateway/ # gateway.Role + HTTP Server：内嵌 api.Engine + /upload；gateway.Config（role.gateway.*）
+        └── cli/     # cli.Role：内嵌 api.Engine + stdin 源，统计 JSON → stdout
 ```
 
 依赖方向：
 
 ```text
-cmd      -> config + role(api/cli/daemon/gateway) + logging
-role/api -> process + parser + dao + source/httpbody + logging   (引擎库，被 gateway/cli 内嵌)
-gateway  -> api + dao + process + logging          (HTTP 面)
-cli      -> api + dao + process + source/stdin      (stdin 面)
-daemon   -> process + parser + dao + source/tailer + logging
-process  -> single/batch/pipeline + source + dao + parser
-parser   -> talog + filter
-dao      -> store + mongo
-config   -> 各模块 Config 类型（logging/dao/parser/source/process/role(→gateway)）
-各叶子模块 ↛ config
+main             -> config + role + logging
+client           -> role/api                                       (公共门面，redis-go 风格，包装引擎)
+role             -> cfgtree + role/(daemon/gateway/cli/api)         (Role 接口 + Get(mode) 派发)
+role/api         -> process + parser + dao + source + logging       (引擎库，被 gateway/cli 内嵌)
+role/gateway     -> api + dao + process + parser + cfgtree + logging (gateway.Role + HTTP 面)
+role/cli         -> api + dao + process + parser + source + cfgtree  (cli.Role + stdin 面)
+role/daemon      -> process + parser + dao + source + cfgtree + logging (daemon.Role + Service)
+process          -> process/(core/single/batch/pipeline) + source + dao + parser + cfgtree
+process/<子包>   -> dao + parser + source + (core)                  (经 dao/parser 根包门面，不碰 dao/store、parser/talog|filter)
+parser           -> talog + filter + cfgtree                        (根包整合，对外重导出 Record/categories/EnvelopeKeys)
+dao              -> store + mongo + cfgtree                          (根包整合，对外重导出 Store + 写模型构造器)
+source           -> httpbody + stdin + tailer + cfgtree             (根包整合，对外暴露 Source + New{Lines,Reader,Tailer})
+cfgtree          -> mapstructure   (叶子载体，不依赖 viper)
+config           -> cfgtree + 各模块（仅用其 RegisterDefaults 注册键）；viper 只在 config
+各模块通过 cfgtree.Tree 解码（FromTree）；各叶子模块 ↛ config；领域之间只经根包，不跨领域 import 兄弟子包
 ```
 
 ### 3.1 文件功能清单
 
-#### 命令层 `cmd/`（薄封装：参数 + 配置加载 + 启动）
+#### 入口层 `main.go`（无 cmd/ 子命令）
 
 | 文件 | 职责 |
 |---|---|
-| `main.go` | 根 cobra 命令，挂载 daemon / gateway / cli（api 无 cmd） |
-| `cmd/daemon/daemon.go` | `tango daemon`；内联 configFlag、resolveConfigPath、runDaemonService、runReport、maskURI |
-| `cmd/gateway/gateway.go` | `tango gateway`；内联 configFlag、resolveConfigPath + `config.Load` → `gateway.New` → HTTP |
-| `cmd/cli/cli.go` | `tango cli upload`；`config.Load` → 读 stdin → `cli.Run`，打印统计 JSON |
+| `main.go` | 根 cobra 命令（`NoArgs`）；`config.RegisterFlags` 注册全键 flag；`run` = `config.Load`→Tree → `logging.FromTree`+`Init` → `role.FromTree` 取 mode → `role.Get(mode).Run(ctx, tree)`；含 configFlag/resolveConfigPath |
 
-#### 配置层 `config/`（单一包路径映射 schema；只聚合，不定义字段）
+#### 配置载体 `internal/cfgtree`（依赖中立，只依赖 mapstructure）
 
 | 文件 | 职责 |
 |---|---|
-| `config/config.go` | 统一 `Config`（指针引用各模块 Config，键=包路径）+ `Validate` |
-| `config/load.go` | `Load`（文件<env<flag）+ `setDefaults`（env 绑定）+ `RegisterFlags`（每键注册同名 flag） |
-| `config/defaults.go` | `applyDefaults`：分配 nil 指针段并委托子模块默认值 |
-| `config/loader.go` | viper 装配 helper（env 前缀、decode hook、flag 绑定） |
+| `cfgtree/cfgtree.go` | `Tree`（已物化设置 map + 当前路径）；`New(settings)` / `Sub(key)`（累加路径，不新建子 viper）/ `Into(dst)`（沿路径取子树 + 时长/切片 hook + 弱类型，纯 mapstructure 解码） |
+
+#### 配置层 `config/`（构建 Tree；不定义任何字段，viper 只在此）
+
+| 文件 | 职责 |
+|---|---|
+| `config/config.go` | `registerAll`：枚举各模块 `RegisterDefaults`（唯一知道顶层段列表的地方），无 typed 聚合结构 |
+| `config/load.go` | `Load`（文件<env<flag → `viper.AllSettings` 物化 → `cfgtree.New`）+ `RegisterFlags`（每键注册同名 flag） |
+| `config/loader.go` | viper 装配 helper（`newViper` env 前缀、`readConfigFile`、`bindFlagsTo`） |
 
 #### 全局基础 `internal/logging`
 
@@ -142,7 +160,7 @@ config   -> 各模块 Config 类型（logging/dao/parser/source/process/role(→
 
 | 文件 | 职责 |
 |---|---|
-| `parser/parser.go` | `Parser`：内嵌 `*talog.Parser` + 持有 `*filter.Holder`（`Filter()`）；`New(flt)` |
+| `parser/parser.go` | `Parser`：内嵌 `*talog.Parser` + 持有 `*filter.Holder`（`Filter()`）；`New(flt)`；**talog 门面**：`type Record`/`RecordCategory` 别名 + `CategoryUser`/`CategoryEvent` + `EnvelopeKeys` 重导出 |
 | `parser/talog/parser.go` | `Parser.ParseLine`：TA JSON → `Record` |
 | `parser/talog/record.go` | `Record` + `Category`/`IsUserType`/`IsEventType` |
 | `parser/filter/filter.go` | `Filter`：expr-lang 编译与 `Keep` |
@@ -153,7 +171,7 @@ config   -> 各模块 Config 类型（logging/dao/parser/source/process/role(→
 
 | 文件 | 职责 |
 |---|---|
-| `source/source.go` | `source.Source` 契约：`Run(ctx) <-chan string` |
+| `source/source.go` | `source.Source` 契约：`Run(ctx) <-chan string`；**子包门面**：`NewLines`(httpbody)/`NewReader`(stdin)/`NewTailer`(tailer) 构造器 |
 | `source/config.go` | `source.Config`：聚合 `tailer.Config`（键 source.tailer.*） |
 | `source/httpbody/httpbody.go` | `httpbody.Source`：把预解析的行数组（单条/批量）包成 line channel（gateway/api 用） |
 | `source/stdin/stdin.go` | `stdin.Source`：从 io.Reader/os.Stdin 逐行扫描成 channel（cli 用） |
@@ -164,7 +182,7 @@ config   -> 各模块 Config 类型（logging/dao/parser/source/process/role(→
 
 | 文件 | 职责 |
 |---|---|
-| `dao/dao.go` | `Dao`：显式持有 `Mongo *mongo.MongoResource` + `Store *store.Store`；`New(res, cfg)` 装配 store |
+| `dao/dao.go` | `Dao`：显式持有 `Mongo *mongo.MongoResource` + `Store *store.Store`；`New(res, cfg)` 装配 store；**store 门面**：`type Store = store.Store` 别名 + `UserWriteModel`/`EventWriteModel`/`EventWriteModelSkipExisting`/`DeadLetterModel` 重导出 |
 | `dao/config.go` | `dao.Config`：聚合 `mongo.Config` + `store.Config` |
 | `dao/store/store.go` | `Store` + `store.Config`(MaxElapsedTime) + `WriteStats` + `BulkWrite(Ordered)` + 集合访问器 |
 | `dao/store/identity.go` | `IdentityResolver`：`#account_id`/`#distinct_id` → `#user_id` |
@@ -178,7 +196,7 @@ config   -> 各模块 Config 类型（logging/dao/parser/source/process/role(→
 | 文件 | 职责 |
 |---|---|
 | `process/process.go` | 对外门面：`Uploader` 接口 + `Mode`/`ParseMode`/`Source` + `New(cfg,…)`；`Counters`/`Snapshot`/`WriteOptions` 别名 |
-| `process/core/processor.go` | `core.Processor.Process`：parse→filter→identity→写模型分类（`Kind`/`Result`）；逐行 panic recover |
+| `process/core/processor.go` | `core.Processor.Process`：parse→filter→identity→写模型分类（`Kind`/`Result`）；逐行 panic recover；`NewProcessor(*parser.Parser, *dao.Store, …)` 只依赖 dao/parser 根包门面 |
 | `process/core/stats.go` | `StatsCollector` 接口 + `NoopStats` |
 | `process/core/counters.go` | `Counters`（并发计数器）+ `Snapshot` |
 | `process/single/uploader.go` | `single.Uploader`：逐行即时写（`Run`/`Stop`） |
@@ -195,14 +213,17 @@ config   -> 各模块 Config 类型（logging/dao/parser/source/process/role(→
 
 | 文件 | 职责 |
 |---|---|
-| `role/api/api.go` | 可复用引擎库 `api.Engine`：`New(ctx,dao,proc,filter)`/`Upload(lines)`/`Run(src)`/`EnsureIndexes`/`Close` + `Result` |
-| `role/daemon/report.go` | `daemon.Service`：tailer 源 → 强制 pipeline `process.New(cfg).Run` → MongoDB；周期/最终统计日志 |
-| `role/role.go` | 角色集合包文档 + 角色名常量（`API`/`CLI`/`Daemon`/`Gateway`） |
-| `role/config.go` | `role.Config`：聚合 `daemon`/`gateway` 角色配置 + `ApplyDefaults`/`Validate`/`RegisterDefaults` |
+| `role/role.go` | `Role` 接口（`Run(ctx, cfgtree.Tree) error`）+ `Get(mode) (Role,error)` 派发 + 角色名常量（`API`/`CLI`/`Daemon`/`Gateway`） |
+| `role/config.go` | `role.Config`：聚合 `daemon`/`gateway` + `ApplyDefaults`/`Validate`/`RegisterDefaults` + `FromTree` |
+| `role/api/api.go` | 可复用引擎库 `api.Engine`：`New(ctx, *dao.Config, *process.Config, *parser.Config)`/`Upload(lines)`（经 `source.NewLines`）/`Run(src)`/`EnsureIndexes`/`Close` + `Result`（非可派发角色） |
+| `role/daemon/role.go` | `daemon.Role.Run`：从 Tree 取 dao/parser/source/process → 信号处理 + 启动日志 + `New` → `Run`；含 `maskURI` |
+| `role/daemon/report.go` | `daemon.Service`：持有 `*source.Config`，经 `source.NewTailer(srcCfg.Tailer)` 建源 → 强制 pipeline `process.New(cfg).Run` → MongoDB；周期/最终统计日志 |
 | `role/daemon/config.go` | `daemon.Config`（`role.daemon.*`，暂空，schema 对称用） |
+| `role/gateway/role.go` | `gateway.Role.Run`：从 Tree 取 dao/process/parser + `role.gateway` → `New` → `EnsureIndexes` → `Run(addr)` |
+| `role/gateway/server.go` | gateway `Server`：内嵌 `*api.Engine` + HTTP 面；`New(ctx, *dao.Config, *process.Config, *parser.Config, cfg)`/`Upload`/`EnsureIndexes`/`Close`/`Run`；`/healthz` + 单个 `/upload`（按 `process.mode` 选策略） |
 | `role/gateway/config.go` | `gateway.Config`（仅 `role.gateway.addr`）+ `ApplyDefaults`/`Validate`/`RegisterDefaults` |
-| `role/gateway/server.go` | gateway `Server`：内嵌 `*api.Engine` + HTTP 面；`New(ctx,dao,process,filter,cfg)`/`Upload`/`EnsureIndexes`/`Close`/`Run`；`/healthz` + 单个 `/upload`（按 `process.mode` 选策略） |
-| `role/cli/cli.go` | `cli.Run(ctx,dao,proc,filter,in)`：内嵌 `api.Engine` + `stdin.Source`，一次性上报 |
+| `role/cli/role.go` | `cli.Role.Run`：从 Tree 取 dao/process/parser → `Run(…, os.Stdin)` → 统计 JSON 写 `os.Stdout` |
+| `role/cli/cli.go` | `cli.Run(ctx, *dao.Config, *process.Config, *parser.Config, in)`：内嵌 `api.Engine` + `source.NewReader(in)` 源，一次性上报（核心，被 `cli.Role` 包装） |
 
 ## 4. Daemon Service（daemon 模式）
 
@@ -211,7 +232,8 @@ Tailer -> Dispatcher(按用户亲和性路由) -> Worker[i](Parse -> Filter -> I
 ```
 
 `role/daemon` 将自己的 process 配置拷贝为 `ModePipeline` 后用 `process.New(cfg, …)` 构造 pipeline `Uploader`，再
-`up.Run(ctx, tailerSource)` 驱动流水线（阻塞至 ctx 取消）；命令层 `cmd/daemon` 内联配置解析与 daemon 服务启动逻辑。
+`up.Run(ctx, tailerSource)` 驱动流水线（阻塞至 ctx 取消）；`daemon.Role.Run` 从 `cfgtree.Tree` 取各模块配置、
+安装信号处理（SIGINT/SIGTERM）并启动该服务。
 
 ## 5. HTTP Gateway Service（gateway 模式）
 
@@ -220,20 +242,80 @@ GET  /healthz
 POST /upload   # body: {line?, lines?[]}；上传策略来自 process.mode
 ```
 
-`/upload` 把请求体的日志数组包成 `httpbody.Source`，按 `process.mode` 选上传策略（single/batch/pipeline）
+`/upload` 把请求体的日志数组经 `source.NewLines` 包成 Source，按 `process.mode` 选上传策略（single/batch/pipeline）
 运行，返回本次统计（行数/写入数/死信等）。gateway **只接 httpbody 源**。`Server` 内嵌 `api.Engine`
-引擎；`cmd/gateway` 用 `config.Load` 取共享 `dao` + `process` + `parser.filter` + `role.gateway` 段，
-构造 `gateway.New(ctx, dao, process, filter, cfg)`（处理/过滤配置复用顶层共享模块）。
+引擎；`gateway.Role.Run` 从 `cfgtree.Tree` 裁剪共享的 `dao` + `process` + `parser` 段与角色专属的
+`role.gateway` 段，构造 `gateway.New(ctx, daoCfg, procCfg, parserCfg, cfg)`（处理/过滤配置复用顶层共享模块；
+过滤器随 `parser.Config` 一同传入，而非单独的 `filter.Config`）。
 
 ## 5.1 API 库 / CLI（api / cli 角色）
 
-`role/api` 是可复用引擎 `api.Engine`：`New` 连接 MongoDB，`Upload(lines)` / `Run(src)`
-对任意 `source.Source` 跑 `process.mode` 指定的策略。它被 gateway（httpbody 面）与 cli（stdin 面）内嵌，因此三者
-提供**完全相同**的 single/batch/pipeline 上传能力。`tango cli upload` 从 stdin 读日志数组，`process.mode` 选策略；
-api 无 `cmd/`，作为库 import。
+`role/api` 是可复用引擎 `api.Engine`：`New(ctx, daoCfg, procCfg, parserCfg)` 连接 MongoDB，`Upload(lines)` / `Run(src)`
+对任意 `source.Source` 跑 `process.mode` 指定的策略。它被 gateway（`source.NewLines` 面）与 cli（`source.NewReader` 面）内嵌，
+因此三者提供**完全相同**的 single/batch/pipeline 上传能力。`cli` 角色（`role.mode=cli`）从 stdin 读日志数组、`process.mode` 选策略，
+统计 JSON 写 stdout；`api` 不由 `role.mode` 派发，作为库 import。公共 SDK `client`（`client.New(...).Upload(...)`）
+也内嵌同一 `api.Engine`，见 §7。
 
 ## 6. 上报 filter
 
 上报 filter 作用于所有上报路径（daemon、gateway/cli/api upload），维度为
 `#type` / `#event_name` / 属性，用 include / exclude（expr-lang）表达，
 经 `parser.Config.Build()`（→ `filter.Config.Build()` / `filter.New`）编译。
+
+## 7. 子模块间的函数依赖关系
+
+领域之间**只经根包门面互相调用**（见 §2 约定 1）。下表按"消费方 → 提供方根包"列出实际用到的函数/类型，
+括号内是兄弟领域子包里被门面转出的真正实现，消费方并不直接 import 它。
+
+### 7.1 跨领域函数依赖一览
+
+| 消费方 | 提供方（根包） | 用到的函数 / 类型 | 用途 |
+|---|---|---|---|
+| `process/{core,single,batch,pipeline}` | **dao** | `dao.Store`（=`store.Store` 别名）；`(*Store).Identity().Resolve(ctx, accountID, distinctID)`；`(*Store).BulkWrite`/`BulkWriteOrdered`；`(*Store).UserCollection`/`EventCollection`/`DeadLetterCollection`；`dao.UserWriteModel`/`EventWriteModel`/`EventWriteModelSkipExisting`/`DeadLetterModel` | 身份解析、写模型构造、bulk 写（实现在 `dao/store`） |
+| `process/{core,single,batch,pipeline}` | **parser** | `*parser.Parser`；`(*Parser).ParseLine(line) → *parser.Record`；`(*Parser).Filter() → *filter.Holder`（再 `.Empty()`/`.Keep(doc)`）；`parser.Record` 字段（`Type`/`UUID`/`AccountID`/`DistinctID`/`Doc`）；`(*Record).Category()` + `parser.CategoryUser`/`CategoryEvent`；`parser.EnvelopeKeys` | 解析、过滤、分类、亲和路由键抽取（实现在 `parser/talog`+`parser/filter`） |
+| `process`（root）、`role/{api,daemon}` | **source** | `source.Source`（`Run(ctx) <-chan string` 接口）；`source.NewLines`/`NewReader`/`NewTailer` | 消费日志源 / 构造具体源（实现在 `source/httpbody`+`stdin`+`tailer`） |
+| `role/api` | **dao** | `dao.New(ctx, *dao.Config) → *dao.Dao`；`(*Dao).Store`；`(*Dao).Mongo.Close()`；`(*Store).EnsureIndexes(ctx)` | 连接 MongoDB、建索引、收尾 |
+| `role/api` | **parser** | `(*parser.Config).Build() → *parser.Parser` | 装配解析器（含 filter） |
+| `role/api` | **process** | `process.New(cfg, *dao.Dao, *parser.Parser, *Counters, WriteOptions) → Uploader`；`(Uploader).Run(ctx, Source)`；`process.Counters`/`Snapshot`/`WriteOptions`；`(*process.Config).ModeValue()` | 选策略并驱动上传 |
+| `role/{gateway,cli}` | **role/api** | `api.New(ctx, *dao.Config, *process.Config, *parser.Config) → *Engine`；`(*Engine).Upload`/`Run`/`EnsureIndexes`/`Close`；`api.Result` | 内嵌同一引擎 |
+| `role/daemon` | **dao/parser/source/process** | `dao.New`；`(*parser.Config).Build`；`source.NewTailer(srcCfg.Tailer)`；`process.New(pipelineCfg, …).Run(ctx, tailerSrc)` | 编排长驻流水线 |
+| `client`（公共 SDK） | **role/api** | `api.New(o.ctx, &o.dao, &o.proc, &o.parser)`；`(*Engine).Upload`/`EnsureIndexes`/`Close` | redis-go 风格门面，复用真实 config 结构体 |
+| `config` | **dao/parser/source/process/role/logging** | 各 `(*Config).RegisterDefaults(set, prefix)`；各模块 `FromTree(t)` | 注册全键 + 按子树解码 |
+
+### 7.2 单行上报的函数调用链（运行时数据流）
+
+三种 `Uploader` 的差异只在批量/并发编排，**逐行处理规则共享 `core.Processor.Process`**，
+其内部按下序调用各根包门面（不碰任何兄弟子包）：
+
+```text
+(Uploader).Run(ctx, src)                                   [process/{single,batch,pipeline}]
+ ├─ src.Run(ctx) <-chan string                             [source.Source：NewLines/NewReader/NewTailer 之一]
+ └─ core.Processor.Process(ctx, line):                     [process/core]
+      ├─ (*parser.Parser).ParseLine(line) → *parser.Record       → 失败：dao.DeadLetterModel(line, err)
+      ├─ (*parser.Parser).Filter().Empty()/.Keep(rec.Doc)        → 命中 exclude/不命中 include：丢弃
+      ├─ (*dao.Store).Identity().Resolve(ctx, AccountID, DistinctID) → userID
+      │                                                           → 失败：dao.DeadLetterModel(line, err)
+      └─ switch rec.Category():
+           parser.CategoryUser  → dao.UserWriteModel(rec.Type, userID, rec.Doc)
+           parser.CategoryEvent → dao.EventWriteModel / EventWriteModelSkipExisting(rec.UUID, rec.Doc)
+            （均返回 mongo.WriteModel —— MongoDB 驱动类型，门面不隐藏）
+ └─ (*dao.Store).BulkWrite / BulkWriteOrdered(ctx, coll, models)   [按 user/event/dead_letter 分集合刷写]
+```
+
+pipeline 模式额外用 `parser.EnvelopeKeys` + `ExtractRoutingKey`/`RouteIndex` 做用户亲和性分发，
+保证同一用户的写操作落到同一 worker 顺序执行。
+
+### 7.3 配置装配的函数链
+
+```text
+main → config.Load(文件 < TANGO_* env < flag) → viper.AllSettings 物化 → cfgtree.Tree
+ 角色侧（各取自己那棵子树）：
+   dao.FromTree(t)     = t.Sub("dao").Into(&c)     + ApplyDefaults + Validate
+   parser.FromTree(t)  = t.Sub("parser").Into(&c)  + ApplyDefaults + Validate
+   source.FromTree(t)  = t.Sub("source").Into(&c)  + ApplyDefaults + Validate
+   process.FromTree(t) = t.Sub("process").Into(&c) + ApplyDefaults + Validate
+ 再交给 role/api（或 daemon）的 New(...)：dao.New / parser.Config.Build / process.New。
+```
+
+`client` 不走 `cfgtree`：`With*` 选项直接写入它内嵌的真实 `dao.Config`/`parser.Config`/`process.Config`，
+`client.New` 把三者地址原样交给 `api.New`（与上面角色侧最终调用的 `api.New` 同一入口）。

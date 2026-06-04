@@ -6,7 +6,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 )
@@ -45,9 +44,9 @@ func readConfigFile(v *viper.Viper, path string) error {
 
 // bindFlagsTo binds the flags that were explicitly set on the CLI to the viper
 // key of the SAME name, using viper's native hierarchical model: a flag named
-// "generic.mongo.uri" sets the "generic.mongo.uri" key directly — no alias
-// table. The special --config flag is a file path, not a config key, so it is
-// skipped. Unset flags fall back to file/env/default.
+// "dao.mongo.uri" sets the "dao.mongo.uri" key directly — no alias table. The
+// special --config flag is a file path, not a config key, so it is skipped.
+// Unset flags fall back to file/env/default.
 func bindFlagsTo(v *viper.Viper, flags *pflag.FlagSet) error {
 	if flags == nil {
 		return nil
@@ -62,22 +61,4 @@ func bindFlagsTo(v *viper.Viper, flags *pflag.FlagSet) error {
 		}
 	})
 	return bindErr
-}
-
-// durationDecodeHook returns the mapstructure option used to decode string
-// durations ("30s") and comma-separated string slices from the config.
-func durationDecodeHook() viper.DecoderConfigOption {
-	return viper.DecodeHook(mapstructure.ComposeDecodeHookFunc(
-		mapstructure.StringToTimeDurationHookFunc(),
-		mapstructure.StringToSliceHookFunc(","),
-	))
-}
-
-// weaklyTyped enables mapstructure's loose type coercion. Environment variables
-// always arrive as strings; without this an int field (e.g. pipeline.batchSize)
-// or bool field (e.g. remoteConfig.enabled) set via TANGO_* would fail to decode.
-// Weak typing coerces those strings to the target kind. YAML/JSON values are
-// already typed, so this is a no-op for them.
-func weaklyTyped() viper.DecoderConfigOption {
-	return func(c *mapstructure.DecoderConfig) { c.WeaklyTypedInput = true }
 }

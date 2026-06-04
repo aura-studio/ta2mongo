@@ -13,27 +13,29 @@ import (
 	"rocket-nano/tools/tango/internal/logging"
 	"rocket-nano/tools/tango/internal/parser"
 	"rocket-nano/tools/tango/internal/process"
-	"rocket-nano/tools/tango/internal/source/tailer"
+	"rocket-nano/tools/tango/internal/source"
 )
 
 // statsReportInterval is how often the report service logs processing statistics.
 const statsReportInterval = 60 * time.Second
 
 // Service is the main runtime that connects all components together. It is built
-// from the module configs the daemon needs (dao + parser + tailer source +
-// process), not from the top-level config package.
+// from the module configs the daemon needs (dao + parser + source + process),
+// not from the top-level config package. It depends only on the source package,
+// reaching the file-tailing config through srcCfg.Tailer rather than importing
+// source/tailer directly.
 type Service struct {
 	dao     *dao.Dao
 	parser  *parser.Parser
-	srcCfg  *tailer.Config
+	srcCfg  *source.Config
 	procCfg *process.Config
 }
 
 // New connects to MongoDB and creates a ready-to-run Service from the dao,
-// parser, tailer-source, and process module configs. The caller must call
-// Shutdown after Run returns to disconnect from MongoDB.
-func New(ctx context.Context, daoCfg *dao.Config, parserCfg *parser.Config, srcCfg *tailer.Config, procCfg *process.Config) (*Service, error) {
-	if srcCfg == nil {
+// parser, source, and process module configs. The caller must call Shutdown
+// after Run returns to disconnect from MongoDB.
+func New(ctx context.Context, daoCfg *dao.Config, parserCfg *parser.Config, srcCfg *source.Config, procCfg *process.Config) (*Service, error) {
+	if srcCfg == nil || srcCfg.Tailer == nil {
 		return nil, fmt.Errorf("report: source.tailer configuration is required")
 	}
 	if procCfg == nil {
@@ -70,24 +72,29 @@ func (d *Service) EnsureIndexes(ctx context.Context) error {
 // Flow: tailer -> lineCh -> dispatcher (routes by user affinity) -> workerCh[i] -> worker_i -> MongoDB
 //
 // The dispatcher extracts #account_id (preferred) or #distinct_id from each line
-// and consistently hashes it to a fixed worker. This guarantees that all operations
-// for the same user are processed sequentially by a single worker, preventing
-// out-of-order overwrites across workers.
+// and consistently hashes it to a fixed worker, so on the common path all
+// operations for one user are handled in order by a single worker. This affinity
+// is best-effort: under backpressure (the target worker's channel is full) the
+// dispatcher spills the line to another worker to avoid head-of-line blocking,
+// so strict cross-worker ordering is not guaranteed. Correctness does not rely
+// on it — the write models use _ts conditional updates, so an older record can
+// never overwrite a newer one regardless of which worker applies it.
 func (d *Service) Run(ctx context.Context) error {
-	if len(d.srcCfg.LogPattern) == 0 {
+	tcfg := d.srcCfg.Tailer
+	if len(tcfg.LogPattern) == 0 {
 		return errors.New("report: source.tailer.logPattern is required (at least one regex)")
 	}
 
 	logging.WithFields(logging.Fields{
-		"log_patterns":   d.srcCfg.LogPattern,
+		"log_patterns":   tcfg.LogPattern,
 		"workers":        d.procCfg.Pipeline.BatchWorkers,
 		"batch_size":     d.procCfg.Pipeline.BatchSize,
 		"flush_interval": d.procCfg.Pipeline.FlushInterval,
-		"tail_mode":      d.srcCfg.TailMode,
+		"tail_mode":      tcfg.TailMode,
 	}).Info("report: starting pipeline")
 
-	// Build the tailer source; the pipeline uploader runs it.
-	t := tailer.New(d.srcCfg.LogPattern, d.srcCfg.RescanInterval, d.srcCfg.TailMode).WithTuning(d.srcCfg.PollInterval, d.srcCfg.MaxLineBytes)
+	// Build the tailer source via the source facade; the pipeline uploader runs it.
+	t := source.NewTailer(tcfg)
 
 	// Create stats collector for periodic reporting.
 	stats := &process.Counters{}
@@ -101,7 +108,7 @@ func (d *Service) Run(ctx context.Context) error {
 	// the workers flush and exit.
 	procCfg := *d.procCfg
 	procCfg.Mode = string(process.ModePipeline)
-	up, err := process.New(&procCfg, d.dao, d.parser, stats, process.WriteOptions{})
+	up, err := process.New(&procCfg, d.dao, d.parser, stats)
 	if err != nil {
 		return err
 	}
@@ -187,6 +194,7 @@ func (d *Service) logFinalStats(stats *process.Counters, startTime time.Time) {
 		"total_write_errors": cur.WriteErrors,
 		"total_filtered":     cur.Filtered,
 		"total_filter_err":   cur.FilterErrors,
+		"total_retries":      d.dao.Store.Stats().TotalRetries(),
 		"uptime":             duration,
 	}).Info("report: final stats")
 

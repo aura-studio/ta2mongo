@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -51,13 +52,16 @@ type IdentityResolver struct {
 	mapping *mongo.Collection
 	counter *mongo.Collection
 
-	// In-memory caches. Entries are never evicted because bindings are permanent.
-	// accountCache:  account_id (string) → user_id (int64)
-	// distinctCache: distinct_id (string) → user_id (int64)
-	// distinctBound: distinct_id (string) → true (means already bound to an account_id)
+	// In-memory read-through caches keyed by id → user_id. Entries are never
+	// evicted: bindings are permanent, so a cached value can never go stale.
+	// Trade-off: memory grows unbounded with the number of distinct users seen
+	// over the process lifetime (accountCache + distinctCache entries). This is
+	// acceptable for bounded user bases; if a cap is ever needed, eviction is
+	// safe because MongoDB stays the source of truth and a miss simply re-queries.
+	//   accountCache:  account_id (string) → user_id (int64)
+	//   distinctCache: distinct_id (string) → user_id (int64)
 	accountCache  sync.Map
 	distinctCache sync.Map
-	distinctBound sync.Map
 }
 
 // NewIdentityResolver creates a resolver backed by the given database.
@@ -85,11 +89,6 @@ func (ir *IdentityResolver) EnsureIndexes(ctx context.Context) error {
 	}
 	_, err := ir.mapping.Indexes().CreateMany(ctx, indexes)
 	return err
-}
-
-// MappingCollection returns the id_mapping collection handle.
-func (ir *IdentityResolver) MappingCollection() *mongo.Collection {
-	return ir.mapping
 }
 
 // ---------------------------------------------------------------------------
@@ -224,7 +223,6 @@ func (ir *IdentityResolver) resolveWithBoth(
 			if bound {
 				// Successful bind.
 				ir.accountCache.Store(accountID, distinctMapping.UserID)
-				ir.distinctBound.Store(distinctID, true)
 				return distinctMapping.UserID, nil
 			}
 			// Another pod bound it first → account_id needs its own user.
@@ -319,9 +317,11 @@ func (ir *IdentityResolver) atomicCreateForDistinctID(ctx context.Context, disti
 		return 0, err
 	}
 
-	// Verify no race: check if distinct_id now appears in multiple docs.
-	// If another pod inserted concurrently with the same distinct_id, keep
-	// the one with the smaller user_id and delete ours.
+	// Verify no race: re-read by distinct_id. #distinct_ids has no unique index,
+	// so a concurrent pod may have inserted a different doc with the same
+	// distinct_id. If the lookup returns a doc other than the one we just created,
+	// that doc wins: we drop our orphan and adopt the existing mapping. (The
+	// winner is whichever doc the lookup returns, not a smaller-user_id rule.)
 	existing, findErr := ir.findByDistinctID(ctx, distinctID)
 	if findErr != nil {
 		return 0, findErr
@@ -376,7 +376,6 @@ func (ir *IdentityResolver) atomicCreateForBoth(ctx context.Context, accountID, 
 
 	ir.accountCache.Store(accountID, userID)
 	ir.distinctCache.Store(distinctID, userID)
-	ir.distinctBound.Store(distinctID, true)
 	return userID, nil
 }
 
@@ -424,7 +423,7 @@ func (ir *IdentityResolver) atomicBindAccountToDistinct(ctx context.Context, use
 func (ir *IdentityResolver) findByAccountID(ctx context.Context, accountID string) (*IDMapping, error) {
 	var m IDMapping
 	err := ir.mapping.FindOne(ctx, bson.M{"#account_id": accountID}).Decode(&m)
-	if err == mongo.ErrNoDocuments {
+	if errors.Is(err, mongo.ErrNoDocuments) {
 		return nil, nil
 	}
 	if err != nil {
@@ -436,7 +435,7 @@ func (ir *IdentityResolver) findByAccountID(ctx context.Context, accountID strin
 func (ir *IdentityResolver) findByDistinctID(ctx context.Context, distinctID string) (*IDMapping, error) {
 	var m IDMapping
 	err := ir.mapping.FindOne(ctx, bson.M{"#distinct_ids": distinctID}).Decode(&m)
-	if err == mongo.ErrNoDocuments {
+	if errors.Is(err, mongo.ErrNoDocuments) {
 		return nil, nil
 	}
 	if err != nil {
@@ -459,8 +458,5 @@ func (ir *IdentityResolver) cacheMapping(m *IDMapping) {
 	}
 	for _, did := range m.DistinctIDs {
 		ir.distinctCache.Store(did, m.UserID)
-		if m.AccountID != "" {
-			ir.distinctBound.Store(did, true)
-		}
 	}
 }
