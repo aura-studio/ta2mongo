@@ -1,4 +1,4 @@
-package single
+package core
 
 import (
 	"sync"

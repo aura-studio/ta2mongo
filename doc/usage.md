@@ -83,11 +83,11 @@ import (
     "rocket-nano/tools/tango/internal/role/api"
 )
 
-cli, _ := api.New(ctx, &dao.Config{Mongo: &daomongo.Config{URI: "mongodb://localhost:27017/tango"}}, nil, nil)
-defer cli.Close()
-cli.EnsureIndexes(ctx)
+eng, _ := api.New(ctx, &dao.Config{Mongo: &daomongo.Config{URI: "mongodb://localhost:27017/tango"}}, nil, nil)
+defer eng.Close()
+eng.EnsureIndexes(ctx)
 
-res, _ := cli.Upload(ctx, process.ModeBatch, lines)            // batch
-res, _ = cli.Upload(ctx, process.ModeSingle, []string{line})  // single（逐行即时写）
-res, _ = cli.Upload(ctx, process.ModePipeline, lines)         // pipeline（异步流水线）
+res, _ := eng.Upload(ctx, process.ModeBatch, lines)            // batch
+res, _ = eng.Upload(ctx, process.ModeSingle, []string{line})  // single（逐行即时写）
+res, _ = eng.Upload(ctx, process.ModePipeline, lines)         // pipeline（异步流水线）
 ```

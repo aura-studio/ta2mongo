@@ -7,7 +7,7 @@ import (
 	daostore "rocket-nano/tools/tango/internal/dao/store"
 	"rocket-nano/tools/tango/internal/parser/filter"
 	"rocket-nano/tools/tango/internal/parser/talog"
-	"rocket-nano/tools/tango/internal/process/single"
+	"rocket-nano/tools/tango/internal/process/core"
 	"rocket-nano/tools/tango/internal/source"
 )
 
@@ -20,8 +20,8 @@ type Uploader struct {
 	store  *daostore.Store
 	parser *talog.Parser
 	flt    *filter.Holder
-	stats  single.StatsCollector
-	opts   single.WriteOptions
+	stats  core.StatsCollector
+	opts   core.WriteOptions
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -30,13 +30,13 @@ type Uploader struct {
 // NewUploader builds a pipeline-mode Uploader. A nil cfg is defaulted; a nil
 // filter holder keeps every record; a nil stats collector is treated as a
 // no-op.
-func NewUploader(cfg *Config, st *daostore.Store, parser *talog.Parser, flt *filter.Holder, stats single.StatsCollector, opts single.WriteOptions) *Uploader {
+func NewUploader(cfg *Config, st *daostore.Store, parser *talog.Parser, flt *filter.Holder, stats core.StatsCollector, opts core.WriteOptions) *Uploader {
 	if cfg == nil {
 		cfg = &Config{}
 	}
 	cfg.ApplyDefaults()
 	if stats == nil {
-		stats = single.NoopStats{}
+		stats = core.NoopStats{}
 	}
 	return &Uploader{cfg: cfg, store: st, parser: parser, flt: flt, stats: stats, opts: opts}
 }

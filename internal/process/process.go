@@ -18,6 +18,7 @@ import (
 	"rocket-nano/tools/tango/internal/dao"
 	"rocket-nano/tools/tango/internal/parser"
 	"rocket-nano/tools/tango/internal/process/batch"
+	"rocket-nano/tools/tango/internal/process/core"
 	"rocket-nano/tools/tango/internal/process/pipeline"
 	"rocket-nano/tools/tango/internal/process/single"
 	"rocket-nano/tools/tango/internal/source"
@@ -25,13 +26,13 @@ import (
 
 // Counters accumulates per-line processing statistics shared by all three
 // strategies.
-type Counters = single.Counters
+type Counters = core.Counters
 
 // Snapshot is an immutable read of a Counters at a point in time.
-type Snapshot = single.Snapshot
+type Snapshot = core.Snapshot
 
 // WriteOptions tunes write-side behaviour shared by all three strategies.
-type WriteOptions = single.WriteOptions
+type WriteOptions = core.WriteOptions
 
 // Source is the line-source contract the uploaders consume. source/httpbody and
 // source/tailer satisfy it.
@@ -84,7 +85,7 @@ func New(mode Mode, cfg *Config, d *dao.Dao, p *parser.Parser, stats *Counters, 
 	}
 	cfg.ApplyDefaults()
 
-	var sc single.StatsCollector = single.NoopStats{}
+	var sc core.StatsCollector = core.NoopStats{}
 	if stats != nil {
 		sc = stats
 	}

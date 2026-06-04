@@ -11,7 +11,7 @@ import (
 	"rocket-nano/tools/tango/internal/logging"
 	"rocket-nano/tools/tango/internal/parser/filter"
 	"rocket-nano/tools/tango/internal/parser/talog"
-	"rocket-nano/tools/tango/internal/process/single"
+	"rocket-nano/tools/tango/internal/process/core"
 )
 
 // RunWorkers launches N workers with affinity-based dispatch and blocks
@@ -19,10 +19,10 @@ import (
 // Holder so the active filter can be hot-swapped while workers run.
 func RunWorkers(ctx context.Context, cfg *Config, st *daostore.Store,
 	parser *talog.Parser, flt *filter.Holder,
-	lineCh <-chan string, stats single.StatsCollector, opts single.WriteOptions,
+	lineCh <-chan string, stats core.StatsCollector, opts core.WriteOptions,
 ) {
 	if stats == nil {
-		stats = single.NoopStats{}
+		stats = core.NoopStats{}
 	}
 
 	workerCount := cfg.BatchWorkers
@@ -55,14 +55,14 @@ func RunWorkers(ctx context.Context, cfg *Config, st *daostore.Store,
 }
 
 // worker processes lines from a channel, batches them, and flushes to MongoDB.
-// Per-line parse/filter/identity/route rules live in single.Processor; the
+// Per-line parse/filter/identity/route rules live in core.Processor; the
 // worker owns only batching, the dynamic flush cadence, and the affinity-local
 // dead-letter logging.
 func worker(ctx context.Context, cfg *Config, st *daostore.Store,
 	parser *talog.Parser, flt *filter.Holder,
-	lineCh <-chan string, stats single.StatsCollector, opts single.WriteOptions,
+	lineCh <-chan string, stats core.StatsCollector, opts core.WriteOptions,
 ) {
-	proc := single.NewProcessor(parser, flt, st, stats, opts)
+	proc := core.NewProcessor(parser, flt, st, stats, opts)
 
 	userBatch := NewBatch(cfg.MaxBatchSize())
 	eventBatch := NewBatch(cfg.MaxBatchSize())
@@ -96,7 +96,7 @@ func worker(ctx context.Context, cfg *Config, st *daostore.Store,
 
 			res := proc.Process(ctx, line)
 			switch res.Kind {
-			case single.KindParseError:
+			case core.KindParseError:
 				invalidCount++
 				if invalidCount%1000 == 0 {
 					logging.WithError(res.Err).Warnf("dropped invalid line (total invalid=%d)", invalidCount)
@@ -106,15 +106,15 @@ func worker(ctx context.Context, cfg *Config, st *daostore.Store,
 					flush(ctx)
 				}
 				continue
-			case single.KindIdentityError:
+			case core.KindIdentityError:
 				logging.WithError(res.Err).Warn("identity resolve failed, sending to dead letter")
 				deadBatch.Add(res.Model)
 				continue
-			case single.KindFiltered:
+			case core.KindFiltered:
 				continue
-			case single.KindUser:
+			case core.KindUser:
 				userBatch.Add(res.Model)
-			case single.KindEvent:
+			case core.KindEvent:
 				eventBatch.Add(res.Model)
 			}
 
@@ -152,7 +152,7 @@ func worker(ctx context.Context, cfg *Config, st *daostore.Store,
 
 // flushBatch writes a batch to the given collection (unordered) and resets it.
 func flushBatch(ctx context.Context, st *daostore.Store,
-	coll *mongo.Collection, b *Batch, stats single.StatsCollector,
+	coll *mongo.Collection, b *Batch, stats core.StatsCollector,
 ) {
 	if b.Empty() {
 		return
@@ -168,7 +168,7 @@ func flushBatch(ctx context.Context, st *daostore.Store,
 // flushBatchOrdered writes a batch to the given collection with ordered writes
 // to guarantee that operations within the batch are applied sequentially.
 func flushBatchOrdered(ctx context.Context, st *daostore.Store,
-	coll *mongo.Collection, b *Batch, stats single.StatsCollector,
+	coll *mongo.Collection, b *Batch, stats core.StatsCollector,
 ) {
 	if b.Empty() {
 		return

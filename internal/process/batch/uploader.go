@@ -6,7 +6,7 @@
 // processing is single-goroutine and flushes deterministically on the batch-size
 // threshold and at end-of-source. The per-line rules (parse -> filter ->
 // identity -> write model / dead letter) are shared with the other strategies
-// via internal/process/single.Processor; this package only owns batching and the
+// via internal/process/core.Processor; this package only owns batching and the
 // bulk flush.
 package batch
 
@@ -20,7 +20,7 @@ import (
 	daostore "rocket-nano/tools/tango/internal/dao/store"
 	"rocket-nano/tools/tango/internal/parser/filter"
 	"rocket-nano/tools/tango/internal/parser/talog"
-	"rocket-nano/tools/tango/internal/process/single"
+	"rocket-nano/tools/tango/internal/process/core"
 	"rocket-nano/tools/tango/internal/source"
 )
 
@@ -30,9 +30,9 @@ const DefaultBatchSize = 1000
 // Uploader is the "batch" upload strategy: drain the source, accumulate write
 // models, and flush them in bulk writes of at most batchSize records.
 type Uploader struct {
-	proc      *single.Processor
+	proc      *core.Processor
 	store     *daostore.Store
-	stats     single.StatsCollector
+	stats     core.StatsCollector
 	batchSize int
 
 	mu     sync.Mutex
@@ -42,15 +42,15 @@ type Uploader struct {
 // NewUploader builds a batch-mode Uploader. A non-positive batchSize falls back
 // to DefaultBatchSize; a nil filter holder keeps every record; a nil stats
 // collector is treated as a no-op.
-func NewUploader(st *daostore.Store, parser *talog.Parser, flt *filter.Holder, batchSize int, stats single.StatsCollector, opts single.WriteOptions) *Uploader {
+func NewUploader(st *daostore.Store, parser *talog.Parser, flt *filter.Holder, batchSize int, stats core.StatsCollector, opts core.WriteOptions) *Uploader {
 	if batchSize <= 0 {
 		batchSize = DefaultBatchSize
 	}
 	if stats == nil {
-		stats = single.NoopStats{}
+		stats = core.NoopStats{}
 	}
 	return &Uploader{
-		proc:      single.NewProcessor(parser, flt, st, stats, opts),
+		proc:      core.NewProcessor(parser, flt, st, stats, opts),
 		store:     st,
 		stats:     stats,
 		batchSize: batchSize,
@@ -94,13 +94,13 @@ func (u *Uploader) Run(ctx context.Context, src source.Source) error {
 			}
 			res := u.proc.Process(ctx, line)
 			switch res.Kind {
-			case single.KindParseError, single.KindIdentityError:
+			case core.KindParseError, core.KindIdentityError:
 				deadModels = append(deadModels, res.Model)
-			case single.KindFiltered:
+			case core.KindFiltered:
 				continue
-			case single.KindUser:
+			case core.KindUser:
 				userModels = append(userModels, res.Model)
-			case single.KindEvent:
+			case core.KindEvent:
 				eventModels = append(eventModels, res.Model)
 			}
 			if pending++; pending >= u.batchSize {

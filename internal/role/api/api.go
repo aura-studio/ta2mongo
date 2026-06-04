@@ -9,11 +9,11 @@
 //
 // Usage:
 //
-//	cli, err := api.New(ctx, &dao.Config{Mongo: &mongo.Config{URI: uri}}, nil, nil)
+//	eng, err := api.New(ctx, &dao.Config{Mongo: &mongo.Config{URI: uri}}, nil, nil)
 //	if err != nil { ... }
-//	defer cli.Close()
-//	cli.EnsureIndexes(ctx)
-//	res, _ := cli.Upload(ctx, process.ModeBatch, lines)
+//	defer eng.Close()
+//	eng.EnsureIndexes(ctx)
+//	res, _ := eng.Upload(ctx, process.ModeBatch, lines)
 package api
 
 import (
@@ -38,20 +38,20 @@ type Result struct {
 	Filtered    int64 `json:"filtered"`
 }
 
-// Client is the connection-pool-backed ingestion engine. It is safe for
+// Engine is the connection-pool-backed ingestion engine. It is safe for
 // concurrent use; the MongoDB driver manages the pool, and each upload run uses
 // its own stats collector.
-type Client struct {
-	dao    *dao.Dao
-	parser *parser.Parser
-	cfg    *process.Config
+type Engine struct {
+	dao     *dao.Dao
+	parser  *parser.Parser
+	procCfg *process.Config
 }
 
 // New connects to MongoDB and builds the engine. procCfg tunes the single/batch
 // flush size and the pipeline worker pool (nil uses defaults); filterCfg is the
 // optional reporting filter applied to every line (nil keeps everything). The
 // caller must Close it.
-func New(ctx context.Context, daoCfg *dao.Config, procCfg *process.Config, filterCfg *filter.Config) (*Client, error) {
+func New(ctx context.Context, daoCfg *dao.Config, procCfg *process.Config, filterCfg *filter.Config) (*Engine, error) {
 	if daoCfg == nil || daoCfg.Mongo == nil || daoCfg.Mongo.URI == "" {
 		return nil, fmt.Errorf("api: MongoDB URI is required")
 	}
@@ -72,16 +72,16 @@ func New(ctx context.Context, daoCfg *dao.Config, procCfg *process.Config, filte
 	}
 	procCfg.ApplyDefaults()
 
-	return &Client{dao: da, parser: p, cfg: procCfg}, nil
+	return &Engine{dao: da, parser: p, procCfg: procCfg}, nil
 }
 
 // Close disconnects from MongoDB and releases all resources.
-func (c *Client) Close() error {
+func (c *Engine) Close() error {
 	return c.dao.Mongo.Close()
 }
 
 // EnsureIndexes creates all required MongoDB indexes (idempotent).
-func (c *Client) EnsureIndexes(ctx context.Context) error {
+func (c *Engine) EnsureIndexes(ctx context.Context) error {
 	return c.dao.Store.EnsureIndexes(ctx)
 }
 
@@ -90,9 +90,9 @@ func (c *Client) EnsureIndexes(ctx context.Context) error {
 // to parse or resolve identity are routed to dead_letter (counted in the
 // result) rather than returned as errors; a non-nil error indicates a bulk
 // write failure or an unknown mode.
-func (c *Client) Run(ctx context.Context, mode process.Mode, src source.Source) (Result, error) {
+func (c *Engine) Run(ctx context.Context, mode process.Mode, src source.Source) (Result, error) {
 	stats := &process.Counters{}
-	up, err := process.New(mode, c.cfg, c.dao, c.parser, stats, process.WriteOptions{})
+	up, err := process.New(mode, c.procCfg, c.dao, c.parser, stats, process.WriteOptions{})
 	if err != nil {
 		return Result{}, err
 	}
@@ -117,6 +117,6 @@ func (c *Client) Run(ctx context.Context, mode process.Mode, src source.Source) 
 
 // Upload wraps lines as an httpbody source and runs them with the given mode.
 // It is a convenience over Run for the common in-memory case.
-func (c *Client) Upload(ctx context.Context, mode process.Mode, lines []string) (Result, error) {
+func (c *Engine) Upload(ctx context.Context, mode process.Mode, lines []string) (Result, error) {
 	return c.Run(ctx, mode, httpbody.New(lines))
 }

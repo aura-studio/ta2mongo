@@ -24,7 +24,7 @@ daemon 是长驻的 pipeline 流水线。api 只作为库使用，没有对应�
    子包是其实现细节。已建立的根包：
    - `internal/dao`（`Dao` 显式持有 `Mongo` + `Store`，`dao.Config` 聚合 mongo/store 配置）整合 `dao/store` + `dao/mongo`
    - `internal/parser`（`Parser` 内嵌 `*talog.Parser`，持有 filter）整合 `parser/talog` + `parser/filter`
-   - `internal/process`（`process.go`）整合 `process/single` + `process/batch` + `process/pipeline`
+   - `internal/process`（`process.go`）整合 `process/core`（共享 Processor/stats）+ `process/single` + `process/batch` + `process/pipeline`
    - `internal/role` 是运行模式集合：`daemon` / `gateway` / `cli` / `api`
    - `internal/source` 是数据来源集合：`source.Source` 契约（`Run(ctx) <-chan string`）+ `source/httpbody`（HTTP 请求体，gateway/api 用）/ `source/tailer`（文件追尾，daemon 用）/ `source/stdin`（控制台，cli 用）/ `source/taapi`（占位）
    - 6 个根包统一文件形态：`<包名>.go`（主类型/逻辑/包文档）+ `config.go`（该领域的 `Config` 聚合）。
@@ -85,14 +85,15 @@ daemon 是长驻的 pipeline 流水线。api 只作为库使用，没有对应�
     │   ├── store/    # MongoDB 持久化 + store.Config
     │   └── mongo/    # 连接装配 + mongo.Config + MongoDBFromURI
     ├── process/    # process.go 统一管理三种上传方式（唯一对外入口；Uploader 接口 + New）
-    │   ├── single/  # 逐行即时写 Uploader + 共享 Processor（parse→filter→identity→写模型）
+    │   ├── core/    # 共享 Processor（parse→filter→identity→写模型）+ stats（Counters/StatsCollector）
+    │   ├── single/  # 逐行即时写 Uploader
     │   ├── batch/   # 同步批量 Uploader（累积 + bulk flush）
     │   └── pipeline/# 异步 N-worker 流水线 Uploader + pipeline.Config + dynamicbatch
-    └── role/       # 运行角色（role.Config 聚合 gateway）
-        ├── api/     # 可复用引擎库：api.Client（New/Upload/Run/EnsureIndexes/Close）
+    └── role/       # 运行角色（role.Config 聚合 daemon/gateway）
+        ├── api/     # 可复用引擎库：api.Engine（New/Upload/Run/EnsureIndexes/Close）
         ├── daemon/  # daemon 常驻服务（report.Service，pipeline + tailer）
-        ├── gateway/ # HTTP gateway：内嵌 api.Client + /upload；gateway.Config（role.gateway.*）
-        └── cli/     # 命令行：内嵌 api.Client + stdin 源
+        ├── gateway/ # HTTP gateway：内嵌 api.Engine + /upload；gateway.Config（role.gateway.*）
+        └── cli/     # 命令行：内嵌 api.Engine + stdin 源
 ```
 
 依赖方向：
@@ -177,10 +178,10 @@ config   -> 各模块 Config 类型（logging/dao/parser/source/process/role(→
 | 文件 | 职责 |
 |---|---|
 | `process/process.go` | 对外门面：`Uploader` 接口 + `Mode`/`ParseMode`/`Source` + `New(mode,…)`；`Counters`/`Snapshot`/`WriteOptions` 别名 |
-| `process/single/processor.go` | `Processor.Process`：parse→filter→identity→写模型分类（`Kind`/`Result`） |
+| `process/core/processor.go` | `core.Processor.Process`：parse→filter→identity→写模型分类（`Kind`/`Result`）；逐行 panic recover |
+| `process/core/stats.go` | `StatsCollector` 接口 + `NoopStats` |
+| `process/core/counters.go` | `Counters`（并发计数器）+ `Snapshot` |
 | `process/single/uploader.go` | `single.Uploader`：逐行即时写（`Run`/`Stop`） |
-| `process/single/stats.go` | `StatsCollector` 接口 + `NoopStats` |
-| `process/single/counters.go` | `Counters`（并发计数器）+ `Snapshot` |
 | `process/batch/uploader.go` | `batch.Uploader`：drain 源 → 累积写模型 → bulk flush（`Run`/`Stop`） |
 | `process/pipeline/uploader.go` | `pipeline.Uploader`：包装 `RunWorkers`（`Run`/`Stop`） |
 | `process/pipeline/worker.go` | `RunWorkers`/`worker`：N 并发 + 批累积 + 动态刷新 |
@@ -194,14 +195,14 @@ config   -> 各模块 Config 类型（logging/dao/parser/source/process/role(→
 
 | 文件 | 职责 |
 |---|---|
-| `role/api/api.go` | 可复用引擎库 `api.Client`：`New(ctx,dao,proc,filter)`/`Upload(mode,lines)`/`Run(mode,src)`/`EnsureIndexes`/`Close` + `Result` |
+| `role/api/api.go` | 可复用引擎库 `api.Engine`：`New(ctx,dao,proc,filter)`/`Upload(mode,lines)`/`Run(mode,src)`/`EnsureIndexes`/`Close` + `Result` |
 | `role/daemon/report.go` | `daemon.Service`：tailer 源 → `process.New(ModePipeline).Run` → MongoDB；周期/最终统计日志 |
 | `role/role.go` | 角色集合包文档 + 角色名常量（`API`/`CLI`/`Daemon`/`Gateway`） |
 | `role/config.go` | `role.Config`：聚合 `daemon`/`gateway` 角色配置 + `ApplyDefaults`/`Validate`/`RegisterDefaults` |
 | `role/daemon/config.go` | `daemon.Config`（`role.daemon.*`，暂空，schema 对称用） |
 | `role/gateway/config.go` | `gateway.Config`（仅 `role.gateway.addr` + `defaultMode`）+ `ApplyDefaults`/`Validate`/`RegisterDefaults` |
-| `role/gateway/server.go` | gateway `Server`：内嵌 `*api.Client` + HTTP 面；`New(ctx,dao,process,filter,cfg)`/`Upload`/`EnsureIndexes`/`Close`/`Run`；`/healthz` + 单个 `/upload`（按 mode 选策略） |
-| `role/cli/cli.go` | `cli.Run(ctx,dao,proc,filter,mode,in)`：内嵌 `api.Client` + `stdin.Source`，一次性上报 |
+| `role/gateway/server.go` | gateway `Server`：内嵌 `*api.Engine` + HTTP 面；`New(ctx,dao,process,filter,cfg)`/`Upload`/`EnsureIndexes`/`Close`/`Run`；`/healthz` + 单个 `/upload`（按 mode 选策略） |
+| `role/cli/cli.go` | `cli.Run(ctx,dao,proc,filter,mode,in)`：内嵌 `api.Engine` + `stdin.Source`，一次性上报 |
 
 ## 4. Daemon Service（daemon 模式）
 
@@ -220,13 +221,13 @@ POST /upload   # body: {mode?: single|batch|pipeline, line?, lines?[]}；mode �
 ```
 
 `/upload` 把请求体的日志数组包成 `httpbody.Source`，按 `mode` 选上传策略（single/batch/pipeline）
-运行，返回本次统计（行数/写入数/死信等）。gateway **只接 httpbody 源**。`Server` 内嵌 `api.Client`
+运行，返回本次统计（行数/写入数/死信等）。gateway **只接 httpbody 源**。`Server` 内嵌 `api.Engine`
 引擎；`cmd/gateway` 用 `config.Load` 取共享 `dao` + `process` + `parser.filter` + `role.gateway` 段，
 构造 `gateway.New(ctx, dao, process, filter, cfg)`（处理/过滤配置复用顶层共享模块）。
 
 ## 5.1 API 库 / CLI（api / cli 角色）
 
-`role/api` 是可复用引擎 `api.Client`：`New` 连接 MongoDB，`Upload(mode, lines)` / `Run(mode, src)`
+`role/api` 是可复用引擎 `api.Engine`：`New` 连接 MongoDB，`Upload(mode, lines)` / `Run(mode, src)`
 对任意 `source.Source` 跑三种策略之一。它被 gateway（httpbody 面）与 cli（stdin 面）内嵌，因此三者
 提供**完全相同**的 single/batch/pipeline 上传能力。`tango cli` 从 stdin 读日志数组，`--mode` 选策略；
 api 无 `cmd/`，作为库 import。

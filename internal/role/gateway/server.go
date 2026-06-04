@@ -19,7 +19,7 @@ import (
 // is safe for concurrent use from multiple goroutines.
 type Server struct {
 	defaultMode string
-	engine      *api.Client
+	engine      *api.Engine
 }
 
 // New builds a Server, connecting to MongoDB via the api engine. It is wired

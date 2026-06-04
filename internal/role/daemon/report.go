@@ -23,10 +23,10 @@ const statsReportInterval = 60 * time.Second
 // from the module configs the daemon needs (dao + parser + tailer source +
 // process), not from the top-level config package.
 type Service struct {
-	dao    *dao.Dao
-	parser *parser.Parser
-	src    *tailer.Config
-	proc   *process.Config
+	dao     *dao.Dao
+	parser  *parser.Parser
+	srcCfg  *tailer.Config
+	procCfg *process.Config
 }
 
 // New connects to MongoDB and creates a ready-to-run Service from the dao,
@@ -51,7 +51,7 @@ func New(ctx context.Context, daoCfg *dao.Config, parserCfg *parser.Config, srcC
 		return nil, fmt.Errorf("report: %w", err)
 	}
 
-	return &Service{dao: da, parser: p, src: srcCfg, proc: procCfg}, nil
+	return &Service{dao: da, parser: p, srcCfg: srcCfg, procCfg: procCfg}, nil
 }
 
 // Shutdown disconnects the MongoDB client. It must be called after Run returns
@@ -74,20 +74,20 @@ func (d *Service) EnsureIndexes(ctx context.Context) error {
 // for the same user are processed sequentially by a single worker, preventing
 // out-of-order overwrites across workers.
 func (d *Service) Run(ctx context.Context) error {
-	if len(d.src.LogPattern) == 0 {
+	if len(d.srcCfg.LogPattern) == 0 {
 		return errors.New("report: source.tailer.logPattern is required (at least one regex)")
 	}
 
 	logging.WithFields(logging.Fields{
-		"log_patterns":   d.src.LogPattern,
-		"workers":        d.proc.Pipeline.BatchWorkers,
-		"batch_size":     d.proc.Pipeline.BatchSize,
-		"flush_interval": d.proc.Pipeline.FlushInterval,
-		"tail_mode":      d.src.TailMode,
+		"log_patterns":   d.srcCfg.LogPattern,
+		"workers":        d.procCfg.Pipeline.BatchWorkers,
+		"batch_size":     d.procCfg.Pipeline.BatchSize,
+		"flush_interval": d.procCfg.Pipeline.FlushInterval,
+		"tail_mode":      d.srcCfg.TailMode,
 	}).Info("report: starting pipeline")
 
 	// Build the tailer source; the pipeline uploader runs it.
-	t := tailer.New(d.src.LogPattern, d.src.RescanInterval, d.src.TailMode).WithTuning(d.src.PollInterval, d.src.MaxLineBytes)
+	t := tailer.New(d.srcCfg.LogPattern, d.srcCfg.RescanInterval, d.srcCfg.TailMode).WithTuning(d.srcCfg.PollInterval, d.srcCfg.MaxLineBytes)
 
 	// Create stats collector for periodic reporting.
 	stats := &process.Counters{}
@@ -99,7 +99,7 @@ func (d *Service) Run(ctx context.Context) error {
 
 	// Drive the async pipeline strategy; it blocks until ctx is cancelled, then
 	// the workers flush and exit.
-	up, err := process.New(process.ModePipeline, d.proc, d.dao, d.parser, stats, process.WriteOptions{})
+	up, err := process.New(process.ModePipeline, d.procCfg, d.dao, d.parser, stats, process.WriteOptions{})
 	if err != nil {
 		return err
 	}

@@ -10,6 +10,7 @@ import (
 	"rocket-nano/tools/tango/internal/logging"
 	"rocket-nano/tools/tango/internal/parser/filter"
 	"rocket-nano/tools/tango/internal/parser/talog"
+	"rocket-nano/tools/tango/internal/process/core"
 	"rocket-nano/tools/tango/internal/source"
 )
 
@@ -21,9 +22,9 @@ import (
 // other strategies it consumes a source carrying an array of log lines; it just
 // commits each line on its own rather than accumulating a batch.
 type Uploader struct {
-	proc  *Processor
+	proc  *core.Processor
 	store *daostore.Store
-	stats StatsCollector
+	stats core.StatsCollector
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -31,12 +32,12 @@ type Uploader struct {
 
 // NewUploader builds a single-mode Uploader. A nil filter holder keeps every
 // record; a nil stats collector is treated as a no-op.
-func NewUploader(st *daostore.Store, parser *talog.Parser, flt *filter.Holder, stats StatsCollector, opts WriteOptions) *Uploader {
+func NewUploader(st *daostore.Store, parser *talog.Parser, flt *filter.Holder, stats core.StatsCollector, opts core.WriteOptions) *Uploader {
 	if stats == nil {
-		stats = NoopStats{}
+		stats = core.NoopStats{}
 	}
 	return &Uploader{
-		proc:  NewProcessor(parser, flt, st, stats, opts),
+		proc:  core.NewProcessor(parser, flt, st, stats, opts),
 		store: st,
 		stats: stats,
 	}
@@ -84,18 +85,18 @@ func (u *Uploader) setCancel(cancel context.CancelFunc) {
 
 // write commits one classified Result to MongoDB. User writes use ordered bulk
 // writes to preserve per-user operation sequence.
-func (u *Uploader) write(ctx context.Context, res Result) {
+func (u *Uploader) write(ctx context.Context, res core.Result) {
 	switch res.Kind {
-	case KindParseError, KindIdentityError:
+	case core.KindParseError, core.KindIdentityError:
 		u.writeDeadLetter(ctx, res.Model)
-	case KindFiltered:
+	case core.KindFiltered:
 		// intentionally discarded
-	case KindUser:
+	case core.KindUser:
 		if err := u.store.BulkWriteOrdered(ctx, u.store.UserCollection(), []drivermongo.WriteModel{res.Model}); err != nil {
 			u.stats.OnWriteError()
 			logging.WithError(err).Error("single: write user failed")
 		}
-	case KindEvent:
+	case core.KindEvent:
 		if err := u.store.BulkWrite(ctx, u.store.EventCollection(), []drivermongo.WriteModel{res.Model}); err != nil {
 			u.stats.OnWriteError()
 			logging.WithError(err).Error("single: write event failed")
