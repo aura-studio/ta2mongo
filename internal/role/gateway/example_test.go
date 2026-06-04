@@ -13,7 +13,8 @@ func ExampleServer_Upload() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	srv, err := New(ctx, &dao.Config{Mongo: &daomongo.Config{URI: "mongodb://localhost:27017/tango"}}, nil, nil, Config{})
+	procCfg := &process.Config{Mode: string(process.ModeBatch)}
+	srv, err := New(ctx, &dao.Config{Mongo: &daomongo.Config{URI: "mongodb://localhost:27017/tango"}}, procCfg, nil, Config{})
 	if err != nil {
 		return
 	}
@@ -21,14 +22,9 @@ func ExampleServer_Upload() {
 
 	_ = srv.EnsureIndexes(ctx)
 
-	// batch mode (an array of lines, flushed in bulk)
-	_, _ = srv.Upload(ctx, process.ModeBatch, []string{
+	// process.mode=batch: an array of lines, flushed in bulk.
+	_, _ = srv.Upload(ctx, []string{
 		`{"#type":"track","#event_name":"login","#time":"2024-01-01","#uuid":"u1","#account_id":"alice","#distinct_id":"dev123"}`,
 		`{"#type":"track","#event_name":"click","#time":"2024-01-02","#uuid":"u2","#account_id":"alice","#distinct_id":"dev123"}`,
-	})
-
-	// single mode (one line, written immediately)
-	_, _ = srv.Upload(ctx, process.ModeSingle, []string{
-		`{"#type":"track","#event_name":"logout","#time":"2024-01-03","#uuid":"u3","#account_id":"alice","#distinct_id":"dev123"}`,
 	})
 }

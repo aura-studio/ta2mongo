@@ -48,20 +48,21 @@ type harness struct {
 	db  *mongo.Database
 }
 
-// upload runs the given mode and fails the test on error.
-func (h *harness) upload(mode process.Mode, lines ...string) api.Result {
+// upload runs with the server's configured process.mode and fails the test on
+// error.
+func (h *harness) upload(lines ...string) api.Result {
 	h.t.Helper()
-	res, err := h.srv.Upload(context.Background(), mode, lines)
+	res, err := h.srv.Upload(context.Background(), lines)
 	if err != nil {
-		h.t.Fatalf("upload(%s): %v", mode, err)
+		h.t.Fatalf("upload: %v", err)
 	}
 	return res
 }
 
-func (h *harness) single(lines ...string) api.Result { return h.upload(process.ModeSingle, lines...) }
-func (h *harness) batch(lines ...string) api.Result  { return h.upload(process.ModeBatch, lines...) }
+func (h *harness) single(lines ...string) api.Result { return h.upload(lines...) }
+func (h *harness) batch(lines ...string) api.Result  { return h.upload(lines...) }
 
-func testServerSetup(t *testing.T) (*harness, func()) {
+func testServerSetup(t *testing.T, mode process.Mode) (*harness, func()) {
 	t.Helper()
 	pingMongo(t)
 
@@ -69,7 +70,7 @@ func testServerSetup(t *testing.T) (*harness, func()) {
 	dbName := fmt.Sprintf("tango_gw_test_%d_%d", time.Now().UnixNano(), rand.Intn(10000))
 	uri := testMongoURI + "/" + dbName
 
-	srv, err := New(ctx, &dao.Config{Mongo: &daomongo.Config{URI: uri}}, nil, nil, Config{})
+	srv, err := New(ctx, &dao.Config{Mongo: &daomongo.Config{URI: uri}}, &process.Config{Mode: string(mode)}, nil, Config{})
 	if err != nil {
 		t.Fatalf("create server: %v", err)
 	}
@@ -96,7 +97,7 @@ func testServerSetup(t *testing.T) (*harness, func()) {
 // ---------------------------------------------------------------------------
 
 func TestServer_Single_Track(t *testing.T) {
-	h, cleanup := testServerSetup(t)
+	h, cleanup := testServerSetup(t, process.ModeSingle)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -119,7 +120,7 @@ func TestServer_Single_Track(t *testing.T) {
 }
 
 func TestServer_Single_UserSet(t *testing.T) {
-	h, cleanup := testServerSetup(t)
+	h, cleanup := testServerSetup(t, process.ModeSingle)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -136,7 +137,7 @@ func TestServer_Single_UserSet(t *testing.T) {
 }
 
 func TestServer_Single_InvalidLine(t *testing.T) {
-	h, cleanup := testServerSetup(t)
+	h, cleanup := testServerSetup(t, process.ModeSingle)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -158,7 +159,7 @@ func TestServer_Single_InvalidLine(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestServer_Batch_Mixed(t *testing.T) {
-	h, cleanup := testServerSetup(t)
+	h, cleanup := testServerSetup(t, process.ModeBatch)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -186,7 +187,7 @@ func TestServer_Batch_Mixed(t *testing.T) {
 }
 
 func TestServer_Batch_Large(t *testing.T) {
-	h, cleanup := testServerSetup(t)
+	h, cleanup := testServerSetup(t, process.ModeBatch)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -213,12 +214,12 @@ func TestServer_Batch_Large(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestServer_Pipeline_Track(t *testing.T) {
-	h, cleanup := testServerSetup(t)
+	h, cleanup := testServerSetup(t, process.ModePipeline)
 	defer cleanup()
 
 	ctx := context.Background()
 
-	h.upload(process.ModePipeline,
+	h.upload(
 		`{"#type":"track","#event_name":"e1","#time":"2024-01-01","#uuid":"gw-pipe-1","#account_id":"gp1"}`,
 		`{"#type":"track","#event_name":"e2","#time":"2024-01-01","#uuid":"gw-pipe-2","#account_id":"gp1"}`,
 	)
@@ -234,7 +235,7 @@ func TestServer_Pipeline_Track(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestServer_EnsureIndexes_Idempotent(t *testing.T) {
-	h, cleanup := testServerSetup(t)
+	h, cleanup := testServerSetup(t, process.ModeBatch)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -247,7 +248,7 @@ func TestServer_EnsureIndexes_Idempotent(t *testing.T) {
 }
 
 func TestServer_EndToEnd_FullFlow(t *testing.T) {
-	h, cleanup := testServerSetup(t)
+	h, cleanup := testServerSetup(t, process.ModeSingle)
 	defer cleanup()
 
 	ctx := context.Background()

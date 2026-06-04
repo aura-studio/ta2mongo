@@ -7,9 +7,9 @@
 所有角色共用**单一 schema**，且**配置键路径 = 消费它的包路径**（`internal/` 下）。
 最外层 `config` 包不定义任何字段，只做加载/覆盖；每个角色只取自己需要的段。
 
-**角色由子命令指定**（`daemon`/`gateway`/`cli`），不在配置里指明。**三个途径完全一致**：
+**角色由子命令指定**（`daemon`/`gateway`/`cli`），不在配置里指明。CLI 的实际操作子命令与 gateway path 对齐，例如 `tango cli upload` 对齐 `POST /upload`。上传策略是普通配置键 `process.mode`，不是请求字段或独立运行参数。**三个途径完全一致**：
 每个配置键都可经 配置文件 / `TANGO_*` 环境变量 / `--<键>` 命令行参数 三种方式设置，键名相同、可互换；
-唯一例外是 `--config <path>`（只有命令行、不是配置键）。`--mode`（仅 cli）是运行参数，也不是配置键。
+唯一例外是 `--config <path>`（只有命令行、不是配置键）。
 
 ## 配置文件与角色命令
 
@@ -17,7 +17,7 @@
 |------|--------|--------|------|
 | Daemon | `tango daemon` | `logging` · `dao` · `parser` · `source` · `process` | `daemon.{yaml,yml,json}` |
 | Gateway | `tango gateway` | `logging` · `dao` · `parser` · `process` · `role.gateway` | `gateway.{yaml,yml,json}` |
-| CLI | `tango cli` | `logging` · `dao` · `parser` · `process` | `cli.{yaml,yml,json}` |
+| CLI Upload | `tango cli upload` | `logging` · `dao` · `parser` · `process` | `cli.{yaml,yml,json}` |
 
 默认文件在**二进制同级目录**按 `yaml → yml → json` 取首个存在者。文件缺失或解析为空时静默跳过
 （回退到默认值 + 环境变量 + flag）。
@@ -37,6 +37,7 @@
 |--------|----------|
 | `dao.mongo.uri` | `TANGO_DAO_MONGO_URI` |
 | `logging.level` | `TANGO_LOGGING_LEVEL` |
+| `process.mode` | `TANGO_PROCESS_MODE` |
 | `source.tailer.tailMode` | `TANGO_SOURCE_TAILER_TAILMODE` |
 | `role.gateway.addr` | `TANGO_ROLE_GATEWAY_ADDR` |
 
@@ -81,6 +82,7 @@
 
 | 键 | required/optional | 默认 | 说明 |
 |----|----|----|----|
+| `process.mode` | optional | `batch` | 上传策略：`single`/`batch`/`pipeline`。gateway / cli / api 统一读取该配置；daemon 常驻追尾固定使用 pipeline 语义 |
 | `process.batchSize` | optional | `1000` | single/batch 策略 bulk-write 批大小 |
 | `process.pipeline.batchSize` | optional | `1000` | pipeline 单次 bulk-write 目标条数 |
 | `process.pipeline.batchSizeMin` | optional | `0`(自动 = batchSize/4) | 自适应下限 |
@@ -101,8 +103,7 @@
 
 | 键 | required/optional | 默认 | 说明 |
 |----|----|----|----|
-| `role.gateway.addr` | optional | `:8080` | HTTP 监听地址；`--addr` 覆盖 |
-| `role.gateway.defaultMode` | optional | `batch` | 请求未带 `mode` 时的策略：`single`/`batch`/`pipeline` |
+| `role.gateway.addr` | optional | `:8080` | HTTP 监听地址 |
 
 完整样例：[daemon](../examples/config/daemon/daemon.max.yaml)、
 [gateway](../examples/config/gateway/gateway.max.yaml)。

@@ -280,13 +280,13 @@ dao:
 	if cfg.Role.Gateway.Addr != ":8080" {
 		t.Errorf("role.gateway.addr default = %q, want :8080", cfg.Role.Gateway.Addr)
 	}
-	if cfg.Role.Gateway.DefaultMode != "batch" {
-		t.Errorf("role.gateway.defaultMode default = %q, want batch", cfg.Role.Gateway.DefaultMode)
+	if cfg.Process.Mode != "batch" {
+		t.Errorf("process.mode default = %q, want batch", cfg.Process.Mode)
 	}
 }
 
 func TestGatewayLoadsFromYAML(t *testing.T) {
-	// role.gateway holds only gateway-specific knobs (addr, defaultMode); the
+	// role.gateway holds only gateway-specific knobs (addr); the
 	// upload processing/filter come from the shared top-level process.* /
 	// parser.filter.* modules.
 	cfg := loadFlat(t, `
@@ -294,19 +294,19 @@ dao:
   mongo:
     uri: "mongodb://localhost"
 process:
+  mode: pipeline
   batchSize: 250
   pipeline:
     batchWorkers: 4
 role:
   gateway:
     addr: ":9090"
-    defaultMode: pipeline
 `)
 	if cfg.Role.Gateway.Addr != ":9090" {
 		t.Errorf("addr = %q", cfg.Role.Gateway.Addr)
 	}
-	if cfg.Role.Gateway.DefaultMode != "pipeline" {
-		t.Errorf("defaultMode = %q", cfg.Role.Gateway.DefaultMode)
+	if cfg.Process.Mode != "pipeline" {
+		t.Errorf("process.mode = %q", cfg.Process.Mode)
 	}
 	if cfg.Process.BatchSize != 250 {
 		t.Errorf("process.batchSize = %d", cfg.Process.BatchSize)

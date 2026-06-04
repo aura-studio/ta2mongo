@@ -50,9 +50,7 @@ const (
 	ModePipeline Mode = "pipeline"
 )
 
-// ParseMode validates s and returns the corresponding Mode. An empty or unknown
-// value returns an error; callers should substitute their default before
-// calling.
+// ParseMode validates s and returns the corresponding Mode.
 func ParseMode(s string) (Mode, error) {
 	m := Mode(s)
 	switch m {
@@ -75,15 +73,19 @@ type Uploader interface {
 	Stop()
 }
 
-// New builds the Uploader for the given mode, wiring it to the already-connected
-// dao and the shared parser. A nil cfg is defaulted; a nil stats collector is
+// New builds the Uploader for cfg.Mode, wiring it to the already-connected dao
+// and the shared parser. A nil cfg is defaulted; a nil stats collector is
 // treated as a no-op. Connection lifecycle (dao.New / Close) is owned by the
 // caller, not by the uploader.
-func New(mode Mode, cfg *Config, d *dao.Dao, p *parser.Parser, stats *Counters, opts WriteOptions) (Uploader, error) {
+func New(cfg *Config, d *dao.Dao, p *parser.Parser, stats *Counters, opts WriteOptions) (Uploader, error) {
 	if cfg == nil {
 		cfg = &Config{}
 	}
 	cfg.ApplyDefaults()
+	mode, err := cfg.ModeValue()
+	if err != nil {
+		return nil, err
+	}
 
 	var sc core.StatsCollector = core.NoopStats{}
 	if stats != nil {

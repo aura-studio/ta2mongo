@@ -3,7 +3,7 @@
 #
 # 用法：
 #   ./start.sh
-#   ./start.sh --addr :9090                                 # 覆盖监听地址
+#   ./start.sh --role.gateway.addr :9090                    # 覆盖监听地址
 #   TANGO_DAO_MONGO_URI=mongodb://user:pass@host/db ./start.sh
 set -euo pipefail
 

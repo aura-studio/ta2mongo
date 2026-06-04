@@ -1,5 +1,7 @@
-// Package cli implements the `tango cli` command: read TA log lines from stdin
-// and ingest them through one of the three strategies (single/batch/pipeline).
+// Package cli implements the `tango cli` command tree. Subcommands mirror the
+// gateway HTTP paths, so `tango cli upload` is the console equivalent of
+// POST /upload: read TA log lines from stdin and ingest them through one of the
+// three strategies (single/batch/pipeline).
 package cli
 
 import (
@@ -11,17 +13,26 @@ import (
 
 	"rocket-nano/tools/tango/config"
 	"rocket-nano/tools/tango/internal/logging"
-	"rocket-nano/tools/tango/internal/process"
 	clirole "rocket-nano/tools/tango/internal/role/cli"
 )
 
-// NewCommand builds the `tango cli` command. It reads newline-delimited TA JSON
-// log lines from stdin and ingests them, printing the run stats as JSON.
+// NewCommand builds the `tango cli` command tree. Its subcommands align with
+// gateway paths rather than inventing a separate CLI surface.
 func NewCommand() *cobra.Command {
-	var mode string
 	cmd := &cobra.Command{
 		Use:   "cli",
-		Short: "Read TA log lines from stdin and ingest them (single/batch/pipeline)",
+		Short: "Console client for gateway-aligned operations",
+	}
+	cmd.AddCommand(newUploadCmd())
+	return cmd
+}
+
+// newUploadCmd builds `tango cli upload`, the stdin-based equivalent of
+// gateway POST /upload.
+func newUploadCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "upload",
+		Short: "Read TA log lines from stdin and ingest them with process.mode",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			path := resolveConfigPath(configFlag(cmd), "cli.yaml", "cli.yml", "cli.json")
 			c, err := config.Load(path, cmd.Flags())
@@ -30,12 +41,7 @@ func NewCommand() *cobra.Command {
 			}
 			logging.Init(c.Logging.Level)
 
-			m, err := process.ParseMode(mode)
-			if err != nil {
-				return err
-			}
-
-			res, err := clirole.Run(cmd.Context(), c.Dao, c.Process, c.Parser.Filter, m, cmd.InOrStdin())
+			res, err := clirole.Run(cmd.Context(), c.Dao, c.Process, c.Parser.Filter, cmd.InOrStdin())
 			if err != nil {
 				return err
 			}
@@ -44,9 +50,8 @@ func NewCommand() *cobra.Command {
 			return enc.Encode(res)
 		},
 	}
-	// --mode is a runtime argument (which strategy to use for this run), not a
-	// config key. Every config key is also exposed as a --<key> flag below.
-	cmd.Flags().StringVar(&mode, "mode", "batch", "upload mode: single | batch | pipeline")
+	// Every config key is exposed as a --<key> flag. The upload strategy is
+	// process.mode, so use --process.mode or the equivalent file/env setting.
 	config.RegisterFlags(cmd.Flags())
 	return cmd
 }

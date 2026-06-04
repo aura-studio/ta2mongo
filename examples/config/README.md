@@ -3,7 +3,7 @@
 tango 是**单一二进制**（用法见 [../../doc/usage.md](../../doc/usage.md)）。命令按**运行角色**
 划分：daemon / gateway / cli 等。所有角色共用同一套**按包路径映射**的统一 schema：
 配置键路径 = 消费它的包路径（`internal/` 下），例如 `logging.level`、`dao.mongo.uri`、
-`dao.store.maxElapsedTime`、`parser.filter.*`、`source.tailer.*`、`process.pipeline.*`、
+`dao.store.maxElapsedTime`、`parser.filter.*`、`source.tailer.*`、`process.mode`、`process.pipeline.*`、
 `role.gateway.*`。每个角色只取自己需要的段。最外层 `config` 包只负责加载与覆盖，不定义具体字段。
 
 每个角色目录提供 yaml 与 json 各两份：**max**（全量，逐字段标注 required/optional 与默认值）
@@ -19,11 +19,11 @@ tango 是**单一二进制**（用法见 [../../doc/usage.md](../../doc/usage.md
 ```bash
 # 用脚本（内部 go run . <role> ...，默认读取同目录 <role>.max.yaml）：
 examples/config/daemon/start.sh
-examples/config/gateway/start.sh --addr :8080
+examples/config/gateway/start.sh --role.gateway.addr :8080
 
 # 或手动指定配置（max 全量 / min 最小皆可）：
 tango daemon --config examples/config/daemon/daemon.max.yaml
-tango gateway    --config examples/config/gateway/gateway.max.yaml --addr :8080
+tango gateway    --config examples/config/gateway/gateway.max.yaml --role.gateway.addr :8080
 
 # 留空 --config 时，角色命令自动读取二进制同级目录的 <role>.{yaml,yml,json}。
 # flag 名即配置键（viper 原生层级）：

@@ -18,21 +18,20 @@ import (
 // Server is the gateway runtime: the embedded api engine plus the HTTP face. It
 // is safe for concurrent use from multiple goroutines.
 type Server struct {
-	defaultMode string
-	engine      *api.Engine
+	engine *api.Engine
 }
 
 // New builds a Server, connecting to MongoDB via the api engine. It is wired
 // from the shared top-level module configs (dao, the process strategy config,
-// and the reporting filter) plus the gateway role config (addr / default mode).
-// The caller must Close it.
+// and the reporting filter) plus the gateway role config. The caller must
+// Close it.
 func New(ctx context.Context, daoCfg *dao.Config, procCfg *process.Config, filterCfg *filter.Config, cfg Config) (*Server, error) {
 	cfg.ApplyDefaults()
 	eng, err := api.New(ctx, daoCfg, procCfg, filterCfg)
 	if err != nil {
 		return nil, err
 	}
-	return &Server{defaultMode: cfg.DefaultMode, engine: eng}, nil
+	return &Server{engine: eng}, nil
 }
 
 // Close disconnects from MongoDB and releases all resources.
@@ -41,10 +40,10 @@ func (s *Server) Close() error { return s.engine.Close() }
 // EnsureIndexes creates all required MongoDB indexes (idempotent).
 func (s *Server) EnsureIndexes(ctx context.Context) error { return s.engine.EnsureIndexes(ctx) }
 
-// Upload ingests lines with the given mode (the engine entry point, exposed for
-// programmatic/test use).
-func (s *Server) Upload(ctx context.Context, mode process.Mode, lines []string) (api.Result, error) {
-	return s.engine.Upload(ctx, mode, lines)
+// Upload ingests lines with the configured process.mode (the engine entry
+// point, exposed for programmatic/test use).
+func (s *Server) Upload(ctx context.Context, lines []string) (api.Result, error) {
+	return s.engine.Upload(ctx, lines)
 }
 
 // Run starts the HTTP server and blocks until ctx is cancelled.
@@ -99,14 +98,11 @@ func decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 	return true
 }
 
-// handleUpload ingests the request-body log lines through one of the three
-// upload strategies. The body carries an array of lines (and/or a single line)
-// plus an optional "mode" (single | batch | pipeline); an empty mode falls back
-// to the configured default. Both the array and the single line are wrapped as
-// one httpbody source.
+// handleUpload ingests the request-body log lines through the configured
+// process.mode. The body carries an array of lines and/or a single line; both
+// are wrapped as one httpbody source.
 func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Mode  string   `json:"mode"`
 		Line  string   `json:"line"`
 		Lines []string `json:"lines"`
 	}
@@ -119,17 +115,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		lines = append(lines, req.Line)
 	}
 
-	modeStr := req.Mode
-	if modeStr == "" {
-		modeStr = s.defaultMode
-	}
-	mode, err := process.ParseMode(modeStr)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, err)
-		return
-	}
-
-	res, err := s.engine.Upload(r.Context(), mode, lines)
+	res, err := s.engine.Upload(r.Context(), lines)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return

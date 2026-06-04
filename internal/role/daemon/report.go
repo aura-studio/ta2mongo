@@ -99,7 +99,9 @@ func (d *Service) Run(ctx context.Context) error {
 
 	// Drive the async pipeline strategy; it blocks until ctx is cancelled, then
 	// the workers flush and exit.
-	up, err := process.New(process.ModePipeline, d.procCfg, d.dao, d.parser, stats, process.WriteOptions{})
+	procCfg := *d.procCfg
+	procCfg.Mode = string(process.ModePipeline)
+	up, err := process.New(&procCfg, d.dao, d.parser, stats, process.WriteOptions{})
 	if err != nil {
 		return err
 	}

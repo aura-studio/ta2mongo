@@ -26,7 +26,7 @@
 | 文件追尾常驻上报 | `tango report run` | `tango daemon` | 保留能力，命令改名，配置段从 `report.*` 迁到 `source.*` / `process.*` / `parser.*` |
 | 任务 worker | `tango worker run` | 无 | 删除 task queue 消费、心跳、lease、reap、任务执行 |
 | HTTP 服务 | `tango gateway serve` | `tango gateway` | 保留 HTTP 服务，但接口从多功能控制面收窄到 `/upload` |
-| 一次性操作 | `tango operator ...` | `tango cli` | operator 删除；cli 只从 stdin 读日志并上报 |
+| 一次性操作 | `tango operator ...` | `tango cli upload` | operator 删除；cli 子命令对齐 gateway `/upload`，从 stdin 读日志并上报 |
 | Go 库入口 | 公开 `rocket-nano/tools/tango/client` | 内部 `internal/role/api` | v1.1 只允许仓库内部 import，对外是 breaking change |
 | 根命令 | 挂载 report/worker/gateway/operator | 挂载 daemon/gateway/cli | 角色集合整体变更 |
 
@@ -50,12 +50,12 @@ tango operator publish sql
 ```bash
 tango daemon
 tango gateway
-tango cli --mode single
-tango cli --mode batch
-tango cli --mode pipeline
+tango cli upload --process.mode single
+tango cli upload --process.mode batch
+tango cli upload --process.mode pipeline
 ```
 
-`v1.1` 的角色由子命令决定，不再通过配置字段表达。`--config` 仍是配置文件路径，但不是配置键。`--mode` 只属于 `tango cli` 的运行参数，也不是配置键。
+`v1.1` 的角色由子命令决定，不再通过配置字段表达。CLI 操作子命令与 gateway path 对齐，例如 `tango cli upload` 对齐 `POST /upload`。`--config` 仍是配置文件路径，但不是配置键。上传策略统一使用配置键 `process.mode`，而不是请求字段或独立运行参数。
 
 ## HTTP API
 
@@ -63,7 +63,7 @@ tango cli --mode pipeline
 |---|---|---|---|
 | `GET /healthz` | 健康检查 | 保留 | 语义基本不变 |
 | `POST /ingest` | `{"line":...}` 或 `{"lines":[...]}`，字符串上报 | 删除 | 可改用 `POST /upload`，传 `line` / `lines` |
-| `POST /upload` | `{"patterns":[...],"batchSize":N}`，按文件模式上传，带断点续传 | 保留但语义改变 | v1.1 变成日志数组上传：`{"mode":"single\|batch\|pipeline","line":...,"lines":[...]}` |
+| `POST /upload` | `{"patterns":[...],"batchSize":N}`，按文件模式上传，带断点续传 | 保留但语义改变 | v1.1 变成日志数组上传：`{"line":...,"lines":[...]}`，策略由 `process.mode` 决定 |
 | `POST /backfill` | 直接执行历史回填 | 删除 | 回填模块整体删除 |
 | `POST /sql` | 执行临时 SQL 并导入 | 删除 | SQL 导入模块整体删除 |
 | `POST /publish/report-sync` | 发布 report-sync 任务 | 删除 | taskqueue 和 remote config 删除 |
@@ -74,7 +74,6 @@ tango cli --mode pipeline
 
 ```json
 {
-  "mode": "batch",
   "line": "{\"#type\":\"track\"}",
   "lines": [
     "{\"#type\":\"track\"}",
@@ -83,8 +82,7 @@ tango cli --mode pipeline
 }
 ```
 
-- `mode` 可选：`single` / `batch` / `pipeline`
-- 省略 `mode` 时走 `role.gateway.defaultMode`，默认 `batch`
+- 上传策略来自 `process.mode`：`single` / `batch` / `pipeline`
 - `line` 与 `lines` 会合并成同一个 httpbody source
 - 返回本次统计：行数、user 写入、event 写入、dead letter、filtered 等
 
@@ -95,7 +93,7 @@ tango cli --mode pipeline
 | 常驻文件追尾 | report service 使用 tailer + pipeline worker | daemon 使用 `source/tailer` + `process.ModePipeline` | 保留并重命名 |
 | 字符串上报 | SDK `Ingest` / `IngestBatch`，gateway `/ingest`，operator `ingest` | gateway `/upload`、cli stdin、api `Upload` | 入口变少，但底层策略统一 |
 | 文件单次上传 | SDK/operator/gateway 的 `UploadFiles`，有 checkpoint | 删除 | v1.1 不再提供按文件模式的一次性断点续传 |
-| 批量策略 | report pipeline 与 SDK batch 分散实现 | `process.New(mode, ...)` 统一构造 single/batch/pipeline | v1.1 新增统一上传引擎门面 |
+| 批量策略 | report pipeline 与 SDK batch 分散实现 | `process.mode` + `process.New(cfg, ...)` 统一构造 single/batch/pipeline | v1.1 新增统一上传引擎门面 |
 | 数据来源 | tailer、HTTP、SDK、backfill 混在不同服务/SDK 中 | `source.Source` 统一抽象：tailer/httpbody/stdin/taapi | v1.1 源抽象更清晰 |
 | 过滤 | report filter、upload filter、backfill filter 分开 | 顶层 `parser.filter.*` 作用于上报路径 | v1.1 只保留上报 filter |
 
@@ -151,7 +149,7 @@ tango cli --mode pipeline
 | `upload.string.filter.*` | `parser.filter.*` | v1.1 顶层共享上报 filter |
 | `upload.file.filter.*` | `parser.filter.*` | 文件上传独立 filter 消失，统一到上报 filter |
 | `gateway.addr` | `role.gateway.addr` | gateway 监听地址 |
-| 无 | `role.gateway.defaultMode` | v1.1 新增，控制 `/upload` 默认 mode |
+| 无 | `process.mode` | v1.1 新增，统一控制 gateway / cli / api 的上传策略 |
 
 ### 已删除配置段
 
@@ -219,8 +217,8 @@ import "rocket-nano/tools/tango/internal/role/api"
 - `New`
 - `Close`
 - `EnsureIndexes`
-- `Run(ctx, mode, source)`
-- `Upload(ctx, mode, lines)`
+- `Run(ctx, source)`
+- `Upload(ctx, lines)`
 
 影响：
 
@@ -252,7 +250,7 @@ import "rocket-nano/tools/tango/internal/role/api"
 | `cmd/operator/` | 删除 | operator 命令移除 |
 | `cmd/shared/` | 删除 | cmd glue 内联到各命令 |
 | `cmd/gateway/` | 保留但重写 | 从 `gateway serve` 变为 `gateway` |
-| 无 | `cmd/cli/` | 新增 stdin 上报入口 |
+| 无 | `cmd/cli/` | 新增 stdin 上报入口；子命令按 gateway path 对齐 |
 | `config/role.go` | 删除 | 不再使用角色投影 schema |
 | `config/client.go` | 删除 | client runtime projection 删除 |
 | `config/backfill.go` | 删除 | backfill 配置删除 |
@@ -333,14 +331,14 @@ import "rocket-nano/tools/tango/internal/role/api"
 2. 删除 `tango worker run` 部署；确认是否仍需要 taskqueue/backfill/sql/report-sync。
 3. 将 `tango gateway serve` 改为 `tango gateway`。
 4. 将 gateway 客户端调用从 `/ingest` 改为 `/upload`。
-5. 注意 `/upload` body 从文件模式 `patterns/batchSize` 改成日志数组 `line/lines/mode`。
-6. 将 `operator ingest` 替换为 `tango cli --mode <mode>` + stdin。
+5. 注意 `/upload` body 从文件模式 `patterns/batchSize` 改成日志数组 `line/lines`，上传策略改由 `process.mode` 配置。
+6. 将 `operator ingest` 替换为 `tango cli upload --process.mode <mode>` + stdin。
 7. 删除或替代 `operator upload/backfill/sql/publish` 流程。
 8. 按配置迁移映射改写配置文件。
 9. 按环境变量迁移映射改写部署变量。
 10. 将 `runtime.mongo.maxElapsedTime` 移到 `dao.store.maxElapsedTime`。
 11. 将 `report.filter.*` / `upload.*.filter.*` 合并为 `parser.filter.*`。
-12. 将 `gateway.addr` 改为 `role.gateway.addr`，如需默认上传模式，增加 `role.gateway.defaultMode`。
+12. 将 `gateway.addr` 改为 `role.gateway.addr`；如需调整上传策略，设置 `process.mode`。
 13. 外部 Go 代码若 import `client/`，需要新增公开适配层或改成同仓库内部调用。
 14. 如果仍需要历史回填或 SQL 导入，不能只靠配置迁移，需要恢复/重建被删除的 backfill 与 SQL 模块。
 

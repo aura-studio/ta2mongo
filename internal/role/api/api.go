@@ -1,11 +1,11 @@
 // Package api is the embeddable ingestion engine — the "library" role. It
-// connects to MongoDB once, then runs log lines through any of the three
-// process strategies (single / batch / pipeline) over any source.Source.
+// connects to MongoDB once, then runs log lines through the process strategy
+// configured by process.mode over any source.Source.
 //
 // It is meant to be used directly as a library (import api, call New + Upload),
 // and is embedded by the gateway role (HTTP face over an httpbody source) and
-// the cli role (console face over a stdin source). All three therefore expose
-// the same three upload functions.
+// the cli role (console face over a stdin source). All three therefore use the
+// same configured upload strategy.
 //
 // Usage:
 //
@@ -13,7 +13,7 @@
 //	if err != nil { ... }
 //	defer eng.Close()
 //	eng.EnsureIndexes(ctx)
-//	res, _ := eng.Upload(ctx, process.ModeBatch, lines)
+//	res, _ := eng.Upload(ctx, lines)
 package api
 
 import (
@@ -47,10 +47,10 @@ type Engine struct {
 	procCfg *process.Config
 }
 
-// New connects to MongoDB and builds the engine. procCfg tunes the single/batch
-// flush size and the pipeline worker pool (nil uses defaults); filterCfg is the
-// optional reporting filter applied to every line (nil keeps everything). The
-// caller must Close it.
+// New connects to MongoDB and builds the engine. procCfg selects the upload
+// strategy and tunes the single/batch flush size and the pipeline worker pool
+// (nil uses defaults); filterCfg is the optional reporting filter applied to
+// every line (nil keeps everything). The caller must Close it.
 func New(ctx context.Context, daoCfg *dao.Config, procCfg *process.Config, filterCfg *filter.Config) (*Engine, error) {
 	if daoCfg == nil || daoCfg.Mongo == nil || daoCfg.Mongo.URI == "" {
 		return nil, fmt.Errorf("api: MongoDB URI is required")
@@ -85,14 +85,18 @@ func (c *Engine) EnsureIndexes(ctx context.Context) error {
 	return c.dao.Store.EnsureIndexes(ctx)
 }
 
-// Run processes the source with the given mode, blocking until the source is
+// Run processes the source with c.procCfg.Mode, blocking until the source is
 // drained or ctx is cancelled, and returns per-run statistics. Lines that fail
 // to parse or resolve identity are routed to dead_letter (counted in the
 // result) rather than returned as errors; a non-nil error indicates a bulk
 // write failure or an unknown mode.
-func (c *Engine) Run(ctx context.Context, mode process.Mode, src source.Source) (Result, error) {
+func (c *Engine) Run(ctx context.Context, src source.Source) (Result, error) {
 	stats := &process.Counters{}
-	up, err := process.New(mode, c.procCfg, c.dao, c.parser, stats, process.WriteOptions{})
+	mode, err := c.procCfg.ModeValue()
+	if err != nil {
+		return Result{}, err
+	}
+	up, err := process.New(c.procCfg, c.dao, c.parser, stats, process.WriteOptions{})
 	if err != nil {
 		return Result{}, err
 	}
@@ -115,8 +119,8 @@ func (c *Engine) Run(ctx context.Context, mode process.Mode, src source.Source) 
 	return res, nil
 }
 
-// Upload wraps lines as an httpbody source and runs them with the given mode.
+// Upload wraps lines as an httpbody source and runs them with c.procCfg.Mode.
 // It is a convenience over Run for the common in-memory case.
-func (c *Engine) Upload(ctx context.Context, mode process.Mode, lines []string) (Result, error) {
-	return c.Run(ctx, mode, httpbody.New(lines))
+func (c *Engine) Upload(ctx context.Context, lines []string) (Result, error) {
+	return c.Run(ctx, httpbody.New(lines))
 }

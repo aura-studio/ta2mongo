@@ -126,10 +126,11 @@ func TestRolesModes(t *testing.T) {
 				defer cleanup()
 				ctx := context.Background()
 				lines := sampleLines()
+				procCfg := &process.Config{Mode: string(mode)}
 
 				switch role {
 				case "api":
-					eng, err := api.New(ctx, daoCfg, nil, nil)
+					eng, err := api.New(ctx, daoCfg, procCfg, nil)
 					if err != nil {
 						t.Fatalf("api.New: %v", err)
 					}
@@ -137,15 +138,15 @@ func TestRolesModes(t *testing.T) {
 					if err := eng.EnsureIndexes(ctx); err != nil {
 						t.Fatalf("EnsureIndexes: %v", err)
 					}
-					if _, err := eng.Upload(ctx, mode, lines); err != nil {
+					if _, err := eng.Upload(ctx, lines); err != nil {
 						t.Fatalf("api Upload: %v", err)
 					}
 				case "cli":
-					if _, err := clirole.Run(ctx, daoCfg, nil, nil, mode, strings.NewReader(strings.Join(lines, "\n"))); err != nil {
+					if _, err := clirole.Run(ctx, daoCfg, procCfg, nil, strings.NewReader(strings.Join(lines, "\n"))); err != nil {
 						t.Fatalf("cli Run: %v", err)
 					}
 				case "gateway":
-					srv, err := gateway.New(ctx, daoCfg, nil, nil, gateway.Config{})
+					srv, err := gateway.New(ctx, daoCfg, procCfg, nil, gateway.Config{})
 					if err != nil {
 						t.Fatalf("gateway.New: %v", err)
 					}
@@ -153,7 +154,7 @@ func TestRolesModes(t *testing.T) {
 					if err := srv.EnsureIndexes(ctx); err != nil {
 						t.Fatalf("EnsureIndexes: %v", err)
 					}
-					if _, err := srv.Upload(ctx, mode, lines); err != nil {
+					if _, err := srv.Upload(ctx, lines); err != nil {
 						t.Fatalf("gateway Upload: %v", err)
 					}
 				}

@@ -111,11 +111,11 @@ dao:
   mongo:
     uri: "mongodb://localhost/gw"
 process:
+  mode: pipeline
   batchSize: 250
 role:
   gateway:
     addr: ":9090"
-    defaultMode: pipeline
 `
 	c, err := Load(writeFile(t, "tango.yaml", yaml), nil)
 	if err != nil {
@@ -127,8 +127,8 @@ role:
 	if c.Role.Gateway.Addr != ":9090" {
 		t.Errorf("role.gateway.addr = %q", c.Role.Gateway.Addr)
 	}
-	if c.Role.Gateway.DefaultMode != "pipeline" {
-		t.Errorf("role.gateway.defaultMode = %q", c.Role.Gateway.DefaultMode)
+	if c.Process.Mode != "pipeline" {
+		t.Errorf("process.mode = %q", c.Process.Mode)
 	}
 	if c.Process.BatchSize != 250 {
 		t.Errorf("process.batchSize = %d", c.Process.BatchSize)

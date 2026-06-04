@@ -1,9 +1,9 @@
 # gateway.max.yaml — 全量配置参考（统一 schema 的全部 6 个段，逐字段说明）。
 #
-# 启动：tango gateway --config gateway.max.yaml --addr :8080
+# 启动：tango gateway --config gateway.max.yaml
 #
-# gateway = 常驻 HTTP 服务，暴露单个 /upload（请求体携带日志数组 + 可选 mode：
-# single/batch/pipeline），底层把请求体包成 httpbody 源后复用 api 引擎。它读取
+# gateway = 常驻 HTTP 服务，暴露单个 /upload（请求体携带日志数组；上传策略由
+# process.mode 配置），底层把请求体包成 httpbody 源后复用 api 引擎。它读取
 # logging/dao/parser/process 共享段 + role.gateway 专属段，忽略 source（不追尾文件）。
 #
 # tango 配置是统一 schema：键路径 = internal/ 下的包路径，同一份 max 配置对每个角色
@@ -41,6 +41,7 @@ source:                           # internal/source
     maxLineBytes: 10485760        # [optional]（默认 10485760 = 10MB）单行最大字节
 
 process:                          # internal/process（上传策略处理参数）
+  mode: batch                     # [optional]（默认 batch）single / batch / pipeline
   batchSize: 1000                 # [optional]（默认 1000）single/batch 模式 bulk-write 批大小
   pipeline:                       # internal/process/pipeline
     batchSize: 1000               # [optional]（默认 1000）单次 bulk-write 目标条数
@@ -54,5 +55,4 @@ process:                          # internal/process（上传策略处理参数�
 role:                             # internal/role
   daemon: {}                      # internal/role/daemon —— daemon 角色专属配置（暂无字段）
   gateway:                        # internal/role/gateway —— gateway 角色专属配置
-    addr: ":8080"                 # [optional]（默认 :8080）HTTP 监听地址；--addr 覆盖
-    defaultMode: batch            # [optional]（默认 batch）请求未带 mode 时的策略：single/batch/pipeline
+    addr: ":8080"                 # [optional]（默认 :8080）HTTP 监听地址

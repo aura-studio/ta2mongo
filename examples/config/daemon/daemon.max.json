@@ -24,6 +24,7 @@
     }
   },
   "process": {
+    "mode": "batch",
     "batchSize": 1000,
     "pipeline": {
       "batchSize": 1000,
@@ -38,8 +39,7 @@
   "role": {
     "daemon": {},
     "gateway": {
-      "addr": ":8080",
-      "defaultMode": "batch"
+      "addr": ":8080"
     }
   }
 }

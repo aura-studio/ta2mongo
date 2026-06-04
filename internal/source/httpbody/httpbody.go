@@ -6,7 +6,7 @@
 // Usage:
 //
 //	src := httpbody.New(lines)
-//	up, _ := process.New(mode, cfg, dao, parser, stats, opts)
+//	up, _ := process.New(cfg, dao, parser, stats, opts)
 //	err := up.Run(ctx, src)
 package httpbody
 
