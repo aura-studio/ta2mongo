@@ -1,49 +1,27 @@
-// Package gateway implements the `tango gateway` command: a long-running HTTP
-// gateway service exposing ingest / upload / backfill / sql / publish APIs on
-// top of a connected client SDK.
+// Package gateway implements the gateway runtime role (role.mode = gateway): a
+// long-running HTTP gateway exposing the /upload log-reporting API.
 package gateway
 
 import (
 	"github.com/spf13/cobra"
 
-	"rocket-nano/tools/tango/cmd/shared"
-	"rocket-nano/tools/tango/internal/service/gateway"
+	"rocket-nano/tools/tango/config"
+	"rocket-nano/tools/tango/internal/role/gateway"
 )
 
-// NewCommand builds the `tango gateway` parent command. It loads the unified
-// gateway config (gateway.{yaml,yml,json}).
-func NewCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "gateway",
-		Short: "HTTP gateway service exposing ingest, upload, backfill, sql, and publish APIs",
+// Run executes the gateway role against an already-loaded config: it starts the
+// HTTP server and serves until interrupted. The runtime role is selected by
+// config key role.mode, dispatched from main.
+func Run(cmd *cobra.Command, c *config.Config) error {
+	srv, err := gateway.New(cmd.Context(), c.Dao, c.Process, c.Parser.Filter, *c.Role.Gateway)
+	if err != nil {
+		return err
 	}
-	cmd.PersistentFlags().String("runtime.mongo.uri", "", "MongoDB connection URI (config key runtime.mongo.uri)")
-	cmd.PersistentFlags().String("runtime.logging.level", "", "log level: debug, info, warn, error (config key runtime.logging.level)")
-	cmd.PersistentFlags().String("gateway.addr", "", "HTTP listen address (config key gateway.addr)")
-	cmd.AddCommand(newServeCmd())
-	return cmd
-}
-
-func newServeCmd() *cobra.Command {
-	var addr string
-	cmd := &cobra.Command{
-		Use:   "serve",
-		Short: "Run the HTTP/REST server exposing the five client functions",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			cc, cli, logger, err := shared.ConnectClient(cmd, shared.GatewayConfig)
-			if err != nil {
-				return err
-			}
-			defer cli.Close()
-			if err := cli.EnsureIndexes(cmd.Context()); err != nil {
-				return err
-			}
-			if addr == "" {
-				addr = cc.Server.Addr
-			}
-			return gateway.New(cc, cli, logger).Run(cmd.Context(), addr)
-		},
+	defer srv.Close()
+	if err := srv.EnsureIndexes(cmd.Context()); err != nil {
+		return err
 	}
-	cmd.Flags().StringVar(&addr, "addr", "", "HTTP listen address; overrides the config addr")
-	return cmd
+	// Listen address comes from the config key role.gateway.addr,
+	// settable via file / TANGO_ROLE_GATEWAY_ADDR / --role.gateway.addr.
+	return srv.Run(cmd.Context(), c.Role.Gateway.Addr)
 }

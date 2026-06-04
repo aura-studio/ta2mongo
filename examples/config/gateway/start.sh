@@ -3,15 +3,15 @@
 #
 # 用法：
 #   ./start.sh
-#   ./start.sh --addr :9090                                 # 覆盖监听地址
-#   TANGO_RUNTIME_MONGO_URI=mongodb://user:pass@host/db ./start.sh
+#   ./start.sh --role.gateway.addr :9090                    # 覆盖监听地址
+#   TANGO_DAO_MONGO_URI=mongodb://user:pass@host/db ./start.sh
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 CONFIG="$SCRIPT_DIR/gateway.max.yaml"
 
-: "${TANGO_RUNTIME_MONGO_URI:=}"
+: "${TANGO_DAO_MONGO_URI:=}"
 
 cd "$REPO_ROOT"
-exec go run . gateway serve --config "$CONFIG" "$@"
+exec go run . --config "$CONFIG" "$@"
