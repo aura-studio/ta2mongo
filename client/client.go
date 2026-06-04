@@ -24,7 +24,7 @@ package client
 import (
 	"context"
 
-	"rocket-nano/tools/tango/internal/role/api"
+	"github.com/aura-studio/tango/internal/role/api"
 )
 
 // Result summarises a single Upload run.

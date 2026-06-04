@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"rocket-nano/tools/tango/internal/logging"
+	"github.com/aura-studio/tango/internal/logging"
 
 	"github.com/cenkalti/backoff/v4"
 	"go.mongodb.org/mongo-driver/mongo"

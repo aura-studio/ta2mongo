@@ -13,9 +13,9 @@ import (
 	"context"
 	"io"
 
-	"rocket-nano/tools/tango/internal/source/httpbody"
-	"rocket-nano/tools/tango/internal/source/stdin"
-	"rocket-nano/tools/tango/internal/source/tailer"
+	"github.com/aura-studio/tango/internal/source/httpbody"
+	"github.com/aura-studio/tango/internal/source/stdin"
+	"github.com/aura-studio/tango/internal/source/tailer"
 )
 
 // Source streams log lines onto a channel. Run returns a receive-only channel

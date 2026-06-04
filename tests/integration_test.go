@@ -19,17 +19,17 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
-	"rocket-nano/tools/tango/internal/dao"
-	daomongo "rocket-nano/tools/tango/internal/dao/mongo"
-	"rocket-nano/tools/tango/internal/parser"
-	"rocket-nano/tools/tango/internal/process"
-	"rocket-nano/tools/tango/internal/process/pipeline"
-	"rocket-nano/tools/tango/internal/role/api"
-	clirole "rocket-nano/tools/tango/internal/role/cli"
-	"rocket-nano/tools/tango/internal/role/daemon"
-	"rocket-nano/tools/tango/internal/role/gateway"
-	"rocket-nano/tools/tango/internal/source"
-	"rocket-nano/tools/tango/internal/source/tailer"
+	"github.com/aura-studio/tango/internal/dao"
+	daomongo "github.com/aura-studio/tango/internal/dao/mongo"
+	"github.com/aura-studio/tango/internal/parser"
+	"github.com/aura-studio/tango/internal/process"
+	"github.com/aura-studio/tango/internal/process/pipeline"
+	"github.com/aura-studio/tango/internal/role/api"
+	clirole "github.com/aura-studio/tango/internal/role/cli"
+	"github.com/aura-studio/tango/internal/role/daemon"
+	"github.com/aura-studio/tango/internal/role/gateway"
+	"github.com/aura-studio/tango/internal/source"
+	"github.com/aura-studio/tango/internal/source/tailer"
 )
 
 func mongoURI() string {

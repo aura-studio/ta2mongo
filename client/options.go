@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
-	"rocket-nano/tools/tango/internal/dao"
-	"rocket-nano/tools/tango/internal/parser"
-	"rocket-nano/tools/tango/internal/process"
+	"github.com/aura-studio/tango/internal/dao"
+	"github.com/aura-studio/tango/internal/parser"
+	"github.com/aura-studio/tango/internal/process"
 )
 
 // Option configures a Client. Options follow the functional-options idiom: pass

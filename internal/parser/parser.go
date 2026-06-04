@@ -6,8 +6,8 @@
 package parser
 
 import (
-	"rocket-nano/tools/tango/internal/parser/filter"
-	"rocket-nano/tools/tango/internal/parser/talog"
+	"github.com/aura-studio/tango/internal/parser/filter"
+	"github.com/aura-studio/tango/internal/parser/talog"
 )
 
 // Parser bundles the ThinkingData log parser with the reporting filter. The

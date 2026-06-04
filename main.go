@@ -9,9 +9,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"rocket-nano/tools/tango/config"
-	"rocket-nano/tools/tango/internal/logging"
-	"rocket-nano/tools/tango/internal/role"
+	"github.com/aura-studio/tango/config"
+	"github.com/aura-studio/tango/internal/logging"
+	"github.com/aura-studio/tango/internal/role"
 )
 
 func main() {

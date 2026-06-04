@@ -6,9 +6,9 @@ import (
 
 	"go.mongodb.org/mongo-driver/mongo"
 
-	"rocket-nano/tools/tango/internal/dao"
-	"rocket-nano/tools/tango/internal/logging"
-	"rocket-nano/tools/tango/internal/parser"
+	"github.com/aura-studio/tango/internal/dao"
+	"github.com/aura-studio/tango/internal/logging"
+	"github.com/aura-studio/tango/internal/parser"
 )
 
 // Kind classifies the outcome of processing one line.

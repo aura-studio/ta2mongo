@@ -13,7 +13,7 @@ package httpbody
 import (
 	"context"
 
-	"rocket-nano/tools/tango/internal/logging"
+	"github.com/aura-studio/tango/internal/logging"
 )
 
 // Source wraps pre-parsed HTTP request body lines as a line source.

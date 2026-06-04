@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"rocket-nano/tools/tango/internal/dao"
-	"rocket-nano/tools/tango/internal/parser"
+	"github.com/aura-studio/tango/internal/dao"
+	"github.com/aura-studio/tango/internal/parser"
 )
 
 // ---------------------------------------------------------------------------

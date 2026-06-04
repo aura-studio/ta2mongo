@@ -3,9 +3,9 @@ package dao
 import (
 	"fmt"
 
-	"rocket-nano/tools/tango/internal/cfgtree"
-	"rocket-nano/tools/tango/internal/dao/mongo"
-	"rocket-nano/tools/tango/internal/dao/store"
+	"github.com/aura-studio/tango/internal/cfgtree"
+	"github.com/aura-studio/tango/internal/dao/mongo"
+	"github.com/aura-studio/tango/internal/dao/store"
 )
 
 // FromTree decodes the dao.* branch of t into a Config, applies defaults and

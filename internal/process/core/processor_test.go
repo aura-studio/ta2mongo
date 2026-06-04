@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"rocket-nano/tools/tango/internal/parser"
-	"rocket-nano/tools/tango/internal/parser/filter"
+	"github.com/aura-studio/tango/internal/parser"
+	"github.com/aura-studio/tango/internal/parser/filter"
 )
 
 // countStats records how many times each callback fired.

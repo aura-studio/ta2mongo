@@ -10,7 +10,7 @@ import (
 	"io"
 	"os"
 
-	"rocket-nano/tools/tango/internal/logging"
+	"github.com/aura-studio/tango/internal/logging"
 )
 
 // defaultMaxLineBytes caps a single scanned line (1 MiB) to bound buffer growth.

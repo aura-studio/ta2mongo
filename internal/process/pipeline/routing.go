@@ -7,7 +7,7 @@ import (
 
 	"github.com/tidwall/gjson"
 
-	"rocket-nano/tools/tango/internal/parser"
+	"github.com/aura-studio/tango/internal/parser"
 )
 
 // ExtractRoutingKey performs a lightweight extraction of the user affinity key

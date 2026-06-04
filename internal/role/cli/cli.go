@@ -8,11 +8,11 @@ import (
 	"context"
 	"io"
 
-	"rocket-nano/tools/tango/internal/dao"
-	"rocket-nano/tools/tango/internal/parser"
-	"rocket-nano/tools/tango/internal/process"
-	"rocket-nano/tools/tango/internal/role/api"
-	"rocket-nano/tools/tango/internal/source"
+	"github.com/aura-studio/tango/internal/dao"
+	"github.com/aura-studio/tango/internal/parser"
+	"github.com/aura-studio/tango/internal/process"
+	"github.com/aura-studio/tango/internal/role/api"
+	"github.com/aura-studio/tango/internal/source"
 )
 
 // Run reads log lines from in (the console's stdin) and ingests them with

@@ -9,9 +9,9 @@ import (
 
 	"go.mongodb.org/mongo-driver/mongo"
 
-	daomongo "rocket-nano/tools/tango/internal/dao/mongo"
-	"rocket-nano/tools/tango/internal/dao/store"
-	"rocket-nano/tools/tango/internal/logging"
+	daomongo "github.com/aura-studio/tango/internal/dao/mongo"
+	"github.com/aura-studio/tango/internal/dao/store"
+	"github.com/aura-studio/tango/internal/logging"
 )
 
 // Dao is the data-access object. It owns the MongoDB resource and the

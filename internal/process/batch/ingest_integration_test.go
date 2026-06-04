@@ -8,12 +8,12 @@ import (
 	"testing"
 	"time"
 
-	"rocket-nano/tools/tango/internal/dao"
-	daomongo "rocket-nano/tools/tango/internal/dao/mongo"
-	"rocket-nano/tools/tango/internal/dao/store"
-	"rocket-nano/tools/tango/internal/parser"
-	"rocket-nano/tools/tango/internal/process/single"
-	"rocket-nano/tools/tango/internal/source"
+	"github.com/aura-studio/tango/internal/dao"
+	daomongo "github.com/aura-studio/tango/internal/dao/mongo"
+	"github.com/aura-studio/tango/internal/dao/store"
+	"github.com/aura-studio/tango/internal/parser"
+	"github.com/aura-studio/tango/internal/process/single"
+	"github.com/aura-studio/tango/internal/source"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
