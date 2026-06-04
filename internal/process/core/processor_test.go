@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"rocket-nano/tools/tango/internal/parser"
 	"rocket-nano/tools/tango/internal/parser/filter"
-	"rocket-nano/tools/tango/internal/parser/talog"
 )
 
 // countStats records how many times each callback fired.
@@ -32,7 +32,7 @@ func (c *countStats) OnFilterError()   { c.filterErr++ }
 
 func TestProcess_ParseError(t *testing.T) {
 	cs := &countStats{}
-	p := NewProcessor(talog.NewParser(), nil, nil, cs, WriteOptions{})
+	p := NewProcessor(parser.New(nil), nil, cs, WriteOptions{})
 	res := p.Process(context.Background(), "this is not json")
 	if res.Kind != KindParseError {
 		t.Fatalf("Kind = %v, want KindParseError", res.Kind)
@@ -54,7 +54,7 @@ func TestProcess_Filtered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := NewProcessor(talog.NewParser(), filter.NewHolder(flt), nil, cs, WriteOptions{})
+	p := NewProcessor(parser.New(flt), nil, cs, WriteOptions{})
 	// A valid user_set record that does not match the track-only include filter.
 	line := `{"#type":"user_set","#time":"2024-01-01 00:00:00","#uuid":"u2","#account_id":"acc2","properties":{"name":"Alice"}}`
 	res := p.Process(context.Background(), line)
@@ -75,7 +75,7 @@ func TestProcess_NilFilterKeepsEverythingUntilIdentity(t *testing.T) {
 	// store-backed outcome here (covered by integration tests) and only verify
 	// the filter stage did not classify it as filtered.
 	cs := &countStats{}
-	p := NewProcessor(talog.NewParser(), nil, nil, cs, WriteOptions{})
+	p := NewProcessor(parser.New(nil), nil, cs, WriteOptions{})
 	// A parse error still short-circuits; use that to confirm no filter stat.
 	_ = p.Process(context.Background(), "nope")
 	if cs.filtered != 0 || cs.filterErr != 0 {

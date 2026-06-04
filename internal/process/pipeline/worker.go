@@ -7,18 +7,17 @@ import (
 
 	"go.mongodb.org/mongo-driver/mongo"
 
-	daostore "rocket-nano/tools/tango/internal/dao/store"
+	"rocket-nano/tools/tango/internal/dao"
 	"rocket-nano/tools/tango/internal/logging"
-	"rocket-nano/tools/tango/internal/parser/filter"
-	"rocket-nano/tools/tango/internal/parser/talog"
+	"rocket-nano/tools/tango/internal/parser"
 	"rocket-nano/tools/tango/internal/process/core"
 )
 
 // RunWorkers launches N workers with affinity-based dispatch and blocks
-// until all workers finish. A nil flt is treated as a no-op filter. flt is a
-// Holder so the active filter can be hot-swapped while workers run.
-func RunWorkers(ctx context.Context, cfg *Config, st *daostore.Store,
-	parser *talog.Parser, flt *filter.Holder,
+// until all workers finish. prs carries the parser and its filter holder, whose
+// active filter can be hot-swapped while workers run.
+func RunWorkers(ctx context.Context, cfg *Config, st *dao.Store,
+	prs *parser.Parser,
 	lineCh <-chan string, stats core.StatsCollector, opts core.WriteOptions,
 ) {
 	if stats == nil {
@@ -41,7 +40,7 @@ func RunWorkers(ctx context.Context, cfg *Config, st *daostore.Store,
 		go func(ch <-chan string) {
 			defer wg.Done()
 			defer logging.Recover("pipeline worker")
-			worker(ctx, cfg, st, parser, flt, ch, stats, opts)
+			worker(ctx, cfg, st, prs, ch, stats, opts)
 		}(workerChs[i])
 	}
 
@@ -58,11 +57,11 @@ func RunWorkers(ctx context.Context, cfg *Config, st *daostore.Store,
 // Per-line parse/filter/identity/route rules live in core.Processor; the
 // worker owns only batching, the dynamic flush cadence, and the affinity-local
 // dead-letter logging.
-func worker(ctx context.Context, cfg *Config, st *daostore.Store,
-	parser *talog.Parser, flt *filter.Holder,
+func worker(ctx context.Context, cfg *Config, st *dao.Store,
+	prs *parser.Parser,
 	lineCh <-chan string, stats core.StatsCollector, opts core.WriteOptions,
 ) {
-	proc := core.NewProcessor(parser, flt, st, stats, opts)
+	proc := core.NewProcessor(prs, st, stats, opts)
 
 	userBatch := NewBatch(cfg.MaxBatchSize())
 	eventBatch := NewBatch(cfg.MaxBatchSize())
@@ -151,7 +150,7 @@ func worker(ctx context.Context, cfg *Config, st *daostore.Store,
 }
 
 // flushBatch writes a batch to the given collection (unordered) and resets it.
-func flushBatch(ctx context.Context, st *daostore.Store,
+func flushBatch(ctx context.Context, st *dao.Store,
 	coll *mongo.Collection, b *Batch, stats core.StatsCollector,
 ) {
 	if b.Empty() {
@@ -167,7 +166,7 @@ func flushBatch(ctx context.Context, st *daostore.Store,
 
 // flushBatchOrdered writes a batch to the given collection with ordered writes
 // to guarantee that operations within the batch are applied sequentially.
-func flushBatchOrdered(ctx context.Context, st *daostore.Store,
+func flushBatchOrdered(ctx context.Context, st *dao.Store,
 	coll *mongo.Collection, b *Batch, stats core.StatsCollector,
 ) {
 	if b.Empty() {

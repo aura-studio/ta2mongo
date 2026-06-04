@@ -9,17 +9,17 @@ import (
 	"io"
 
 	"rocket-nano/tools/tango/internal/dao"
-	"rocket-nano/tools/tango/internal/parser/filter"
+	"rocket-nano/tools/tango/internal/parser"
 	"rocket-nano/tools/tango/internal/process"
 	"rocket-nano/tools/tango/internal/role/api"
-	"rocket-nano/tools/tango/internal/source/stdin"
+	"rocket-nano/tools/tango/internal/source"
 )
 
 // Run reads log lines from in (the console's stdin) and ingests them with
 // procCfg.Mode, returning per-run statistics. It builds an api engine, ensures
 // indexes, runs the stdin source to completion, and closes the engine.
-func Run(ctx context.Context, daoCfg *dao.Config, procCfg *process.Config, filterCfg *filter.Config, in io.Reader) (api.Result, error) {
-	eng, err := api.New(ctx, daoCfg, procCfg, filterCfg)
+func Run(ctx context.Context, daoCfg *dao.Config, procCfg *process.Config, parserCfg *parser.Config, in io.Reader) (api.Result, error) {
+	eng, err := api.New(ctx, daoCfg, procCfg, parserCfg)
 	if err != nil {
 		return api.Result{}, err
 	}
@@ -28,5 +28,5 @@ func Run(ctx context.Context, daoCfg *dao.Config, procCfg *process.Config, filte
 	if err := eng.EnsureIndexes(ctx); err != nil {
 		return api.Result{}, err
 	}
-	return eng.Run(ctx, stdin.New(in))
+	return eng.Run(ctx, source.NewReader(in))
 }

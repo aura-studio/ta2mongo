@@ -5,11 +5,8 @@ import (
 	"time"
 
 	"rocket-nano/tools/tango/internal/dao"
-	"rocket-nano/tools/tango/internal/dao/mongo"
-	"rocket-nano/tools/tango/internal/dao/store"
-	"rocket-nano/tools/tango/internal/parser/filter"
+	"rocket-nano/tools/tango/internal/parser"
 	"rocket-nano/tools/tango/internal/process"
-	"rocket-nano/tools/tango/internal/process/pipeline"
 )
 
 // Option configures a Client. Options follow the functional-options idiom: pass
@@ -26,22 +23,25 @@ type Option func(*options)
 // options holds the actual tango module config structs the ingestion engine
 // consumes, so each With* sets a field of the real config structure rather than
 // a parallel re-declaration: dao.Config (dao.mongo.* + dao.store.*),
-// filter.Config (parser.filter.*) and process.Config (process.* +
-// process.pipeline.*). New hands &dao / &proc / &filter straight to api.New.
+// parser.Config (parser.filter.*) and process.Config (process.* +
+// process.pipeline.*). New hands &dao / &proc / &parser straight to api.New.
 type options struct {
 	ctx context.Context
 
 	dao    dao.Config
-	filter filter.Config
+	parser parser.Config
 	proc   process.Config
 }
 
 func defaultOptions() *options {
-	return &options{
-		ctx:  context.Background(),
-		dao:  dao.Config{Mongo: &mongo.Config{}, Store: &store.Config{}},
-		proc: process.Config{Pipeline: &pipeline.Config{}},
-	}
+	o := &options{ctx: context.Background()}
+	// Let each module config allocate its sub-configs and apply its own
+	// defaults, so the With* setters layer on top of the engine's real
+	// defaults and never dereference a nil sub-config.
+	o.dao.ApplyDefaults()
+	o.parser.ApplyDefaults()
+	o.proc.ApplyDefaults()
+	return o
 }
 
 // WithContext bounds the initial MongoDB connection established by New. It is an
@@ -91,14 +91,14 @@ func WithDaoStoreMaxElapsedTime(d time.Duration) Option {
 // record is kept only when at least one matches (OR semantics). An empty list
 // keeps every record. Repeated calls append.
 func WithParserFilterInclude(exprs ...string) Option {
-	return func(o *options) { o.filter.Include = append(o.filter.Include, exprs...) }
+	return func(o *options) { o.parser.Filter.Include = append(o.parser.Filter.Include, exprs...) }
 }
 
 // WithParserFilterExclude sets parser.filter.exclude: expr-lang expressions; a
 // record is dropped when any matches. Applied after include. Repeated calls
 // append.
 func WithParserFilterExclude(exprs ...string) Option {
-	return func(o *options) { o.filter.Exclude = append(o.filter.Exclude, exprs...) }
+	return func(o *options) { o.parser.Filter.Exclude = append(o.parser.Filter.Exclude, exprs...) }
 }
 
 // ------------------------------------------------------------------- process.*

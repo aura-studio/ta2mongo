@@ -39,7 +39,7 @@ func (Role) Run(ctx context.Context, cfg cfgtree.Tree) error {
 		return err
 	}
 
-	srv, err := New(ctx, daoCfg, procCfg, parserCfg.Filter, gwCfg)
+	srv, err := New(ctx, daoCfg, procCfg, parserCfg, gwCfg)
 	if err != nil {
 		return err
 	}

@@ -13,27 +13,29 @@ import (
 	"rocket-nano/tools/tango/internal/logging"
 	"rocket-nano/tools/tango/internal/parser"
 	"rocket-nano/tools/tango/internal/process"
-	"rocket-nano/tools/tango/internal/source/tailer"
+	"rocket-nano/tools/tango/internal/source"
 )
 
 // statsReportInterval is how often the report service logs processing statistics.
 const statsReportInterval = 60 * time.Second
 
 // Service is the main runtime that connects all components together. It is built
-// from the module configs the daemon needs (dao + parser + tailer source +
-// process), not from the top-level config package.
+// from the module configs the daemon needs (dao + parser + source + process),
+// not from the top-level config package. It depends only on the source package,
+// reaching the file-tailing config through srcCfg.Tailer rather than importing
+// source/tailer directly.
 type Service struct {
 	dao     *dao.Dao
 	parser  *parser.Parser
-	srcCfg  *tailer.Config
+	srcCfg  *source.Config
 	procCfg *process.Config
 }
 
 // New connects to MongoDB and creates a ready-to-run Service from the dao,
-// parser, tailer-source, and process module configs. The caller must call
-// Shutdown after Run returns to disconnect from MongoDB.
-func New(ctx context.Context, daoCfg *dao.Config, parserCfg *parser.Config, srcCfg *tailer.Config, procCfg *process.Config) (*Service, error) {
-	if srcCfg == nil {
+// parser, source, and process module configs. The caller must call Shutdown
+// after Run returns to disconnect from MongoDB.
+func New(ctx context.Context, daoCfg *dao.Config, parserCfg *parser.Config, srcCfg *source.Config, procCfg *process.Config) (*Service, error) {
+	if srcCfg == nil || srcCfg.Tailer == nil {
 		return nil, fmt.Errorf("report: source.tailer configuration is required")
 	}
 	if procCfg == nil {
@@ -74,20 +76,21 @@ func (d *Service) EnsureIndexes(ctx context.Context) error {
 // for the same user are processed sequentially by a single worker, preventing
 // out-of-order overwrites across workers.
 func (d *Service) Run(ctx context.Context) error {
-	if len(d.srcCfg.LogPattern) == 0 {
+	tcfg := d.srcCfg.Tailer
+	if len(tcfg.LogPattern) == 0 {
 		return errors.New("report: source.tailer.logPattern is required (at least one regex)")
 	}
 
 	logging.WithFields(logging.Fields{
-		"log_patterns":   d.srcCfg.LogPattern,
+		"log_patterns":   tcfg.LogPattern,
 		"workers":        d.procCfg.Pipeline.BatchWorkers,
 		"batch_size":     d.procCfg.Pipeline.BatchSize,
 		"flush_interval": d.procCfg.Pipeline.FlushInterval,
-		"tail_mode":      d.srcCfg.TailMode,
+		"tail_mode":      tcfg.TailMode,
 	}).Info("report: starting pipeline")
 
-	// Build the tailer source; the pipeline uploader runs it.
-	t := tailer.New(d.srcCfg.LogPattern, d.srcCfg.RescanInterval, d.srcCfg.TailMode).WithTuning(d.srcCfg.PollInterval, d.srcCfg.MaxLineBytes)
+	// Build the tailer source via the source facade; the pipeline uploader runs it.
+	t := source.NewTailer(tcfg)
 
 	// Create stats collector for periodic reporting.
 	stats := &process.Counters{}

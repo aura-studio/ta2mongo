@@ -7,7 +7,7 @@ import (
 
 	"github.com/tidwall/gjson"
 
-	"rocket-nano/tools/tango/internal/parser/talog"
+	"rocket-nano/tools/tango/internal/parser"
 )
 
 // ExtractRoutingKey performs a lightweight extraction of the user affinity key
@@ -22,7 +22,7 @@ func ExtractRoutingKey(line string) string {
 		return v.String()
 	}
 	// Try envelope formats: msg, message, log fields may contain nested JSON.
-	for _, envelope := range talog.EnvelopeKeys {
+	for _, envelope := range parser.EnvelopeKeys {
 		inner := gjson.Get(line, envelope).String()
 		if len(inner) < 2 || inner[0] != '{' {
 			continue

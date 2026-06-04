@@ -56,7 +56,7 @@ func (Role) Run(ctx context.Context, cfg cfgtree.Tree) error {
 		"role":      "daemon",
 	}).Info("tango daemon: starting")
 
-	svc, err := New(ctx, daoCfg, parserCfg, srcCfg.Tailer, procCfg)
+	svc, err := New(ctx, daoCfg, parserCfg, srcCfg, procCfg)
 	if err != nil {
 		logging.WithError(err).Error("tango daemon: init failed")
 		return err

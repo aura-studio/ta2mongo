@@ -68,7 +68,7 @@ func New(opts ...Option) (Client, error) {
 		opt(o)
 	}
 
-	engine, err := api.New(o.ctx, &o.dao, &o.proc, &o.filter)
+	engine, err := api.New(o.ctx, &o.dao, &o.proc, &o.parser)
 	if err != nil {
 		return nil, err
 	}

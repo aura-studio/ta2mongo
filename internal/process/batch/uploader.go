@@ -17,9 +17,8 @@ import (
 
 	drivermongo "go.mongodb.org/mongo-driver/mongo"
 
-	daostore "rocket-nano/tools/tango/internal/dao/store"
-	"rocket-nano/tools/tango/internal/parser/filter"
-	"rocket-nano/tools/tango/internal/parser/talog"
+	"rocket-nano/tools/tango/internal/dao"
+	"rocket-nano/tools/tango/internal/parser"
 	"rocket-nano/tools/tango/internal/process/core"
 	"rocket-nano/tools/tango/internal/source"
 )
@@ -31,7 +30,7 @@ const DefaultBatchSize = 1000
 // models, and flush them in bulk writes of at most batchSize records.
 type Uploader struct {
 	proc      *core.Processor
-	store     *daostore.Store
+	store     *dao.Store
 	stats     core.StatsCollector
 	batchSize int
 
@@ -40,9 +39,10 @@ type Uploader struct {
 }
 
 // NewUploader builds a batch-mode Uploader. A non-positive batchSize falls back
-// to DefaultBatchSize; a nil filter holder keeps every record; a nil stats
-// collector is treated as a no-op.
-func NewUploader(st *daostore.Store, parser *talog.Parser, flt *filter.Holder, batchSize int, stats core.StatsCollector, opts core.WriteOptions) *Uploader {
+// to DefaultBatchSize; prs carries the parser and its filter (a parser built
+// with a nil filter keeps every record); a nil stats collector is treated as a
+// no-op.
+func NewUploader(st *dao.Store, prs *parser.Parser, batchSize int, stats core.StatsCollector, opts core.WriteOptions) *Uploader {
 	if batchSize <= 0 {
 		batchSize = DefaultBatchSize
 	}
@@ -50,7 +50,7 @@ func NewUploader(st *daostore.Store, parser *talog.Parser, flt *filter.Holder, b
 		stats = core.NoopStats{}
 	}
 	return &Uploader{
-		proc:      core.NewProcessor(parser, flt, st, stats, opts),
+		proc:      core.NewProcessor(prs, st, stats, opts),
 		store:     st,
 		stats:     stats,
 		batchSize: batchSize,

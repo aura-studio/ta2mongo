@@ -94,11 +94,11 @@ func New(cfg *Config, d *dao.Dao, p *parser.Parser, stats *Counters, opts WriteO
 
 	switch mode {
 	case ModeSingle:
-		return single.NewUploader(d.Store, p.Parser, p.Filter(), sc, opts), nil
+		return single.NewUploader(d.Store, p, sc, opts), nil
 	case ModeBatch:
-		return batch.NewUploader(d.Store, p.Parser, p.Filter(), cfg.BatchSize, sc, opts), nil
+		return batch.NewUploader(d.Store, p, cfg.BatchSize, sc, opts), nil
 	case ModePipeline:
-		return pipeline.NewUploader(cfg.Pipeline, d.Store, p.Parser, p.Filter(), sc, opts), nil
+		return pipeline.NewUploader(cfg.Pipeline, d.Store, p, sc, opts), nil
 	default:
 		return nil, fmt.Errorf("process: unknown upload mode %q", mode)
 	}
