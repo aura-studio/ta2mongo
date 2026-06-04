@@ -19,6 +19,13 @@
 //	}
 //	defer c.Close()
 //	res, err := c.Upload(ctx, line1, line2)
+//
+// Instead of (or as a base for) individual With* options, a whole
+// gateway-compatible config file can drive the client via WithConfigFile or
+// WithConfigBytes — the same unified schema the tango binary's --config accepts,
+// of which only dao.*, parser.filter.* and process.* are consumed:
+//
+//	c, err := client.New(client.WithConfigBytes(embeddedConfigYAML))
 package client
 
 import (
@@ -66,6 +73,9 @@ func New(opts ...Option) (Client, error) {
 	o := defaultOptions()
 	for _, opt := range opts {
 		opt(o)
+	}
+	if o.err != nil {
+		return nil, o.err
 	}
 
 	engine, err := api.New(o.ctx, &o.dao, &o.proc, &o.parser)

@@ -2,8 +2,11 @@ package client
 
 import (
 	"context"
+	"fmt"
 	"time"
 
+	"github.com/aura-studio/tango/config"
+	"github.com/aura-studio/tango/internal/cfgtree"
 	"github.com/aura-studio/tango/internal/dao"
 	"github.com/aura-studio/tango/internal/parser"
 	"github.com/aura-studio/tango/internal/process"
@@ -31,6 +34,11 @@ type options struct {
 	dao    dao.Config
 	parser parser.Config
 	proc   process.Config
+
+	// err records the first failure from a config-loading option
+	// (WithConfigFile / WithConfigBytes); New surfaces it instead of building a
+	// client. It exists because an Option cannot return an error.
+	err error
 }
 
 func defaultOptions() *options {
@@ -54,6 +62,73 @@ func WithContext(ctx context.Context) Option {
 			o.ctx = ctx
 		}
 	}
+}
+
+// ------------------------------------------------------------- config file/bytes
+
+// WithConfigFile imports settings from a gateway-compatible unified config file
+// (YAML or JSON, by extension) — the same schema the tango binary's --config
+// accepts. Only the subtrees the embedded engine consumes are applied: dao.*,
+// parser.filter.* and process.*; the logging.*, source.* and role.* sections
+// (which belong to the binary roles) are ignored. TANGO_* env vars layer on top,
+// matching the binary's precedence, and a non-existent path yields defaults only.
+//
+// It establishes a base configuration from the file, so place it before any
+// individual With* option you want to override a file value: later options win.
+func WithConfigFile(path string) Option {
+	return func(o *options) {
+		if o.err != nil {
+			return
+		}
+		tree, err := config.Load(path, nil)
+		if err != nil {
+			o.err = fmt.Errorf("client: config file %q: %w", path, err)
+			return
+		}
+		o.applyTree(tree)
+	}
+}
+
+// WithConfigBytes is the in-memory analogue of WithConfigFile: it imports a
+// gateway-compatible unified config from raw bytes (YAML or JSON, detected from
+// the content), applying dao.*, parser.filter.* and process.* and ignoring the
+// role-only sections. Useful for embedded configs. Same base-then-override
+// semantics as WithConfigFile.
+func WithConfigBytes(data []byte) Option {
+	return func(o *options) {
+		if o.err != nil {
+			return
+		}
+		tree, err := config.LoadBytes(data)
+		if err != nil {
+			o.err = fmt.Errorf("client: config bytes: %w", err)
+			return
+		}
+		o.applyTree(tree)
+	}
+}
+
+// applyTree decodes the dao / parser / process branches of a gateway-compatible
+// config tree onto the options, then re-applies each module's defaults so any
+// leaf the config omitted keeps the engine's default rather than a zero value.
+// The other unified-schema sections (logging / source / role) are intentionally
+// ignored: they configure the binary roles, not an embedded client.
+func (o *options) applyTree(tree cfgtree.Tree) {
+	if err := tree.Sub("dao").Into(&o.dao); err != nil {
+		o.err = fmt.Errorf("client: config dao: %w", err)
+		return
+	}
+	if err := tree.Sub("parser").Into(&o.parser); err != nil {
+		o.err = fmt.Errorf("client: config parser: %w", err)
+		return
+	}
+	if err := tree.Sub("process").Into(&o.proc); err != nil {
+		o.err = fmt.Errorf("client: config process: %w", err)
+		return
+	}
+	o.dao.ApplyDefaults()
+	o.parser.ApplyDefaults()
+	o.proc.ApplyDefaults()
 }
 
 // -------------------------------------------------------------------- dao.mongo
