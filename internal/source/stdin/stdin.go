@@ -9,6 +9,8 @@ import (
 	"context"
 	"io"
 	"os"
+
+	"rocket-nano/tools/tango/internal/logging"
 )
 
 // defaultMaxLineBytes caps a single scanned line (1 MiB) to bound buffer growth.
@@ -34,6 +36,8 @@ func (s *Source) Run(ctx context.Context) <-chan string {
 	out := make(chan string, 256)
 	go func() {
 		defer close(out)
+		defer logging.Recover("stdin source")
+		var n int
 		scanner := bufio.NewScanner(s.r)
 		scanner.Buffer(make([]byte, 0, 64*1024), s.maxLineSize)
 		for scanner.Scan() {
@@ -43,10 +47,15 @@ func (s *Source) Run(ctx context.Context) <-chan string {
 			}
 			select {
 			case out <- line:
+				n++
 			case <-ctx.Done():
 				return
 			}
 		}
+		if err := scanner.Err(); err != nil {
+			logging.WithError(err).Warn("stdin: scan error")
+		}
+		logging.WithField("lines", n).Debug("stdin: finished streaming")
 	}()
 	return out
 }

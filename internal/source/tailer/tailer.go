@@ -258,6 +258,7 @@ func (t *Tailer) Run(ctx context.Context) <-chan string {
 
 	go func() {
 		defer close(out)
+		defer logging.Recover("tailer run")
 		t.run(ctx, out)
 	}()
 
@@ -305,11 +306,11 @@ func (t *Tailer) startFile(ctx context.Context, path string, out chan<- string) 
 
 	switch t.tailMode {
 	case TailModeEvent:
-		go t.tailFileEvent(ctx, path, out)
+		go func() { defer logging.Recover("tailer event:" + path); t.tailFileEvent(ctx, path, out) }()
 	case TailModePoll:
-		go t.tailFile(ctx, path, out)
+		go func() { defer logging.Recover("tailer poll:" + path); t.tailFile(ctx, path, out) }()
 	default: // hybrid
-		go t.tailFileHybrid(ctx, path, out)
+		go func() { defer logging.Recover("tailer hybrid:" + path); t.tailFileHybrid(ctx, path, out) }()
 	}
 }
 

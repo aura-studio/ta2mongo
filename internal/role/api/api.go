@@ -21,6 +21,7 @@ import (
 	"fmt"
 
 	"rocket-nano/tools/tango/internal/dao"
+	"rocket-nano/tools/tango/internal/logging"
 	"rocket-nano/tools/tango/internal/parser"
 	"rocket-nano/tools/tango/internal/parser/filter"
 	"rocket-nano/tools/tango/internal/process"
@@ -96,16 +97,22 @@ func (c *Client) Run(ctx context.Context, mode process.Mode, src source.Source) 
 		return Result{}, err
 	}
 	if err := up.Run(ctx, src); err != nil {
+		logging.WithField("mode", mode).WithError(err).Warn("api: upload failed")
 		return Result{}, err
 	}
 	s := stats.Snapshot()
-	return Result{
+	res := Result{
 		Lines:       s.TotalLines,
 		UserWrites:  s.UserWrites,
 		EventWrites: s.EventWrites,
 		DeadLetters: s.DeadLetters,
 		Filtered:    s.Filtered,
-	}, nil
+	}
+	logging.WithFields(logging.Fields{
+		"mode": mode, "lines": res.Lines, "user": res.UserWrites,
+		"event": res.EventWrites, "dead": res.DeadLetters, "filtered": res.Filtered,
+	}).Debug("api: upload complete")
+	return res, nil
 }
 
 // Upload wraps lines as an httpbody source and runs them with the given mode.

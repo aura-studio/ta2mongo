@@ -36,6 +36,10 @@ func New(ctx context.Context, daoCfg *dao.Config, parserCfg *parser.Config, srcC
 	if srcCfg == nil {
 		return nil, fmt.Errorf("report: source.tailer configuration is required")
 	}
+	if procCfg == nil {
+		procCfg = &process.Config{}
+	}
+	procCfg.ApplyDefaults()
 
 	p, err := parserCfg.Build()
 	if err != nil {

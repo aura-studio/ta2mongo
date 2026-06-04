@@ -40,12 +40,16 @@ func RunWorkers(ctx context.Context, cfg *Config, st *daostore.Store,
 	for i := 0; i < workerCount; i++ {
 		go func(ch <-chan string) {
 			defer wg.Done()
+			defer logging.Recover("pipeline worker")
 			worker(ctx, cfg, st, parser, flt, ch, stats, opts)
 		}(workerChs[i])
 	}
 
 	// Dispatcher goroutine: routes lines to workers by user affinity key.
-	go Dispatch(ctx, lineCh, workerChs)
+	go func() {
+		defer logging.Recover("pipeline dispatch")
+		Dispatch(ctx, lineCh, workerChs)
+	}()
 
 	wg.Wait()
 }

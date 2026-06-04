@@ -9,6 +9,7 @@ import (
 
 	daomongo "rocket-nano/tools/tango/internal/dao/mongo"
 	"rocket-nano/tools/tango/internal/dao/store"
+	"rocket-nano/tools/tango/internal/logging"
 )
 
 // Dao is the data-access object. It owns the MongoDB resource and the
@@ -32,6 +33,7 @@ func New(ctx context.Context, cfg *Config) (*Dao, error) {
 	if err != nil {
 		return nil, err
 	}
+	logging.WithField("db", res.DB.Name()).Info("dao: connected to MongoDB")
 	return &Dao{
 		Mongo: res,
 		Store: store.New(res.DB, cfg.Store),

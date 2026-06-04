@@ -2,10 +2,12 @@ package single
 
 import (
 	"context"
+	"fmt"
 
 	"go.mongodb.org/mongo-driver/mongo"
 
 	daostore "rocket-nano/tools/tango/internal/dao/store"
+	"rocket-nano/tools/tango/internal/logging"
 	"rocket-nano/tools/tango/internal/parser/filter"
 	"rocket-nano/tools/tango/internal/parser/talog"
 )
@@ -70,8 +72,21 @@ func NewProcessor(parser *talog.Parser, flt *filter.Holder, st *daostore.Store, 
 // classification. Stats recorded: OnLine always; then OnParseError+OnDeadLetter
 // (parse failure), OnParseOK, OnFilterError (eval error), OnFiltered (dropped),
 // OnIdentityError+OnDeadLetter (identity failure), or OnUserWrite/OnEventWrite.
-func (p *Processor) Process(ctx context.Context, line string) Result {
+func (p *Processor) Process(ctx context.Context, line string) (res Result) {
 	p.stats.OnLine()
+
+	// A malformed line must never crash the worker/process: recover any panic
+	// from parsing, filtering, identity resolution, or write-model building and
+	// route the offending line to dead_letter instead.
+	defer func() {
+		if r := recover(); r != nil {
+			p.stats.OnParseError()
+			p.stats.OnDeadLetter()
+			err := fmt.Errorf("panic processing line: %v", r)
+			logging.WithField("panic", r).Warn("process: recovered panic on line, sent to dead_letter")
+			res = Result{Kind: KindParseError, Model: daostore.DeadLetterModel(line, err), Err: err}
+		}
+	}()
 
 	rec, err := p.parser.ParseLine(line)
 	if err != nil {

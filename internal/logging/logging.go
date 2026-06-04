@@ -7,6 +7,7 @@
 package logging
 
 import (
+	"runtime/debug"
 	"strings"
 
 	"github.com/sirupsen/logrus"
@@ -68,6 +69,20 @@ func Error(args ...any) { std.Error(args...) }
 
 // Errorf logs a formatted message at error level.
 func Errorf(format string, args ...any) { std.Errorf(format, args...) }
+
+// Recover recovers a panic in the current goroutine and logs it (with stack)
+// at error level, so a single failing goroutine cannot crash the whole process.
+// Use it as the first deferred call in any goroutine:
+//
+//	go func() { defer logging.Recover("pipeline worker"); ... }()
+//
+// It is a no-op when there is no panic.
+func Recover(context string) {
+	if r := recover(); r != nil {
+		std.WithFields(logrus.Fields{"panic": r, "stack": string(debug.Stack())}).
+			Errorf("recovered panic in %s", context)
+	}
+}
 
 // Debug logs at debug level.
 func Debug(args ...any) { std.Debug(args...) }

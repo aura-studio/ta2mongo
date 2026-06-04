@@ -10,7 +10,11 @@
 //	err := up.Run(ctx, src)
 package httpbody
 
-import "context"
+import (
+	"context"
+
+	"rocket-nano/tools/tango/internal/logging"
+)
 
 // Source wraps pre-parsed HTTP request body lines as a line source.
 type Source struct {
@@ -28,8 +32,10 @@ func New(lines []string) *Source {
 // It respects ctx cancellation.
 func (s *Source) Run(ctx context.Context) <-chan string {
 	out := make(chan string, len(s.lines)+1)
+	logging.WithField("lines", len(s.lines)).Debug("httpbody: emitting request-body lines")
 	go func() {
 		defer close(out)
+		defer logging.Recover("httpbody source")
 		for _, line := range s.lines {
 			if line == "" {
 				continue

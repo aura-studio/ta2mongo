@@ -26,6 +26,8 @@ import (
 
 	"github.com/expr-lang/expr"
 	"github.com/expr-lang/expr/vm"
+
+	"rocket-nano/tools/tango/internal/logging"
 )
 
 // Filter holds compiled include/exclude programs. A nil *Filter keeps every
@@ -50,6 +52,10 @@ func New(include, exclude []string) (*Filter, error) {
 	exc, err := compileAll(exclude, "exclude")
 	if err != nil {
 		return nil, err
+	}
+	if len(inc) > 0 || len(exc) > 0 {
+		logging.WithFields(logging.Fields{"include": len(inc), "exclude": len(exc)}).
+			Debug("filter: compiled reporting rules")
 	}
 	return &Filter{include: inc, exclude: exc}, nil
 }
