@@ -1,5 +1,8 @@
-# daemon.min.yaml — `tango daemon` 最精简配置：只含 required 字段。
+# daemon.min.yaml — `tango --config daemon.min.yaml` 最精简配置：只含 required 字段。
 # 其余字段全部走默认值（详见同目录 daemon.max.yaml 的逐字段说明）。
+# 运行角色由 role.mode 选择（daemon 为默认值，可省略）。
+role:
+  mode: daemon                             # [optional]（默认 daemon）daemon / gateway / cli
 dao:
   mongo:
     uri: mongodb://localhost:27017/tango   # [required]

@@ -1,5 +1,5 @@
-// Package daemon implements the `tango daemon` command: the report service
-// tails TA logs, filters, resolves identity, and writes to MongoDB.
+// Package daemon implements the daemon runtime role (role.mode = daemon): the
+// report service tails TA logs, filters, resolves identity, and writes to MongoDB.
 package daemon
 
 import (
@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -19,67 +18,13 @@ import (
 	"rocket-nano/tools/tango/internal/role/daemon"
 )
 
-// NewCommand builds the `tango daemon` command. It tails the configured TA
-// logs and reports them to MongoDB, running until interrupted.
-func NewCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "daemon",
-		Short: "Daemon report service: tail TA logs, filter, and write to MongoDB",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			path := resolveConfigPath(configFlag(cmd),
-				"daemon.yaml", "daemon.yml", "daemon.json")
-			return runDaemonService(cmd, path)
-		},
-	}
-	// Every config key is also a --<key> flag (file / TANGO_* env / flag are
-	// interchangeable). The role is the subcommand; --config is the root flag.
-	config.RegisterFlags(cmd.Flags())
-	return cmd
-}
-
-// configFlag reads the inherited --config persistent flag (empty when unset).
-func configFlag(cmd *cobra.Command) string {
-	v, _ := cmd.Flags().GetString("config")
-	return v
-}
-
-// resolveConfigPath returns the config file path to use. When flagVal is set
-// (the --config flag) it is returned verbatim. Otherwise the first of the
-// candidate filenames that exists in the binary's own directory is returned, so
-// each subcommand auto-detects its own default regardless of the current
-// working directory. When none exist it returns "" and the loader falls back to
-// defaults + env + flags.
-func resolveConfigPath(flagVal string, candidates ...string) string {
-	if flagVal != "" {
-		return flagVal
-	}
-	dir := "."
-	if exe, err := os.Executable(); err == nil {
-		dir = filepath.Dir(exe)
-	}
-	for _, name := range candidates {
-		p := filepath.Join(dir, name)
-		if info, err := os.Stat(p); err == nil && !info.IsDir() {
-			return p
-		}
-	}
-	return ""
-}
-
-// runDaemonService loads the daemon config from path and runs the
-// report service (tail TA logs -> filter -> MongoDB).
-func runDaemonService(cmd *cobra.Command, path string) error {
-	c, err := config.Load(path, cmd.Flags())
-	if err != nil {
-		return err
-	}
-	if err := c.Validate(); err != nil {
-		return err
-	}
+// Run executes the daemon role against an already-loaded config: it tails the
+// configured TA logs and reports them to MongoDB, running until interrupted.
+// The runtime role is selected by config key role.mode, dispatched from main.
+func Run(cmd *cobra.Command, c *config.Config) error {
 	if len(c.Source.Tailer.LogPattern) == 0 {
 		return fmt.Errorf("config: source.tailer.logPattern is required (at least one regex)")
 	}
-	logging.Init(c.Logging.Level)
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 

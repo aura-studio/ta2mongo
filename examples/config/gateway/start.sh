@@ -14,4 +14,4 @@ CONFIG="$SCRIPT_DIR/gateway.max.yaml"
 : "${TANGO_DAO_MONGO_URI:=}"
 
 cd "$REPO_ROOT"
-exec go run . gateway --config "$CONFIG" "$@"
+exec go run . --config "$CONFIG" "$@"

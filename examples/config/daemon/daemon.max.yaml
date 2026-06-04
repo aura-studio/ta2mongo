@@ -1,6 +1,6 @@
 # daemon.max.yaml — 全量配置参考（统一 schema 的全部 6 个段，逐字段说明）。
 #
-# 启动：tango daemon --config daemon.max.yaml
+# 启动：tango --config daemon.max.yaml   （角色由 role.mode 决定）
 #
 # tango 是单一二进制、统一配置 schema：键路径 = internal/ 下的包路径。同一份 max
 # 配置对每个角色都完整可用，角色只取自己需要的段、忽略其余（例如 daemon 用
@@ -53,6 +53,7 @@ process:                          # internal/process（上传策略处理参数�
     deadLetterCap: 128            # [optional]（默认 128）每 worker 死信批容量
 
 role:                             # internal/role
+  mode: daemon                    # [optional]（默认 daemon）daemon / gateway / cli —— 选择运行角色，替代旧的子命令
   daemon: {}                      # internal/role/daemon —— daemon 角色专属配置（暂无字段）
   gateway:                        # internal/role/gateway —— gateway 角色专属配置
     addr: ":8080"                 # [optional]（默认 :8080）HTTP 监听地址

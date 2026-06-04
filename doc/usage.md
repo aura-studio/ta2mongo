@@ -1,36 +1,37 @@
 # tango 命令行使用说明
 
-tango 是单一二进制，按运行角色划分。所有上报角色共享同一引擎，区别在数据来源/入口：
+tango 是单一二进制，**运行角色由配置键 `role.mode` 选择**（不再用子命令）。所有上报角色共享同一引擎，区别在数据来源/入口：
 
 ```bash
-tango daemon    # 常驻采集上报：追尾日志文件 → 写 MongoDB
-tango gateway   # 常驻 HTTP gateway：暴露 /upload（httpbody 源）
-tango cli upload # 一次性：对齐 gateway /upload，从 stdin 读日志数组上报（process.mode 选策略）
-# api 角色无命令：作为 Go 库被业务代码 import（见“作为库使用”）
+tango --config daemon.yaml      # role.mode=daemon：常驻采集上报，追尾日志文件 → 写 MongoDB
+tango --config gateway.yaml     # role.mode=gateway：常驻 HTTP gateway，暴露 /upload（httpbody 源）
+tango --config cli.yaml         # role.mode=cli：一次性，从 stdin 读日志数组上报（process.mode 选策略）
+tango --role.mode gateway       # 角色也可用 flag / 环境变量覆盖（等价 TANGO_ROLE_MODE=gateway）
+# api 角色无运行入口：作为 Go 库被业务代码 import（见“作为库使用”）
 ```
 
 ## 通用规则
 
-- **角色由子命令指定**（`daemon` / `gateway` / `cli`），不在配置里指明。
+- **角色由配置键 `role.mode` 指定**（`daemon` / `gateway` / `cli`，默认 `daemon`），和其它配置键一样可经文件 / `TANGO_ROLE_MODE` / `--role.mode` 设置；不再有角色子命令。
 - **三个途径完全一致**：每个配置键都可经 ① 配置文件、② `TANGO_*` 环境变量、③ `--<键>` 命令行参数 三种方式设置，键名一致。优先级（低→高）：默认值 < 文件 < 环境变量 < 命令行参数。
   - 文件键：`dao.mongo.uri`
   - 环境变量：嵌套键 `.` 转 `_` 并大写加 `TANGO_` 前缀 → `TANGO_DAO_MONGO_URI`
   - 命令行：flag 名即键路径 → `--dao.mongo.uri`
   - **配置键路径 = 包路径**（`internal/` 下）：`logging.*`、`dao.mongo.*`、`dao.store.*`、`parser.filter.*`、`source.tailer.*`、`process.*`、`role.gateway.*`。
-- **唯一的例外**：`--config <path>`（配置文件路径，`.yaml`/`.yml`/`.json`）只有命令行这一种途径；它不是配置键。留空时各命令在二进制同级目录查找 `<role>.{yaml,yml,json}`，缺失则静默回退到默认值 + 环境变量 + flag。
-- 上传策略由配置键 `process.mode` 统一指定，取值 `single` / `batch` / `pipeline`，默认 `batch`。CLI、gateway、api 都使用这同一个配置键。
+- **唯一的例外**：`--config <path>`（配置文件路径，`.yaml`/`.yml`/`.json`）只有命令行这一种途径；它不是配置键。留空时在二进制同级目录查找 `tango.{yaml,yml,json}`，缺失则静默回退到默认值 + 环境变量 + flag。
+- 不要混淆两个 `mode`：`role.mode` 选**运行角色**（daemon/gateway/cli）；`process.mode` 选**上传策略**（`single`/`batch`/`pipeline`，默认 `batch`，CLI/gateway/api 共用）。
 
-| 角色命令 | 默认配置文件 | 主要配置段 |
-|---|---|---|
-| `tango daemon` | `daemon.{yaml,yml,json}` | `logging` · `dao` · `parser` · `source` · `process` |
-| `tango gateway` | `gateway.{yaml,yml,json}` | `logging` · `dao` · `parser` · `process` · `role.gateway` |
-| `tango cli upload` | `cli.{yaml,yml,json}` | `logging` · `dao` · `parser` · `process` |
+| role.mode | 主要配置段 |
+|---|---|
+| `daemon`（默认） | `logging` · `dao` · `parser` · `source` · `process` |
+| `gateway` | `logging` · `dao` · `parser` · `process` · `role.gateway` |
+| `cli` | `logging` · `dao` · `parser` · `process` |
 
 ## Daemon Service
 
 ```bash
-tango daemon --config daemon.yaml
-tango daemon --dao.mongo.uri mongodb://localhost:27017/tango
+tango --config daemon.yaml                                       # role.mode=daemon（写在配置里）
+tango --role.mode daemon --dao.mongo.uri mongodb://localhost:27017/tango
 ```
 
 职责：追尾 `source.tailer.logPattern` 匹配的日志文件 → 解析 TA JSON → 上报 filter → identity resolve → 流水线批量写 MongoDB。
@@ -46,8 +47,8 @@ tango daemon --dao.mongo.uri mongodb://localhost:27017/tango
 ## HTTP Gateway Service
 
 ```bash
-tango gateway --config gateway.yaml
-tango gateway --role.gateway.addr :8080      # 监听地址即普通配置键
+tango --config gateway.yaml                          # role.mode=gateway（写在配置里）
+tango --role.mode gateway --role.gateway.addr :8080  # 角色与监听地址都是普通配置键
 ```
 
 gateway 是常驻 HTTP 服务，读取共享段 `logging` + `dao` + `parser` + `process`，外加 gateway 专属的
@@ -66,11 +67,11 @@ gateway 是常驻 HTTP 服务，读取共享段 `logging` + `dao` + `parser` + `
 
 ```bash
 # 从 stdin 读 newline 分隔的 TA JSON 日志数组，按 process.mode 上报，打印统计 JSON
-cat events.ndjson | tango cli upload --process.mode batch --dao.mongo.uri mongodb://localhost:27017/tango
+cat events.ndjson | tango --role.mode cli --process.mode batch --dao.mongo.uri mongodb://localhost:27017/tango
 ```
 
 `process.mode` 取 `single` / `batch` / `pipeline`（默认 `batch`），可来自配置文件、`TANGO_PROCESS_MODE` 或 `--process.mode`。
-`cli upload` 是 gateway `POST /upload` 的控制台等价入口；后续若 gateway 增加新 path，CLI 子命令也应按同名 path 对齐。
+`role.mode=cli` 是 gateway `POST /upload` 的控制台等价入口（从 stdin 读取）。
 
 ## 作为库使用（api 角色）
 

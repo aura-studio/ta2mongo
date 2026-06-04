@@ -1,6 +1,6 @@
 # gateway.max.yaml — 全量配置参考（统一 schema 的全部 6 个段，逐字段说明）。
 #
-# 启动：tango gateway --config gateway.max.yaml
+# 启动：tango --config gateway.max.yaml   （角色由 role.mode 决定）
 #
 # gateway = 常驻 HTTP 服务，暴露单个 /upload（请求体携带日志数组；上传策略由
 # process.mode 配置），底层把请求体包成 httpbody 源后复用 api 引擎。它读取
@@ -53,6 +53,7 @@ process:                          # internal/process（上传策略处理参数�
     deadLetterCap: 128            # [optional]（默认 128）每 worker 死信批容量
 
 role:                             # internal/role
+  mode: gateway                   # [optional]（默认 daemon）daemon / gateway / cli —— 选择运行角色，替代旧的子命令
   daemon: {}                      # internal/role/daemon —— daemon 角色专属配置（暂无字段）
   gateway:                        # internal/role/gateway —— gateway 角色专属配置
     addr: ":8080"                 # [optional]（默认 :8080）HTTP 监听地址

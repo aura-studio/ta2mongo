@@ -13,4 +13,4 @@ CONFIG="$SCRIPT_DIR/daemon.max.yaml"
 : "${TANGO_DAO_MONGO_URI:=}"
 
 cd "$REPO_ROOT"
-exec go run . daemon --config "$CONFIG" "$@"
+exec go run . --config "$CONFIG" "$@"

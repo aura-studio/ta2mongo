@@ -7,20 +7,20 @@
 所有角色共用**单一 schema**，且**配置键路径 = 消费它的包路径**（`internal/` 下）。
 最外层 `config` 包不定义任何字段，只做加载/覆盖；每个角色只取自己需要的段。
 
-**角色由子命令指定**（`daemon`/`gateway`/`cli`），不在配置里指明。CLI 的实际操作子命令与 gateway path 对齐，例如 `tango cli upload` 对齐 `POST /upload`。上传策略是普通配置键 `process.mode`，不是请求字段或独立运行参数。**三个途径完全一致**：
+**角色由配置键 `role.mode` 指定**（`daemon`/`gateway`/`cli`，默认 `daemon`），不再用子命令。`role.mode=cli` 是 gateway `POST /upload` 的控制台等价入口（从 stdin 读取）。注意区分两个 mode：`role.mode` 选运行角色，`process.mode` 选上传策略（`single`/`batch`/`pipeline`）。**三个途径完全一致**：
 每个配置键都可经 配置文件 / `TANGO_*` 环境变量 / `--<键>` 命令行参数 三种方式设置，键名相同、可互换；
 唯一例外是 `--config <path>`（只有命令行、不是配置键）。
 
-## 配置文件与角色命令
+## 角色（role.mode）与配置段
 
-| 角色 | 命令 | 主要配置段 | `--config` 留空时默认读取 |
-|------|--------|--------|------|
-| Daemon | `tango daemon` | `logging` · `dao` · `parser` · `source` · `process` | `daemon.{yaml,yml,json}` |
-| Gateway | `tango gateway` | `logging` · `dao` · `parser` · `process` · `role.gateway` | `gateway.{yaml,yml,json}` |
-| CLI Upload | `tango cli upload` | `logging` · `dao` · `parser` · `process` | `cli.{yaml,yml,json}` |
+| role.mode | 主要配置段 |
+|------|--------|
+| `daemon`（默认） | `logging` · `dao` · `parser` · `source` · `process` |
+| `gateway` | `logging` · `dao` · `parser` · `process` · `role.gateway` |
+| `cli` | `logging` · `dao` · `parser` · `process` |
 
-默认文件在**二进制同级目录**按 `yaml → yml → json` 取首个存在者。文件缺失或解析为空时静默跳过
-（回退到默认值 + 环境变量 + flag）。
+`--config` 留空时在**二进制同级目录**按 `tango.yaml → tango.yml → tango.json` 取首个存在者。
+文件缺失或解析为空时静默跳过（回退到默认值 + 环境变量 + flag）。
 
 ## 来源与优先级（低 → 高）
 
@@ -38,6 +38,7 @@
 | `dao.mongo.uri` | `TANGO_DAO_MONGO_URI` |
 | `logging.level` | `TANGO_LOGGING_LEVEL` |
 | `process.mode` | `TANGO_PROCESS_MODE` |
+| `role.mode` | `TANGO_ROLE_MODE` |
 | `source.tailer.tailMode` | `TANGO_SOURCE_TAILER_TAILMODE` |
 | `role.gateway.addr` | `TANGO_ROLE_GATEWAY_ADDR` |
 
@@ -91,6 +92,12 @@
 | `process.pipeline.flushInterval` | optional | `1s` | 未满批次刷新间隔 |
 | `process.pipeline.channelBuffer` | optional | `0`(自动 = batchSize*2) | 每 worker 通道缓冲 |
 | `process.pipeline.deadLetterCap` | optional | `128` | 每 worker 死信批容量 |
+
+### role.mode → `internal/role`
+
+| 键 | required/optional | 默认 | 说明 |
+|----|----|----|----|
+| `role.mode` | optional | `daemon` | 运行角色：`daemon` / `gateway` / `cli`。替代旧的角色子命令，单一 `tango` 二进制据此分发。 |
 
 ### role.daemon（daemon） → `internal/role/daemon`
 

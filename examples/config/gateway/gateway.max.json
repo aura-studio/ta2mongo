@@ -37,6 +37,7 @@
     }
   },
   "role": {
+    "mode": "gateway",
     "daemon": {},
     "gateway": {
       "addr": ":8080"
