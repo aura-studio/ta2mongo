@@ -71,10 +71,13 @@ func worker(ctx context.Context, cfg *Config, st *dao.Store,
 	flushInterval := cfg.FlushInterval
 	invalidCount := 0
 
-	// flush writes accumulated batches to MongoDB and resets them.
-	// User batch uses ordered writes to preserve operation sequence within a batch.
+	// flush writes accumulated batches to MongoDB and resets them. All batches use
+	// unordered writes: the user write models carry their own per-document _ts
+	// guard (see store/writemodel.go), so intra-batch ordering no longer affects
+	// the final state, and unordered writes let one benign duplicate-key skip not
+	// abort the rest of the batch.
 	flush := func(flushCtx context.Context) {
-		flushBatchOrdered(flushCtx, st, st.UserCollection(), userBatch, stats)
+		flushBatch(flushCtx, st, st.UserCollection(), userBatch, stats)
 		flushBatch(flushCtx, st, st.EventCollection(), eventBatch, stats)
 		flushBatch(flushCtx, st, st.DeadLetterCollection(), deadBatch, stats)
 		lastFlush = time.Now()
@@ -157,22 +160,6 @@ func flushBatch(ctx context.Context, st *dao.Store,
 		return
 	}
 	if err := st.BulkWrite(ctx, coll, b.Models); err != nil {
-		stats.OnWriteError()
-		logging.WithError(err).WithField("collection", coll.Name()).
-			Error("bulk write failed")
-	}
-	b.Reset()
-}
-
-// flushBatchOrdered writes a batch to the given collection with ordered writes
-// to guarantee that operations within the batch are applied sequentially.
-func flushBatchOrdered(ctx context.Context, st *dao.Store,
-	coll *mongo.Collection, b *Batch, stats core.StatsCollector,
-) {
-	if b.Empty() {
-		return
-	}
-	if err := st.BulkWriteOrdered(ctx, coll, b.Models); err != nil {
 		stats.OnWriteError()
 		logging.WithError(err).WithField("collection", coll.Name()).
 			Error("bulk write failed")

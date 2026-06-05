@@ -38,60 +38,20 @@ func splitFields(doc bson.M) (meta bson.M, data bson.M) {
 	return meta, data
 }
 
-// tsCondSet builds a pipeline $set stage that conditionally sets fields only
-// when the incoming _ts >= the existing document's _ts. This prevents older
-// records from overwriting newer ones.
-//
-// For the _ts field itself, $max is used to ensure it only advances forward.
-// For all other fields, $cond checks `incoming_ts >= existing_ts` before updating.
-//
-// On insert (upsert with no existing document), $ifNull ensures the condition
-// evaluates to true so all fields are written.
-func tsCondSet(ts any, fields bson.M) bson.M {
-	stage := bson.M{
-		// _ts only moves forward.
-		"_ts": bson.M{"$max": bson.A{"$_ts", ts}},
+// tsGuardOr builds the query-filter fragment that enforces _ts anti-rollback at
+// the document level: it matches only when the stored document has no _ts yet or
+// its _ts is not newer than the incoming ts. Combined with upsert, a write whose
+// target already holds a newer _ts simply fails to match; the upsert's insert
+// attempt then hits the unique key — a benign duplicate-key error the store
+// treats as a skip. Because every TA record carries a single _ts, this
+// whole-document guard is equivalent to the former per-field $cond pipelines,
+// but uses plain document-form updates that Amazon DocumentDB accepts (DocumentDB
+// rejects aggregation-pipeline updates with "Wrong type for parameter u").
+func tsGuardOr(ts any) bson.A {
+	return bson.A{
+		bson.M{"_ts": bson.M{"$exists": false}},
+		bson.M{"_ts": bson.M{"$lte": ts}},
 	}
-
-	// The condition: incoming _ts >= existing _ts (treat missing as 0).
-	cond := bson.M{"$gte": bson.A{ts, bson.M{"$ifNull": bson.A{"$_ts", 0}}}}
-
-	for k, v := range fields {
-		if k == "_ts" {
-			continue // handled above
-		}
-		stage[k] = bson.M{
-			"$cond": bson.M{
-				"if":   cond,
-				"then": v,
-				// Preserve existing value; if field doesn't exist yet, use the new value
-				// (covers the upsert-insert case where the field is absent).
-				"else": bson.M{"$ifNull": bson.A{"$" + k, v}},
-			},
-		}
-	}
-	return stage
-}
-
-// tsCondUnset builds a pipeline stage that conditionally removes fields only
-// when the incoming _ts >= the existing document's _ts.
-func tsCondUnset(ts any, keys []string) bson.A {
-	cond := bson.M{"$gte": bson.A{ts, bson.M{"$ifNull": bson.A{"$_ts", 0}}}}
-
-	// We use $set to replace each target field with $$REMOVE when condition is met.
-	stage := bson.M{
-		"_ts": bson.M{"$max": bson.A{"$_ts", ts}},
-	}
-	for _, k := range keys {
-		stage[k] = bson.M{
-			"$cond": bson.M{
-				"if":   cond,
-				"then": "$$REMOVE",
-				"else": "$" + k,
-			},
-		}
-	}
-	return bson.A{bson.M{"$set": stage}}
 }
 
 // metaMaxUpdate builds a traditional (non-pipeline) update document that uses
@@ -165,12 +125,12 @@ func UserWriteModel(typ string, userID int64, doc bson.M) mongo.WriteModel {
 
 	switch typ {
 	case "user_set":
-		// Overwrite user properties, but only if this record is not older than
-		// what's already stored. Uses aggregation pipeline update (MongoDB 4.2+).
-		pipeline := bson.A{bson.M{"$set": tsCondSet(ts, mergeFields(meta, data))}}
+		// Overwrite user properties, guarding against older records via the _ts
+		// filter (DocumentDB-compatible document-form update; see tsGuardOr).
+		filter["$or"] = tsGuardOr(ts)
 		return mongo.NewUpdateOneModel().
 			SetFilter(filter).
-			SetUpdate(pipeline).
+			SetUpdate(bson.M{"$set": mergeFields(meta, data)}).
 			SetUpsert(true)
 
 	case "user_setOnce":
@@ -184,26 +144,21 @@ func UserWriteModel(typ string, userID int64, doc bson.M) mongo.WriteModel {
 		return upsertWithOperator(filter, meta, "$inc", data)
 
 	case "user_unset":
-		// Remove specified user properties, but only if this record is not older
-		// than what's already stored. Uses aggregation pipeline.
-		keys := make([]string, 0, len(data))
+		// Remove specified user properties, guarding against older records via the
+		// _ts filter. meta (incl. _ts) is $set; the data fields are $unset. The two
+		// key sets are disjoint, so no field is both set and unset.
+		unset := make(bson.M, len(data))
 		for k := range data {
-			keys = append(keys, k)
+			unset[k] = ""
 		}
-		// Also update meta fields conditionally.
-		metaStage := tsCondSet(ts, meta)
-		pipeline := tsCondUnset(ts, keys)
-		// Merge meta into the first stage.
-		firstStage := pipeline[0].(bson.M)["$set"].(bson.M)
-		for k, v := range metaStage {
-			if k == "_ts" {
-				continue // already in tsCondUnset
-			}
-			firstStage[k] = v
+		filter["$or"] = tsGuardOr(ts)
+		update := bson.M{"$set": meta}
+		if len(unset) > 0 {
+			update["$unset"] = unset
 		}
 		return mongo.NewUpdateOneModel().
 			SetFilter(filter).
-			SetUpdate(pipeline).
+			SetUpdate(update).
 			SetUpsert(true)
 
 	case "user_del":
@@ -221,11 +176,11 @@ func UserWriteModel(typ string, userID int64, doc bson.M) mongo.WriteModel {
 		return upsertWithOperator(filter, meta, "$addToSet", toEachFields(data))
 
 	default:
-		// Fallback: same as user_set with timestamp protection.
-		pipeline := bson.A{bson.M{"$set": tsCondSet(ts, mergeFields(meta, data))}}
+		// Fallback: same as user_set.
+		filter["$or"] = tsGuardOr(ts)
 		return mongo.NewUpdateOneModel().
 			SetFilter(filter).
-			SetUpdate(pipeline).
+			SetUpdate(bson.M{"$set": mergeFields(meta, data)}).
 			SetUpsert(true)
 	}
 }
@@ -247,78 +202,6 @@ func toEachFields(data bson.M) bson.M {
 // ---------------------------------------------------------------------------
 // Event write models  (ThinkingData track* semantics)
 // ---------------------------------------------------------------------------
-
-// trackTsCondSetNoOp builds a $set stage for `track_update` with strict
-// no-op semantics for older records.
-//
-// Behavior for each non-_ts field:
-// - if incoming _ts >= existing _ts: set the field to incoming value
-// - else (incoming is older):
-//   - if the field exists in existing doc: keep existing value
-//   - if the field is missing in existing doc: do NOT create it
-//
-// We achieve the "do not create when missing" via $$REMOVE in the else
-// branch when the field is null/missing.
-func trackTsCondSetNoOp(ts any, fields bson.M) bson.M {
-	stage := bson.M{
-		// _ts only moves forward.
-		"_ts": bson.M{"$max": bson.A{"$_ts", ts}},
-	}
-
-	cond := bson.M{"$gte": bson.A{ts, bson.M{"$ifNull": bson.A{"$_ts", 0}}}}
-
-	for k, v := range fields {
-		if k == "_ts" {
-			continue
-		}
-
-		stage[k] = bson.M{
-			"$cond": bson.M{
-				"if":   cond,
-				"then": v,
-				"else": bson.M{
-					"$ifNull": bson.A{
-						"$" + k,
-						"$$REMOVE",
-					},
-				},
-			},
-		}
-	}
-
-	return stage
-}
-
-// trackTsCondSetPipeline builds an update pipeline for `track_update` with
-// strict no-op semantics for older records.
-func trackTsCondSetPipeline(ts any, doc bson.M) bson.A {
-	return bson.A{bson.M{"$set": trackTsCondSetNoOp(ts, doc)}}
-}
-
-// trackTsCondReplacePipeline builds an update pipeline for `track_overwrite`.
-// It performs a real "full replace" when incoming `_ts` >= existing `_ts`;
-// otherwise it keeps the existing document unchanged.
-func trackTsCondReplacePipeline(ts any, doc bson.M) bson.A {
-	cond := bson.M{
-		"$gte": bson.A{
-			ts,
-			bson.M{"$ifNull": bson.A{"$_ts", 0}},
-		},
-	}
-
-	// $replaceWith takes an expression that returns the entire replacement
-	// document. We use $literal to treat the provided `doc` map as a literal
-	// object rather than field-path expressions.
-	return bson.A{bson.M{
-		"$replaceWith": bson.M{
-			"$cond": bson.A{
-				cond,
-				bson.M{"$literal": doc},
-				"$$ROOT",
-			},
-		},
-	}}
-}
 
 // EventWriteModel builds the appropriate MongoDB write model for an event operation.
 func EventWriteModel(typ, uuid string, doc bson.M) mongo.WriteModel {
@@ -346,17 +229,19 @@ func EventWriteModel(typ, uuid string, doc bson.M) mongo.WriteModel {
 			SetUpsert(true)
 
 	case "track_update":
-		// Field-level update with per-#uuid `_ts` ordering protection.
+		// Field-level update with per-#uuid `_ts` ordering protection, enforced via
+		// the _ts filter (DocumentDB-compatible document-form update; see tsGuardOr).
 		return mongo.NewUpdateOneModel().
-			SetFilter(bson.M{"#uuid": uuid}).
-			SetUpdate(trackTsCondSetPipeline(ts, doc)).
+			SetFilter(bson.M{"#uuid": uuid, "$or": tsGuardOr(ts)}).
+			SetUpdate(bson.M{"$set": doc}).
 			SetUpsert(true)
 
 	case "track_overwrite":
-		// Full replacement with per-#uuid `_ts` ordering protection.
-		return mongo.NewUpdateOneModel().
-			SetFilter(bson.M{"#uuid": uuid}).
-			SetUpdate(trackTsCondReplacePipeline(ts, doc)).
+		// Full replacement with per-#uuid `_ts` ordering protection, enforced via
+		// the _ts filter. ReplaceOne swaps the whole document for `doc`.
+		return mongo.NewReplaceOneModel().
+			SetFilter(bson.M{"#uuid": uuid, "$or": tsGuardOr(ts)}).
+			SetReplacement(doc).
 			SetUpsert(true)
 
 	default:

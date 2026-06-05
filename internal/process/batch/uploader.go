@@ -133,13 +133,14 @@ func (u *Uploader) setCancel(cancel context.CancelFunc) {
 	u.mu.Unlock()
 }
 
-// flush writes the accumulated batches. The user collection uses ordered writes
-// to preserve per-user operation sequence within the batch; events and dead
-// letters use unordered writes. It returns the first error encountered.
+// flush writes the accumulated batches. All collections use unordered writes:
+// the user write models carry their own per-document _ts guard (see
+// store/writemodel.go), so intra-batch ordering no longer affects the final
+// state. It returns the first error encountered.
 func (u *Uploader) flush(ctx context.Context, userModels, eventModels, deadModels []drivermongo.WriteModel) error {
 	var firstErr error
 	if len(userModels) > 0 {
-		if err := u.store.BulkWriteOrdered(ctx, u.store.UserCollection(), userModels); err != nil {
+		if err := u.store.BulkWrite(ctx, u.store.UserCollection(), userModels); err != nil {
 			u.stats.OnWriteError()
 			firstErr = fmt.Errorf("batch: write user: %w", err)
 		}

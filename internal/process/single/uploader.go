@@ -83,8 +83,9 @@ func (u *Uploader) setCancel(cancel context.CancelFunc) {
 	u.mu.Unlock()
 }
 
-// write commits one classified Result to MongoDB. User writes use ordered bulk
-// writes to preserve per-user operation sequence.
+// write commits one classified Result to MongoDB. The user write models carry
+// their own per-document _ts guard (see store/writemodel.go), so writes are
+// unordered like events and dead letters.
 func (u *Uploader) write(ctx context.Context, res core.Result) {
 	switch res.Kind {
 	case core.KindParseError, core.KindIdentityError:
@@ -92,7 +93,7 @@ func (u *Uploader) write(ctx context.Context, res core.Result) {
 	case core.KindFiltered:
 		// intentionally discarded
 	case core.KindUser:
-		if err := u.store.BulkWriteOrdered(ctx, u.store.UserCollection(), []drivermongo.WriteModel{res.Model}); err != nil {
+		if err := u.store.BulkWrite(ctx, u.store.UserCollection(), []drivermongo.WriteModel{res.Model}); err != nil {
 			u.stats.OnWriteError()
 			logging.WithError(err).Error("single: write user failed")
 		}

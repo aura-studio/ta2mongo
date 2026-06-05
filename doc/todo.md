@@ -21,14 +21,14 @@
 
 ## 角色与命令
 
-| 能力 | v1.0 | v1.1 | 差异 |
-|---|---|---|---|
-| 文件追尾常驻上报 | `tango report run` | `tango daemon` | 保留能力，命令改名，配置段从 `report.*` 迁到 `source.*` / `process.*` / `parser.*` |
-| 任务 worker | `tango worker run` | 无 | 删除 task queue 消费、心跳、lease、reap、任务执行 |
-| HTTP 服务 | `tango gateway serve` | `tango gateway` | 保留 HTTP 服务，但接口从多功能控制面收窄到 `/upload` |
-| 一次性操作 | `tango operator ...` | `tango cli upload` | operator 删除；cli 子命令对齐 gateway `/upload`，从 stdin 读日志并上报 |
-| Go 库入口 | 公开 `github.com/aura-studio/tango/client` | 内部 `internal/role/api` | v1.1 只允许仓库内部 import，对外是 breaking change |
-| 根命令 | 挂载 report/worker/gateway/operator | 挂载 daemon/gateway/cli | 角色集合整体变更 |
+| 能力             | v1.0                                       | v1.1                     | 差异                                                                               |
+| ---------------- | ------------------------------------------ | ------------------------ | ---------------------------------------------------------------------------------- |
+| 文件追尾常驻上报 | `tango report run`                         | `tango daemon`           | 保留能力，命令改名，配置段从 `report.*` 迁到 `source.*` / `process.*` / `parser.*` |
+| 任务 worker      | `tango worker run`                         | 无                       | 删除 task queue 消费、心跳、lease、reap、任务执行                                  |
+| HTTP 服务        | `tango gateway serve`                      | `tango gateway`          | 保留 HTTP 服务，但接口从多功能控制面收窄到 `/upload`                               |
+| 一次性操作       | `tango operator ...`                       | `tango cli upload`       | operator 删除；cli 子命令对齐 gateway `/upload`，从 stdin 读日志并上报             |
+| Go 库入口        | 公开 `github.com/aura-studio/tango/client` | 内部 `internal/role/api` | v1.1 只允许仓库内部 import，对外是 breaking change                                 |
+| 根命令           | 挂载 report/worker/gateway/operator        | 挂载 daemon/gateway/cli  | 角色集合整体变更                                                                   |
 
 ### v1.0 命令集合
 
@@ -59,26 +59,23 @@ tango cli upload --process.mode pipeline
 
 ## HTTP API
 
-| HTTP 接口 | v1.0 body / 功能 | v1.1 状态 | 说明 |
-|---|---|---|---|
-| `GET /healthz` | 健康检查 | 保留 | 语义基本不变 |
-| `POST /ingest` | `{"line":...}` 或 `{"lines":[...]}`，字符串上报 | 删除 | 可改用 `POST /upload`，传 `line` / `lines` |
-| `POST /upload` | `{"patterns":[...],"batchSize":N}`，按文件模式上传，带断点续传 | 保留但语义改变 | v1.1 变成日志数组上传：`{"line":...,"lines":[...]}`，策略由 `process.mode` 决定 |
-| `POST /backfill` | 直接执行历史回填 | 删除 | 回填模块整体删除 |
-| `POST /sql` | 执行临时 SQL 并导入 | 删除 | SQL 导入模块整体删除 |
-| `POST /publish/report-sync` | 发布 report-sync 任务 | 删除 | taskqueue 和 remote config 删除 |
-| `POST /publish/backfill` | 发布 backfill 任务 | 删除 | taskqueue 和 backfill 删除 |
-| `POST /publish/sql` | 发布 SQL 任务 | 删除 | taskqueue 和 SQL 删除 |
+| HTTP 接口                   | v1.0 body / 功能                                               | v1.1 状态      | 说明                                                                            |
+| --------------------------- | -------------------------------------------------------------- | -------------- | ------------------------------------------------------------------------------- |
+| `GET /healthz`              | 健康检查                                                       | 保留           | 语义基本不变                                                                    |
+| `POST /ingest`              | `{"line":...}` 或 `{"lines":[...]}`，字符串上报                | 删除           | 可改用 `POST /upload`，传 `line` / `lines`                                      |
+| `POST /upload`              | `{"patterns":[...],"batchSize":N}`，按文件模式上传，带断点续传 | 保留但语义改变 | v1.1 变成日志数组上传：`{"line":...,"lines":[...]}`，策略由 `process.mode` 决定 |
+| `POST /backfill`            | 直接执行历史回填                                               | 删除           | 回填模块整体删除                                                                |
+| `POST /sql`                 | 执行临时 SQL 并导入                                            | 删除           | SQL 导入模块整体删除                                                            |
+| `POST /publish/report-sync` | 发布 report-sync 任务                                          | 删除           | taskqueue 和 remote config 删除                                                 |
+| `POST /publish/backfill`    | 发布 backfill 任务                                             | 删除           | taskqueue 和 backfill 删除                                                      |
+| `POST /publish/sql`         | 发布 SQL 任务                                                  | 删除           | taskqueue 和 SQL 删除                                                           |
 
 ### v1.1 `/upload` 语义
 
 ```json
 {
   "line": "{\"#type\":\"track\"}",
-  "lines": [
-    "{\"#type\":\"track\"}",
-    "{\"#type\":\"user_set\"}"
-  ]
+  "lines": ["{\"#type\":\"track\"}", "{\"#type\":\"user_set\"}"]
 }
 ```
 
@@ -88,21 +85,21 @@ tango cli upload --process.mode pipeline
 
 ## 上传与处理链路
 
-| 处理面 | v1.0 | v1.1 | 结论 |
-|---|---|---|---|
-| 常驻文件追尾 | report service 使用 tailer + pipeline worker | daemon 使用 `source/tailer` + `process.ModePipeline` | 保留并重命名 |
-| 字符串上报 | SDK `Ingest` / `IngestBatch`，gateway `/ingest`，operator `ingest` | gateway `/upload`、cli stdin、api `Upload` | 入口变少，但底层策略统一 |
-| 文件单次上传 | SDK/operator/gateway 的 `UploadFiles`，有 checkpoint | 删除 | v1.1 不再提供按文件模式的一次性断点续传 |
-| 批量策略 | report pipeline 与 SDK batch 分散实现 | `process.mode` + `process.New(cfg, ...)` 统一构造 single/batch/pipeline | v1.1 新增统一上传引擎门面 |
-| 数据来源 | tailer、HTTP、SDK、backfill 混在不同服务/SDK 中 | `source.Source` 统一抽象：tailer/httpbody/stdin/taapi | v1.1 源抽象更清晰 |
-| 过滤 | report filter、upload filter、backfill filter 分开 | 顶层 `parser.filter.*` 作用于上报路径 | v1.1 只保留上报 filter |
+| 处理面       | v1.0                                                               | v1.1                                                                    | 结论                                    |
+| ------------ | ------------------------------------------------------------------ | ----------------------------------------------------------------------- | --------------------------------------- |
+| 常驻文件追尾 | report service 使用 tailer + pipeline worker                       | daemon 使用 `source/tailer` + `process.ModePipeline`                    | 保留并重命名                            |
+| 字符串上报   | SDK `Ingest` / `IngestBatch`，gateway `/ingest`，operator `ingest` | gateway `/upload`、cli stdin、api `Upload`                              | 入口变少，但底层策略统一                |
+| 文件单次上传 | SDK/operator/gateway 的 `UploadFiles`，有 checkpoint               | 删除                                                                    | v1.1 不再提供按文件模式的一次性断点续传 |
+| 批量策略     | report pipeline 与 SDK batch 分散实现                              | `process.mode` + `process.New(cfg, ...)` 统一构造 single/batch/pipeline | v1.1 新增统一上传引擎门面               |
+| 数据来源     | tailer、HTTP、SDK、backfill 混在不同服务/SDK 中                    | `source.Source` 统一抽象：tailer/httpbody/stdin/taapi                   | v1.1 源抽象更清晰                       |
+| 过滤         | report filter、upload filter、backfill filter 分开                 | 顶层 `parser.filter.*` 作用于上报路径                                   | v1.1 只保留上报 filter                  |
 
 ### v1.1 三种上传模式
 
-| mode | 说明 | 典型入口 |
-|---|---|---|
-| `single` | 逐行即时写，适合少量日志或低延迟写入 | gateway / cli / api |
-| `batch` | 同步累积写模型后 bulk write，适合一次性批量输入 | gateway / cli / api |
+| mode       | 说明                                                | 典型入口                           |
+| ---------- | --------------------------------------------------- | ---------------------------------- |
+| `single`   | 逐行即时写，适合少量日志或低延迟写入                | gateway / cli / api                |
+| `batch`    | 同步累积写模型后 bulk write，适合一次性批量输入     | gateway / cli / api                |
 | `pipeline` | N worker 异步流水线，按用户亲和性路由并动态刷新批次 | daemon，gateway / cli / api 也可选 |
 
 ## 配置 schema
@@ -113,43 +110,43 @@ tango cli upload --process.mode pipeline
 
 ### 配置来源与优先级
 
-| 项 | v1.0 | v1.1 |
-|---|---|---|
-| 基础优先级 | 默认值 < 文件 < 环境变量 < flag | 默认值 < 文件 < 环境变量 < flag |
-| 远程配置 | report 可启用 `remoteConfig.enabled`，只热更新 filter | 删除 |
-| flag 覆盖 | 只有部分常用键显式注册 flag | 每个配置键都有同名 `--<键>` flag |
-| 角色指定 | 角色命令 + 各自 loader | 子命令指定，配置里不写角色 |
-| 默认配置文件 | report/worker/gateway/operator | daemon/gateway/cli |
+| 项           | v1.0                                                  | v1.1                             |
+| ------------ | ----------------------------------------------------- | -------------------------------- |
+| 基础优先级   | 默认值 < 文件 < 环境变量 < flag                       | 默认值 < 文件 < 环境变量 < flag  |
+| 远程配置     | report 可启用 `remoteConfig.enabled`，只热更新 filter | 删除                             |
+| flag 覆盖    | 只有部分常用键显式注册 flag                           | 每个配置键都有同名 `--<键>` flag |
+| 角色指定     | 角色命令 + 各自 loader                                | 子命令指定，配置里不写角色       |
+| 默认配置文件 | report/worker/gateway/operator                        | daemon/gateway/cli               |
 
 ### 常用配置迁移映射
 
-| v1.0 key | v1.1 key | 说明 |
-|---|---|---|
-| `runtime.logging.level` | `logging.level` | 日志级别 |
-| `runtime.logging.format` | `logging.format` | 日志格式 |
-| `runtime.mongo.uri` | `dao.mongo.uri` | MongoDB 连接串 |
-| `runtime.mongo.connectTimeout` | `dao.mongo.connectTimeout` | MongoDB 连接超时 |
-| `runtime.mongo.serverSelectionTimeout` | `dao.mongo.serverSelectionTimeout` | server selection 超时 |
-| `runtime.mongo.maxElapsedTime` | `dao.store.maxElapsedTime` | bulk-write 重试预算从 mongo 归属迁到 store |
-| `report.source.logPattern` | `source.tailer.logPattern` | daemon 追尾文件模式 |
-| `report.source.tailMode` | `source.tailer.tailMode` | tail 模式 |
-| `report.source.rescanInterval` | `source.tailer.rescanInterval` | 重新扫描间隔 |
-| `report.source.pollInterval` | `source.tailer.pollInterval` | poll 间隔 |
-| `report.source.maxLineBytes` | `source.tailer.maxLineBytes` | 单行最大字节数 |
-| `report.pipeline.batchSize` | `process.pipeline.batchSize` | pipeline 批大小 |
-| `report.pipeline.batchSizeMin` | `process.pipeline.batchSizeMin` | 自适应批下限 |
-| `report.pipeline.batchSizeMax` | `process.pipeline.batchSizeMax` | 自适应批上限 |
-| `report.pipeline.batchWorkers` | `process.pipeline.batchWorkers` | pipeline worker 数 |
-| `report.pipeline.flushInterval` | `process.pipeline.flushInterval` | flush 间隔 |
-| `report.pipeline.channelBuffer` | `process.pipeline.channelBuffer` | worker channel buffer |
-| `report.pipeline.deadLetterCap` | `process.pipeline.deadLetterCap` | dead letter 批容量 |
-| `report.filter.include` | `parser.filter.include` | 上报 include filter |
-| `report.filter.exclude` | `parser.filter.exclude` | 上报 exclude filter |
-| `upload.string.batchSize` | `process.batchSize` | single/batch 策略批大小 |
-| `upload.string.filter.*` | `parser.filter.*` | v1.1 顶层共享上报 filter |
-| `upload.file.filter.*` | `parser.filter.*` | 文件上传独立 filter 消失，统一到上报 filter |
-| `gateway.addr` | `role.gateway.addr` | gateway 监听地址 |
-| 无 | `process.mode` | v1.1 新增，统一控制 gateway / cli / api 的上传策略 |
+| v1.0 key                               | v1.1 key                           | 说明                                               |
+| -------------------------------------- | ---------------------------------- | -------------------------------------------------- |
+| `runtime.logging.level`                | `logging.level`                    | 日志级别                                           |
+| `runtime.logging.format`               | `logging.format`                   | 日志格式                                           |
+| `runtime.mongo.uri`                    | `dao.mongo.uri`                    | MongoDB 连接串                                     |
+| `runtime.mongo.connectTimeout`         | `dao.mongo.connectTimeout`         | MongoDB 连接超时                                   |
+| `runtime.mongo.serverSelectionTimeout` | `dao.mongo.serverSelectionTimeout` | server selection 超时                              |
+| `runtime.mongo.maxElapsedTime`         | `dao.store.maxElapsedTime`         | bulk-write 重试预算从 mongo 归属迁到 store         |
+| `report.source.logPattern`             | `source.tailer.logPattern`         | daemon 追尾文件模式                                |
+| `report.source.tailMode`               | `source.tailer.tailMode`           | tail 模式                                          |
+| `report.source.rescanInterval`         | `source.tailer.rescanInterval`     | 重新扫描间隔                                       |
+| `report.source.pollInterval`           | `source.tailer.pollInterval`       | poll 间隔                                          |
+| `report.source.maxLineBytes`           | `source.tailer.maxLineBytes`       | 单行最大字节数                                     |
+| `report.pipeline.batchSize`            | `process.pipeline.batchSize`       | pipeline 批大小                                    |
+| `report.pipeline.batchSizeMin`         | `process.pipeline.batchSizeMin`    | 自适应批下限                                       |
+| `report.pipeline.batchSizeMax`         | `process.pipeline.batchSizeMax`    | 自适应批上限                                       |
+| `report.pipeline.batchWorkers`         | `process.pipeline.batchWorkers`    | pipeline worker 数                                 |
+| `report.pipeline.flushInterval`        | `process.pipeline.flushInterval`   | flush 间隔                                         |
+| `report.pipeline.channelBuffer`        | `process.pipeline.channelBuffer`   | worker channel buffer                              |
+| `report.pipeline.deadLetterCap`        | `process.pipeline.deadLetterCap`   | dead letter 批容量                                 |
+| `report.filter.include`                | `parser.filter.include`            | 上报 include filter                                |
+| `report.filter.exclude`                | `parser.filter.exclude`            | 上报 exclude filter                                |
+| `upload.string.batchSize`              | `process.batchSize`                | single/batch 策略批大小                            |
+| `upload.string.filter.*`               | `parser.filter.*`                  | v1.1 顶层共享上报 filter                           |
+| `upload.file.filter.*`                 | `parser.filter.*`                  | 文件上传独立 filter 消失，统一到上报 filter        |
+| `gateway.addr`                         | `role.gateway.addr`                | gateway 监听地址                                   |
+| 无                                     | `process.mode`                     | v1.1 新增，统一控制 gateway / cli / api 的上传策略 |
 
 ### 已删除配置段
 
@@ -163,14 +160,14 @@ tango cli upload --process.mode pipeline
 
 ### 环境变量迁移示例
 
-| v1.0 env | v1.1 env |
-|---|---|
-| `TANGO_RUNTIME_MONGO_URI` | `TANGO_DAO_MONGO_URI` |
-| `TANGO_RUNTIME_LOGGING_LEVEL` | `TANGO_LOGGING_LEVEL` |
+| v1.0 env                       | v1.1 env                       |
+| ------------------------------ | ------------------------------ |
+| `TANGO_RUNTIME_MONGO_URI`      | `TANGO_DAO_MONGO_URI`          |
+| `TANGO_RUNTIME_LOGGING_LEVEL`  | `TANGO_LOGGING_LEVEL`          |
 | `TANGO_REPORT_SOURCE_TAILMODE` | `TANGO_SOURCE_TAILER_TAILMODE` |
-| `TANGO_GATEWAY_ADDR` | `TANGO_ROLE_GATEWAY_ADDR` |
-| `TANGO_REMOTECONFIG_ENABLED` | 删除 |
-| `TANGO_TASKS_INSTANCEID` | 删除 |
+| `TANGO_GATEWAY_ADDR`           | `TANGO_ROLE_GATEWAY_ADDR`      |
+| `TANGO_REMOTECONFIG_ENABLED`   | 删除                           |
+| `TANGO_TASKS_INSTANCEID`       | 删除                           |
 
 ## Go API / SDK
 
@@ -228,53 +225,53 @@ import "github.com/aura-studio/tango/internal/role/api"
 
 ## 数据库集合与运行时状态
 
-| 集合/状态 | v1.0 | v1.1 | 说明 |
-|---|---|---|---|
-| `user` | 使用 | 使用 | 核心数据集合保留 |
-| `event` | 使用 | 使用 | 核心数据集合保留 |
-| `dead_letter` | 使用 | 使用 | 解析/写入异常记录保留 |
-| `id_mapping` | 使用 | 使用 | identity resolve 保留 |
-| `_tango_config` | 使用 | 删除 | remote config 删除 |
-| `_tango_tasks` | 使用 | 删除 | taskqueue 删除 |
-| `_tango_instances` | 使用 | 删除 | worker heartbeat 删除 |
-| `_tango_fileupload` | 使用 | 删除 | 文件断点续传删除 |
+| 集合/状态            | v1.0 | v1.1 | 说明                     |
+| -------------------- | ---- | ---- | ------------------------ |
+| `user`               | 使用 | 使用 | 核心数据集合保留         |
+| `event`              | 使用 | 使用 | 核心数据集合保留         |
+| `dead_letter`        | 使用 | 使用 | 解析/写入异常记录保留    |
+| `id_mapping`         | 使用 | 使用 | identity resolve 保留    |
+| `_tango_config`      | 使用 | 删除 | remote config 删除       |
+| `_tango_tasks`       | 使用 | 删除 | taskqueue 删除           |
+| `_tango_instances`   | 使用 | 删除 | worker heartbeat 删除    |
+| `_tango_fileupload`  | 使用 | 删除 | 文件断点续传删除         |
 | `_backfill_progress` | 使用 | 删除 | backfill checkpoint 删除 |
 
 ## 代码结构变化
 
-| v1.0 路径 | v1.1 路径/状态 | 说明 |
-|---|---|---|
-| `client/` | 删除 | 公开 SDK 移除 |
-| `cmd/report/` | `cmd/daemon/` | report service 改名 daemon |
-| `cmd/worker/` | 删除 | worker 命令移除 |
-| `cmd/operator/` | 删除 | operator 命令移除 |
-| `cmd/shared/` | 删除 | cmd glue 内联到各命令 |
-| `cmd/gateway/` | 保留但重写 | 从 `gateway serve` 变为 `gateway` |
-| 无 | `cmd/cli/` | 新增 stdin 上报入口；子命令按 gateway path 对齐 |
-| `config/role.go` | 删除 | 不再使用角色投影 schema |
-| `config/client.go` | 删除 | client runtime projection 删除 |
-| `config/backfill.go` | 删除 | backfill 配置删除 |
-| `config/filter.go` | 删除 | backfill SQL/filter helper 删除 |
-| `config/pipeline.go` | 删除/下沉 | pipeline 配置下沉到 `internal/process/pipeline` |
-| `internal/core/store/` | `internal/dao/store/` | 数据持久化移动到 dao 领域 |
-| `internal/core/runtime/mongo.go` | `internal/dao/mongo/mongo.go` | Mongo resource 移到 dao/mongo |
-| `internal/core/filter/` | `internal/parser/filter/` | 上报 filter 移到 parser 领域；SQL 编译能力删除 |
-| `internal/core/talog/` | `internal/parser/talog/` | TA log parser 移到 parser 领域 |
-| `internal/core/tailer/` | `internal/source/tailer/` | tailer 归入 source 领域 |
-| `internal/core/dynamicbatch/` | `internal/process/pipeline/` | 动态批刷新归入 pipeline |
-| `internal/core/taskqueue/` | 删除 | task queue 删除 |
-| `internal/core/remoteconfig/` | 删除 | remote config 删除 |
-| `internal/process/ingest/` | 删除/拆分 | 同步 ingest 能力重组为 single/batch uploader |
-| `internal/process/ingestion/` | `internal/process/single/` | 共享 processor/counter/stat 归入 single 体系 |
-| `internal/service/report/` | `internal/role/daemon/` | report service 改为 daemon role |
-| `internal/service/gateway/` | `internal/role/gateway/` | gateway runtime 移入 role |
-| `internal/service/worker/` | 删除 | worker runtime 删除 |
-| `internal/service/backfill/` | 删除 | backfill runtime 删除 |
-| 无 | `internal/logging/` | 新增全局日志包 |
-| 无 | `internal/source/httpbody/` | 新增 HTTP body 数据源 |
-| 无 | `internal/source/stdin/` | 新增 stdin 数据源 |
-| 无 | `internal/source/taapi/` | 新增预留 TA API 数据源 |
-| 无 | `internal/role/api/` | 新增内部可复用上报引擎 |
+| v1.0 路径                        | v1.1 路径/状态                | 说明                                            |
+| -------------------------------- | ----------------------------- | ----------------------------------------------- |
+| `client/`                        | 删除                          | 公开 SDK 移除                                   |
+| `cmd/report/`                    | `cmd/daemon/`                 | report service 改名 daemon                      |
+| `cmd/worker/`                    | 删除                          | worker 命令移除                                 |
+| `cmd/operator/`                  | 删除                          | operator 命令移除                               |
+| `cmd/shared/`                    | 删除                          | cmd glue 内联到各命令                           |
+| `cmd/gateway/`                   | 保留但重写                    | 从 `gateway serve` 变为 `gateway`               |
+| 无                               | `cmd/cli/`                    | 新增 stdin 上报入口；子命令按 gateway path 对齐 |
+| `config/role.go`                 | 删除                          | 不再使用角色投影 schema                         |
+| `config/client.go`               | 删除                          | client runtime projection 删除                  |
+| `config/backfill.go`             | 删除                          | backfill 配置删除                               |
+| `config/filter.go`               | 删除                          | backfill SQL/filter helper 删除                 |
+| `config/pipeline.go`             | 删除/下沉                     | pipeline 配置下沉到 `internal/process/pipeline` |
+| `internal/core/store/`           | `internal/dao/store/`         | 数据持久化移动到 dao 领域                       |
+| `internal/core/runtime/mongo.go` | `internal/dao/mongo/mongo.go` | Mongo resource 移到 dao/mongo                   |
+| `internal/core/filter/`          | `internal/parser/filter/`     | 上报 filter 移到 parser 领域；SQL 编译能力删除  |
+| `internal/core/talog/`           | `internal/parser/talog/`      | TA log parser 移到 parser 领域                  |
+| `internal/core/tailer/`          | `internal/source/tailer/`     | tailer 归入 source 领域                         |
+| `internal/core/dynamicbatch/`    | `internal/process/pipeline/`  | 动态批刷新归入 pipeline                         |
+| `internal/core/taskqueue/`       | 删除                          | task queue 删除                                 |
+| `internal/core/remoteconfig/`    | 删除                          | remote config 删除                              |
+| `internal/process/ingest/`       | 删除/拆分                     | 同步 ingest 能力重组为 single/batch uploader    |
+| `internal/process/ingestion/`    | `internal/process/single/`    | 共享 processor/counter/stat 归入 single 体系    |
+| `internal/service/report/`       | `internal/role/daemon/`       | report service 改为 daemon role                 |
+| `internal/service/gateway/`      | `internal/role/gateway/`      | gateway runtime 移入 role                       |
+| `internal/service/worker/`       | 删除                          | worker runtime 删除                             |
+| `internal/service/backfill/`     | 删除                          | backfill runtime 删除                           |
+| 无                               | `internal/logging/`           | 新增全局日志包                                  |
+| 无                               | `internal/source/httpbody/`   | 新增 HTTP body 数据源                           |
+| 无                               | `internal/source/stdin/`      | 新增 stdin 数据源                               |
+| 无                               | `internal/source/taapi/`      | 新增预留 TA API 数据源                          |
+| 无                               | `internal/role/api/`          | 新增内部可复用上报引擎                          |
 
 ## v1.1 保留或强化的能力
 
@@ -314,16 +311,16 @@ import "github.com/aura-studio/tango/internal/role/api"
 
 ## 兼容性风险
 
-| 风险 | 影响 |
-|---|---|
-| 命令不兼容 | `report run`、`worker run`、`gateway serve`、`operator` 在 v1.1 不存在 |
-| 配置不兼容 | v1.0 配置文件不能直接用于 v1.1，需要迁移 key |
-| 环境变量不兼容 | `TANGO_RUNTIME_*`、`TANGO_REPORT_*`、`TANGO_TASKS_*` 等大量变量失效 |
-| HTTP API 不兼容 | `/upload` 的语义改变；其他控制面接口删除 |
-| Go import 不兼容 | `github.com/aura-studio/tango/client` 删除，外部调用方无法直接用 `internal/role/api` |
-| 数据库辅助集合不兼容 | task/remote/backfill/fileupload 相关集合不再读写 |
-| 运行模型不兼容 | v1.1 不再支持“采集 + worker 控制面”组合部署 |
-| 功能范围不兼容 | backfill、SQL、任务发布、远程热更新若仍需要，必须重新引入或另建服务 |
+| 风险                 | 影响                                                                                 |
+| -------------------- | ------------------------------------------------------------------------------------ |
+| 命令不兼容           | `report run`、`worker run`、`gateway serve`、`operator` 在 v1.1 不存在               |
+| 配置不兼容           | v1.0 配置文件不能直接用于 v1.1，需要迁移 key                                         |
+| 环境变量不兼容       | `TANGO_RUNTIME_*`、`TANGO_REPORT_*`、`TANGO_TASKS_*` 等大量变量失效                  |
+| HTTP API 不兼容      | `/upload` 的语义改变；其他控制面接口删除                                             |
+| Go import 不兼容     | `github.com/aura-studio/tango/client` 删除，外部调用方无法直接用 `internal/role/api` |
+| 数据库辅助集合不兼容 | task/remote/backfill/fileupload 相关集合不再读写                                     |
+| 运行模型不兼容       | v1.1 不再支持“采集 + worker 控制面”组合部署                                          |
+| 功能范围不兼容       | backfill、SQL、任务发布、远程热更新若仍需要，必须重新引入或另建服务                  |
 
 ## v1.0 到 v1.1 迁移清单
 
@@ -344,19 +341,19 @@ import "github.com/aura-studio/tango/internal/role/api"
 
 ## 重要提交脉络
 
-| 提交 | 主题 | 影响 |
-|---|---|---|
-| `48d6e38` | Refactor ingestion pipeline and DAO/package structure | 开始重组 ingest、DAO、包结构 |
-| `8a64233` | Rename core store packages to dao and refresh imports | store 迁到 dao |
-| `b415b83` | restructure internal layout | 形成 source/parser/process/engine 分层雏形 |
-| `41fe303` | unify upload engine across roles | 统一上传引擎和配置键路径 |
-| `be56c4b` | daemon and gateway commands into role-specific packages | 命令按角色包重组 |
-| `1151c96` | gateway client into role package and NewServer | gateway runtime 迁入 role |
-| `3757c8e` | Validate pure delegation | 配置校验下沉模块 |
-| `a9e1ef2` | module own default-key registration | 每个模块注册自己的默认 key |
-| `7220866` | logging + panic recovery | 增加全局 logging 与 goroutine recover |
-| `acaacbc` | recover daemon stats reporter and gateway serve goroutines | 健壮性补强 |
-| `4836c52` | full file/env/flag parity for every key | 每个配置键都有同名 flag，角色由子命令指定 |
+| 提交      | 主题                                                       | 影响                                       |
+| --------- | ---------------------------------------------------------- | ------------------------------------------ |
+| `48d6e38` | Refactor ingestion pipeline and DAO/package structure      | 开始重组 ingest、DAO、包结构               |
+| `8a64233` | Rename core store packages to dao and refresh imports      | store 迁到 dao                             |
+| `b415b83` | restructure internal layout                                | 形成 source/parser/process/engine 分层雏形 |
+| `41fe303` | unify upload engine across roles                           | 统一上传引擎和配置键路径                   |
+| `be56c4b` | daemon and gateway commands into role-specific packages    | 命令按角色包重组                           |
+| `1151c96` | gateway client into role package and NewServer             | gateway runtime 迁入 role                  |
+| `3757c8e` | Validate pure delegation                                   | 配置校验下沉模块                           |
+| `a9e1ef2` | module own default-key registration                        | 每个模块注册自己的默认 key                 |
+| `7220866` | logging + panic recovery                                   | 增加全局 logging 与 goroutine recover      |
+| `acaacbc` | recover daemon stats reporter and gateway serve goroutines | 健壮性补强                                 |
+| `4836c52` | full file/env/flag parity for every key                    | 每个配置键都有同名 flag，角色由子命令指定  |
 
 ## 后续待决策
 
@@ -366,35 +363,42 @@ import "github.com/aura-studio/tango/internal/role/api"
 - 是否仍需要 remote config。如果需要，需要定义 filter 版本、ack、回滚和安全边界，而不是只恢复旧 `_tango_config`。
 - 是否仍需要 taskqueue。如果需要，需要明确它是平台控制面的一部分，还是 tango 上报引擎之外的独立组件。
 
-## 待修复：DocumentDB 不支持聚合管道更新（pipeline update）
+## 已修复：DocumentDB 不支持聚合管道更新（pipeline update）
 
 **现象**：在 Amazon DocumentDB 上跑 `user_set` 上报，bulk write 报
 `Wrong type for parameter u`。（在 scp-api/tango Lambda 接 DocumentDB `rocket-nano`
 实测复现；`track` 事件正常。）
 
 **根因**：`internal/dao/store/writemodel.go` 里部分写模型用了**聚合管道更新**
-（update 传 `bson.A{ {$set: ...} }` 数组形式，注释标注 "aggregation pipeline update
-(MongoDB 4.2+)"）。DocumentDB **不支持** update 用聚合管道，要求 `u` 是文档对象而非数组，
-故拒绝并报 `Wrong type for parameter u`。
+（update 传 `bson.A{ {$set: ...} }` 数组形式）。DocumentDB **不支持** update 用聚合管道，
+要求 `u` 是文档对象而非数组，故拒绝并报 `Wrong type for parameter u`。受影响：
+`UserWriteModel` 的 `user_set` / `user_unset` / 默认分支，`EventWriteModel` 的
+`track_update` / `track_overwrite`。`track` / `user_setOnce` / `user_add` / `user_append` /
+`user_uniq_append` / `user_del` 用传统操作符，不受影响。
 
-**受影响的操作（用了管道，DocumentDB 上必失败）**：
-- `UserWriteModel`：`user_set`、`user_unset`、以及 user 默认分支（fallback 同 `user_set`）
-- `EventWriteModel`：`track_update`、`track_overwrite`
+**修复方案（方向 3 — 统一 filter-guard，方案 A）**：把上述 5 个管道写模型改写为
+DocumentDB 兼容的**普通文档式 update**，并把"按 `_ts` 防回退"从 update 内容移到查询
+**filter** 里。关键依据：每条 TA 记录只携带一个 `_ts`，所以"逐字段比 `_ts`"与"整条文档
+比一次 `_ts`"等价，filter 级别的整文档守卫即可表达原管道语义。
 
-**兼容、当前可正常写的（用传统操作符）**：
-- `track` / event 默认（`$setOnInsert`）、`user_setOnce`（`$setOnInsert`）、
-  `user_add`（`$inc`）、`user_append`（`$push`）、`user_uniq_append`（`$addToSet`）、
-  `user_del`（delete）
+- `tsGuardOr(ts)`（`writemodel.go`）生成
+  `$or:[{_ts:{$exists:false}},{_ts:{$lte:ts}}]`，加进 filter；update 用普通
+  `{$set:...}` / `{$set,$unset}` / `ReplaceOne`，全部 `upsert:true`。
+- 库里已有更新文档（`_ts` 更大）时 filter 不命中 → upsert 触发唯一键冲突
+  `E11000`，这是**预期的"跳过"**。`store.go` 的 `isOnlyDuplicateKey` 把"全是
+  E11000"的 bulk 错误判为成功（不重试、不计失败）。
+- 因 `_ts` 守卫使批内顺序不再影响最终态，user 写从有序改为**无序**
+  （`worker.go` / `process/batch` / `process/single` 统一走 `BulkWrite`），
+  让单条 E11000 不再中止整批。
+- 删除不再使用的 `tsCondSet` / `tsCondUnset` / `trackTsCondSetNoOp` /
+  `trackTsCondSetPipeline` / `trackTsCondReplacePipeline`。
 
-**改造难点**：这些管道更新承载了"按 `_ts` 防回退"的条件语义
-（`tsCondSet` / `tsCondUnset` / `trackTsCondSetNoOp` / `trackTsCondReplacePipeline`：
-仅当 `incoming _ts >= existing _ts` 才覆盖/删除字段）。传统 update 操作符无法表达
-"按字段比较 `_ts` 再决定写不写"，所以不是简单替换，需要重新设计。可选方向（待评估）：
-1. 用 `$max`(\_ts) + `$set`/`$setOnInsert` 的组合近似，放弃严格的逐字段防回退；
-2. 把防回退判断上移到应用层：先读当前 `_ts`，再决定写法（多一次往返，注意并发）；
-3. 用 filter 表达 `_ts` 条件（如 `filter` 带 `_ts <= incoming` 的乐观更新 +
-   upsert/重试）来逼近顺序保护；
-4. 检测后端类型（MongoDB vs DocumentDB），分别走管道 / 传统两套写模型。
+**语义保持**：与原管道等价，旧的 `_ts` 防回退集成测试继续通过；原生 MongoDB 行为不变
+（两种引擎共用同一套写模型）。
 
-**注意**：评估时要同时校验 `user`/`event` 的 `_ts` 防回退行为在 DocumentDB 上是否仍成立，
-并补充 DocumentDB 环境下的集成测试（现有 `tests/` 默认连本地 MongoDB，跑不到这条路径）。
+**测试**：`store` 包单测改为断言新的 filter-guard 形状（普通文档、非 `bson.A`）；
+`testhelper_test.go` 支持 `TANGO_TEST_MONGO_URI` 环境变量，可把整套 `store` 集成测试指向
+真实 DocumentDB 跑（堵住"测试只连本地 MongoDB、跑不到引擎差异"的盲区）。
+
+**发布**：tag 新版 `aura-studio/tango` → bump `scp-api/tango`、`scp-lambda/tango`
+（当前 pin `v1.2.0`）及 rocket-nano 的 tango 镜像 → 重建并重新部署 sidecar。

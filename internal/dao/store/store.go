@@ -4,6 +4,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"time"
 
@@ -103,6 +104,14 @@ func (s *Store) bulkWrite(ctx context.Context, coll *mongo.Collection, models []
 		attempt++
 		opts := options.BulkWrite().SetOrdered(ordered)
 		_, err := coll.BulkWrite(ctx, models, opts)
+		if err != nil && isOnlyDuplicateKey(err) {
+			// Benign: the _ts filter-guard write models (see writemodel.go) skip a
+			// record whose target already holds a newer _ts by failing to match,
+			// after which the upsert's insert attempt conflicts with the unique key
+			// (E11000). These are intended no-ops, not failures — don't retry or
+			// report them.
+			return nil
+		}
 		return err
 	}
 
@@ -125,4 +134,26 @@ func (s *Store) bulkWrite(ctx context.Context, coll *mongo.Collection, models []
 		return err
 	}
 	return nil
+}
+
+// isOnlyDuplicateKey reports whether a bulk-write error consists solely of
+// duplicate-key (E11000) write errors with no write-concern error. The _ts
+// filter-guard write models (see writemodel.go) rely on this: when a newer
+// document already exists, the guarded upsert fails to match and its insert
+// attempt conflicts with the unique key, surfacing as E11000. Such errors mean
+// "skipped, a newer record won" — they are intended no-ops, not failures.
+func isOnlyDuplicateKey(err error) bool {
+	var bwe mongo.BulkWriteException
+	if !errors.As(err, &bwe) {
+		return false
+	}
+	if bwe.WriteConcernError != nil || len(bwe.WriteErrors) == 0 {
+		return false
+	}
+	for _, we := range bwe.WriteErrors {
+		if we.Code != 11000 {
+			return false
+		}
+	}
+	return true
 }

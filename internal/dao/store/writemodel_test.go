@@ -1,127 +1,132 @@
 package store
 
 import (
-	"reflect"
 	"testing"
 
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
-func TestTrackTsCondSetNoOpPipelineStructure(t *testing.T) {
-	ts := int64(123)
-
-	stage := trackTsCondSetNoOp(ts, bsonM(map[string]any{
-		"a": "v1",
-		// "_ts" is intentionally ignored by the builder
-		"_ts": int64(999),
-	}))
-
-	// _ts stage must advance forward via $max
-	expectedMax := bson.M{
-		"$max": bson.A{"$_ts", ts},
-	}
-	if got := stage["_ts"]; !reflect.DeepEqual(got, expectedMax) {
-		t.Fatalf("unexpected _ts stage: got=%v expected=%v", got, expectedMax)
-	}
-
-	// Field "a" should use $cond with strict no-create semantics:
-	// - if: ts >= ifNull($_ts, 0)
-	// - then: "v1"
-	// - else: ifNull("$a", "$$REMOVE") => $$REMOVE will be used for missing fields
-	aStage, ok := stage["a"].(bson.M)
+// assertTsGuardFilter checks that a filter has the DocumentDB-compatible shape
+//
+//	{ <key>: <val>, $or: [ {_ts:{$exists:false}}, {_ts:{$lte: ts}} ] }
+//
+// produced by the _ts filter-guard write models (see tsGuardOr).
+func assertTsGuardFilter(t *testing.T, filter any, key string, val, ts any) {
+	t.Helper()
+	f, ok := filter.(bson.M)
 	if !ok {
-		t.Fatalf("expected stage['a'] to be bson.M, got=%T (%v)", stage["a"], stage["a"])
+		t.Fatalf("filter = %T, want bson.M", filter)
 	}
-
-	condObj, ok := aStage["$cond"].(bson.M)
+	if f[key] != val {
+		t.Errorf("filter[%q] = %v, want %v", key, f[key], val)
+	}
+	or, ok := f["$or"].(bson.A)
+	if !ok || len(or) != 2 {
+		t.Fatalf("filter $or = %T (%v), want bson.A of length 2", f["$or"], f["$or"])
+	}
+	// First clause: {_ts: {$exists: false}}.
+	c0, ok := or[0].(bson.M)
 	if !ok {
-		t.Fatalf("expected stage['a'].$cond to be bson.M, got=%T (%v)", aStage["$cond"], aStage["$cond"])
+		t.Fatalf("$or[0] = %T, want bson.M", or[0])
 	}
-
-	ifCond, ok := condObj["if"].(bson.M)
+	if ex, ok := c0["_ts"].(bson.M); !ok || ex["$exists"] != false {
+		t.Errorf("$or[0] = %v, want {_ts:{$exists:false}}", or[0])
+	}
+	// Second clause: {_ts: {$lte: ts}}.
+	c1, ok := or[1].(bson.M)
 	if !ok {
-		t.Fatalf("expected $cond.if to be bson.M, got=%T (%v)", condObj["if"], condObj["if"])
+		t.Fatalf("$or[1] = %T, want bson.M", or[1])
 	}
-	if _, ok := ifCond["$gte"]; !ok {
-		t.Fatalf("expected $cond.if to contain $gte, got=%v", ifCond)
-	}
-
-	if condObj["then"] != "v1" {
-		t.Fatalf("expected then='v1', got=%v", condObj["then"])
-	}
-
-	elseExpr, ok := condObj["else"].(bson.M)
+	lte, ok := c1["_ts"].(bson.M)
 	if !ok {
-		t.Fatalf("expected $cond.else to be bson.M, got=%T (%v)", condObj["else"], condObj["else"])
+		t.Fatalf("$or[1]._ts = %T, want bson.M", c1["_ts"])
 	}
-
-	if _, ok := elseExpr["$ifNull"]; !ok {
-		t.Fatalf("expected else to contain $ifNull, got=%v", elseExpr)
-	}
-
-	elseArgs, ok := elseExpr["$ifNull"].(bson.A)
-	if !ok {
-		t.Fatalf("expected elseExpr['$ifNull'] to be bson.A, got=%T (%v)", elseExpr["$ifNull"], elseExpr["$ifNull"])
-	}
-	if len(elseArgs) != 2 {
-		t.Fatalf("expected $ifNull args length=2, got=%d (%v)", len(elseArgs), elseArgs)
-	}
-	if elseArgs[1] != "$$REMOVE" {
-		t.Fatalf("expected strict no-create via $$REMOVE, got=%v", elseArgs[1])
-	}
-
-	// Also ensure pipeline does not try to write "_ts" as a conditional field.
-	if _, exists := stage["_ts"]; !exists {
-		t.Fatalf("expected stage['_ts'] to exist")
+	if lte["$lte"] != ts {
+		t.Errorf("$or[1]._ts.$lte = %v, want %v", lte["$lte"], ts)
 	}
 }
 
-func TestTrackTsCondReplacePipelineStructure(t *testing.T) {
-	ts := int64(7)
-	doc := bsonM(map[string]any{
-		"_ts": ts,
-		"x":   1,
+// assertPlainUpdate fails if update is an aggregation pipeline (bson.A) instead
+// of a plain document — DocumentDB rejects pipeline-form updates with
+// "Wrong type for parameter u", which is exactly the bug these models fix.
+func assertPlainUpdate(t *testing.T, update any) bson.M {
+	t.Helper()
+	if _, isPipeline := update.(bson.A); isPipeline {
+		t.Fatalf("update is a bson.A pipeline; DocumentDB requires a plain document")
+	}
+	m, ok := update.(bson.M)
+	if !ok {
+		t.Fatalf("update = %T, want bson.M", update)
+	}
+	return m
+}
+
+// TestUserWriteModel_UserSet_FilterGuard pins the DocumentDB-compatible shape of
+// user_set: a plain {$set: ...} update guarded by an _ts filter.
+func TestUserWriteModel_UserSet_FilterGuard(t *testing.T) {
+	ts := int64(123)
+	model := UserWriteModel("user_set", 7, bson.M{
+		"#time": "2024-01-01",
+		"_ts":   ts,
+		"name":  "Alice",
 	})
 
-	pipeline := trackTsCondReplacePipeline(ts, doc)
-	if len(pipeline) != 1 {
-		t.Fatalf("expected pipeline length=1, got=%d", len(pipeline))
-	}
-
-	replaceWith, ok := pipeline[0].(bson.M)
+	upd, ok := model.(*mongo.UpdateOneModel)
 	if !ok {
-		t.Fatalf("expected pipeline[0] to be bson.M, got=%T (%v)", pipeline[0], pipeline[0])
+		t.Fatalf("expected *mongo.UpdateOneModel, got %T", model)
 	}
-
-	rwExpr, ok := replaceWith["$replaceWith"].(bson.M)
+	if upd.Upsert == nil || !*upd.Upsert {
+		t.Error("user_set model must be an upsert")
+	}
+	set := assertPlainUpdate(t, upd.Update)
+	setDoc, ok := set["$set"].(bson.M)
 	if !ok {
-		t.Fatalf("expected $replaceWith to be bson.M, got=%T (%v)", replaceWith["$replaceWith"], replaceWith["$replaceWith"])
+		t.Fatalf("update missing $set document: %v", set)
 	}
-
-	condArr, ok := rwExpr["$cond"].(bson.A)
-	if !ok {
-		t.Fatalf("expected $replaceWith.$cond to be bson.A, got=%T (%v)", rwExpr["$cond"], rwExpr["$cond"])
+	if setDoc["name"] != "Alice" || setDoc["#user_id"] != int64(7) || setDoc["_ts"] != ts {
+		t.Errorf("$set = %v, want name/#user_id/_ts present", setDoc)
 	}
-	if len(condArr) != 3 {
-		t.Fatalf("expected $cond array length=3, got=%d (%v)", len(condArr), condArr)
-	}
-
-	// condArr[1] must be {"$literal": doc}
-	litObj, ok := condArr[1].(bson.M)
-	if !ok {
-		t.Fatalf("expected condArr[1] to be bson.M, got=%T (%v)", condArr[1], condArr[1])
-	}
-	if _, ok := litObj["$literal"]; !ok {
-		t.Fatalf("expected $literal wrapper for full doc replacement, got=%v", condArr[1])
-	}
-	if !reflect.DeepEqual(litObj["$literal"], doc) {
-		t.Fatalf("expected $literal doc to match, got=%v expected=%v", litObj["$literal"], doc)
-	}
-
-	// condArr[2] must keep existing doc unchanged: $$ROOT
-	if condArr[2] != "$$ROOT" {
-		t.Fatalf("expected $$ROOT for no-op on older _ts, got=%v", condArr[2])
-	}
+	assertTsGuardFilter(t, upd.Filter, "#user_id", int64(7), ts)
 }
 
-func bsonM(m map[string]any) bson.M { return bson.M(m) }
+// TestEventWriteModel_TrackUpdate_FilterGuard pins track_update: a plain
+// {$set: doc} update guarded by an _ts filter.
+func TestEventWriteModel_TrackUpdate_FilterGuard(t *testing.T) {
+	ts := int64(123)
+	doc := bson.M{"#uuid": "u1", "_ts": ts, "a": "v1"}
+	model := EventWriteModel("track_update", "u1", doc)
+
+	upd, ok := model.(*mongo.UpdateOneModel)
+	if !ok {
+		t.Fatalf("expected *mongo.UpdateOneModel, got %T", model)
+	}
+	if upd.Upsert == nil || !*upd.Upsert {
+		t.Error("track_update model must be an upsert")
+	}
+	set := assertPlainUpdate(t, upd.Update)
+	if _, ok := set["$set"].(bson.M); !ok {
+		t.Fatalf("update missing $set document: %v", set)
+	}
+	assertTsGuardFilter(t, upd.Filter, "#uuid", "u1", ts)
+}
+
+// TestEventWriteModel_TrackOverwrite_FilterGuard pins track_overwrite: a
+// ReplaceOne guarded by an _ts filter.
+func TestEventWriteModel_TrackOverwrite_FilterGuard(t *testing.T) {
+	ts := int64(7)
+	doc := bson.M{"#uuid": "u2", "_ts": ts, "x": 1}
+	model := EventWriteModel("track_overwrite", "u2", doc)
+
+	rep, ok := model.(*mongo.ReplaceOneModel)
+	if !ok {
+		t.Fatalf("expected *mongo.ReplaceOneModel, got %T", model)
+	}
+	if rep.Upsert == nil || !*rep.Upsert {
+		t.Error("track_overwrite model must be an upsert")
+	}
+	if _, ok := rep.Replacement.(bson.M); !ok {
+		t.Fatalf("replacement = %T, want bson.M", rep.Replacement)
+	}
+	assertTsGuardFilter(t, rep.Filter, "#uuid", "u2", ts)
+}
