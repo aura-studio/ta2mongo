@@ -9,8 +9,8 @@ import (
 	"context"
 	"fmt"
 
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 // MongoResource bundles a MongoDB client with its resolved database. Close
@@ -24,7 +24,7 @@ type MongoResource struct {
 // with a Ping, resolves the database from the URI path, and returns an owned
 // MongoResource. The caller must Close it.
 func ConnectMongo(ctx context.Context, cfg *Config) (*MongoResource, error) {
-	client, err := mongo.Connect(ctx, options.Client().
+	client, err := mongo.Connect(options.Client().
 		ApplyURI(cfg.URI).
 		SetConnectTimeout(cfg.ConnectTimeout).
 		SetServerSelectionTimeout(cfg.ServerSelectionTimeout))

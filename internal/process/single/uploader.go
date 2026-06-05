@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	drivermongo "go.mongodb.org/mongo-driver/mongo"
+	drivermongo "go.mongodb.org/mongo-driver/v2/mongo"
 
 	"github.com/aura-studio/tango/internal/dao"
 	"github.com/aura-studio/tango/internal/logging"

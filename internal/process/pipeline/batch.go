@@ -1,6 +1,6 @@
 package pipeline
 
-import "go.mongodb.org/mongo-driver/mongo"
+import "go.mongodb.org/mongo-driver/v2/mongo"
 
 // Batch accumulates write models for a single collection.
 type Batch struct {

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 // testMongoURI returns the connection string for the integration tests: the
@@ -41,7 +41,7 @@ func testSetup(t *testing.T) (*Store, *mongo.Database, func()) {
 		SetServerSelectionTimeout(3 * time.Second).
 		SetConnectTimeout(3 * time.Second)
 
-	client, err := mongo.Connect(ctx, clientOpts)
+	client, err := mongo.Connect(clientOpts)
 	if err != nil {
 		t.Skipf("MongoDB not available at %s: %v", uri, err)
 	}

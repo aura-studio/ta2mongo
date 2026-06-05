@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"github.com/aura-studio/tango/internal/dao"
 	daomongo "github.com/aura-studio/tango/internal/dao/mongo"
@@ -30,7 +30,7 @@ func pingMongo(t *testing.T) {
 		SetServerSelectionTimeout(2 * time.Second).
 		SetConnectTimeout(2 * time.Second)
 
-	client, err := mongo.Connect(ctx, clientOpts)
+	client, err := mongo.Connect(clientOpts)
 	if err != nil {
 		t.Skipf("MongoDB not available at %s: %v", testMongoURI, err)
 	}
@@ -78,7 +78,7 @@ func testServerSetup(t *testing.T, mode process.Mode) (*harness, func()) {
 		t.Fatalf("EnsureIndexes: %v", err)
 	}
 
-	verifyClient, _ := mongo.Connect(ctx, options.Client().ApplyURI(uri))
+	verifyClient, _ := mongo.Connect(options.Client().ApplyURI(uri))
 	db := verifyClient.Database(dbName)
 
 	cleanup := func() {

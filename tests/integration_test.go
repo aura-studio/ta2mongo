@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"github.com/aura-studio/tango/internal/dao"
 	daomongo "github.com/aura-studio/tango/internal/dao/mongo"
@@ -43,8 +43,8 @@ func pingMongo(t *testing.T) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(mongoURI()).
-		SetServerSelectionTimeout(2*time.Second).SetConnectTimeout(2*time.Second))
+	client, err := mongo.Connect(options.Client().ApplyURI(mongoURI()).
+		SetServerSelectionTimeout(2 * time.Second).SetConnectTimeout(2 * time.Second))
 	if err != nil {
 		t.Skipf("MongoDB not available: %v", err)
 	}
@@ -64,8 +64,7 @@ func freshDB(t *testing.T) (*dao.Config, *mongo.Database, func()) {
 	uri := mongoURI() + "/" + dbName
 	daoCfg := &dao.Config{Mongo: &daomongo.Config{URI: uri}}
 
-	ctx := context.Background()
-	vc, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
+	vc, err := mongo.Connect(options.Client().ApplyURI(uri))
 	if err != nil {
 		t.Fatalf("verify connect: %v", err)
 	}

@@ -11,8 +11,8 @@ import (
 	"github.com/aura-studio/tango/internal/logging"
 
 	"github.com/cenkalti/backoff/v4"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 // Config is the store's own configuration — the subset of settings the store
