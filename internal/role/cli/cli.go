@@ -9,6 +9,7 @@ import (
 	"io"
 
 	"github.com/aura-studio/tango/internal/dao"
+	"github.com/aura-studio/tango/internal/dataapi"
 	"github.com/aura-studio/tango/internal/parser"
 	"github.com/aura-studio/tango/internal/process"
 	"github.com/aura-studio/tango/internal/role/api"
@@ -29,4 +30,39 @@ func Run(ctx context.Context, daoCfg *dao.Config, procCfg *process.Config, parse
 		return api.Result{}, err
 	}
 	return eng.Run(ctx, source.NewReader(in))
+}
+
+// RunData reads a single Extended-JSON Mongo Data API request from in, executes
+// it through the embedded api engine, and writes the Extended-JSON response to
+// out. It is the console equivalent of the gateway POST /data endpoint and does
+// not use the process/parser config.
+func RunData(ctx context.Context, daoCfg *dao.Config, in io.Reader, out io.Writer) error {
+	body, err := io.ReadAll(in)
+	if err != nil {
+		return err
+	}
+	req, err := dataapi.DecodeRequest(body)
+	if err != nil {
+		return err
+	}
+
+	eng, err := api.New(ctx, daoCfg, nil, nil)
+	if err != nil {
+		return err
+	}
+	defer eng.Close()
+
+	resp, err := eng.Data(ctx, req)
+	if err != nil {
+		return err
+	}
+	encoded, err := resp.MarshalEJSON()
+	if err != nil {
+		return err
+	}
+	if _, err := out.Write(encoded); err != nil {
+		return err
+	}
+	_, err = out.Write([]byte("\n"))
+	return err
 }

@@ -21,6 +21,7 @@ import (
 	"fmt"
 
 	"github.com/aura-studio/tango/internal/dao"
+	"github.com/aura-studio/tango/internal/dataapi"
 	"github.com/aura-studio/tango/internal/logging"
 	"github.com/aura-studio/tango/internal/parser"
 	"github.com/aura-studio/tango/internal/process"
@@ -122,4 +123,13 @@ func (c *Engine) Run(ctx context.Context, src source.Source) (Result, error) {
 // It is a convenience over Run for the common in-memory case.
 func (c *Engine) Upload(ctx context.Context, lines []string) (Result, error) {
 	return c.Run(ctx, source.NewLines(lines))
+}
+
+// Data executes a Mongo Data API request against the engine's MongoDB
+// connection and returns the result. It is the shared functional core behind the
+// gateway POST /data endpoint and the cli data sub-mode, and is independent of
+// the upload pipeline (process/parser config is unused). The request's database
+// defaults to the one named in the connection URI when omitted.
+func (c *Engine) Data(ctx context.Context, req *dataapi.Request) (*dataapi.Response, error) {
+	return dataapi.Execute(ctx, c.dao.Mongo.Client, c.dao.Mongo.DB.Name(), req)
 }

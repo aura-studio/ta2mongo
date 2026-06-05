@@ -1,0 +1,26 @@
+// Sample Mongo Data API request bodies (Extended JSON v2).
+// One request per invocation — pipe a single object to `tango --config cli.data.yaml`,
+// or POST it to the gateway's /data endpoint:
+//   curl -X POST localhost:8080/data -H 'Content-Type: application/ejson' -d @<(...)
+//
+// Request shell: action (required), collection (required), database (optional,
+// defaults to the DB in the connection URI), filter, projection, sort, limit,
+// skip, document, update, pipeline, upsert.
+
+// findOne
+{"action":"findOne","collection":"user","filter":{"#user_id":{"$numberLong":"1"}}}
+
+// find — projection + sort + limit
+{"action":"find","collection":"event","filter":{"#event_name":"login"},"projection":{"#time":1,"#account_id":1},"sort":{"#time":-1},"limit":10}
+
+// insertOne — note the $date Extended-JSON type round-trips as a BSON Date
+{"action":"insertOne","collection":"event","document":{"#event_name":"login","#time":{"$date":"2026-01-01T00:00:00Z"}}}
+
+// updateOne — upsert
+{"action":"updateOne","collection":"user","filter":{"#user_id":{"$numberLong":"1"}},"update":{"$set":{"vip":true}},"upsert":true}
+
+// deleteOne
+{"action":"deleteOne","collection":"event","filter":{"#uuid":"abc-123"}}
+
+// aggregate — group + count
+{"action":"aggregate","collection":"event","pipeline":[{"$group":{"_id":"$#event_name","n":{"$sum":1}}},{"$sort":{"n":-1}}]}

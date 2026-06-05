@@ -25,7 +25,7 @@ tango --role.mode gateway       # 角色也可用 flag / 环境变量覆盖（�
 |---|---|
 | `daemon`（默认） | `logging` · `dao` · `parser` · `source` · `process` |
 | `gateway` | `logging` · `dao` · `parser` · `process` · `role.gateway` |
-| `cli` | `logging` · `dao` · `parser` · `process` |
+| `cli` | `logging` · `dao` · `parser` · `process` · `role.cli`（`function=data` 时仅 `logging` · `dao` · `role.cli`） |
 
 ## Daemon Service
 
@@ -59,9 +59,55 @@ gateway 是常驻 HTTP 服务，读取共享段 `logging` + `dao` + `parser` + `
 |---|---|---|---|
 | GET | `/healthz` | - | 健康检查 |
 | POST | `/upload` | `{"line":...,"lines":[...]}` | 日志数组上报，策略由 `process.mode` 决定 |
+| POST | `/data` | EJSON `{action, collection, ...}` | Mongo Data API：通用 CRUD/aggregate（见下） |
 
 请求体的 `line` / `lines` 会被包成一个 httpbody 源，按 `process.mode` 选 single / batch / pipeline
 三种上传策略之一写入 MongoDB，返回本次统计（行数 / user / event / 死信等）。
+
+## Mongo Data API（`/data` · cli `data` · `api.Data`）
+
+通用的 MongoDB 读写接口，与 `/upload` 完全独立。功能核心在 `internal/dataapi`，三端共享、只是入口不同：
+gateway 的 `POST /data`、cli 的 `role.cli.function=data`（stdin→stdout）、库的 `engine.Data(ctx, req)`。
+
+请求/响应体均为 **Extended JSON v2**（`bson.UnmarshalExtJSON` / `MarshalExtJSON`）；请求 `Content-Type`
+建议 `application/ejson`，也接受 `application/json`（JSON 是 EJSON 子集）；响应为 relaxed EJSON。
+
+**这是完全放开的接口**：可访问任意 database / collection，任意 filter / operator / aggregate pipeline，
+不设白名单、不设返回条数 / body / 超时上限——访问控制由调用方负责。
+
+action 列表：`findOne`、`find`、`insertOne`、`updateOne`、`deleteOne`、`aggregate`。
+请求外壳字段：`action`（必填）、`collection`（必填）、`database`（缺省取连接 URI 里的库）、
+`filter`、`projection`、`sort`、`limit`、`skip`、`document`（insertOne）、`update`（updateOne）、
+`pipeline`（aggregate）、`upsert`。
+
+```bash
+# find（限制 5 条，按 #time 倒序）
+curl -X POST localhost:8080/data -H 'Content-Type: application/ejson' -d '{
+  "action":"find","collection":"event",
+  "filter":{"#event_name":"login"},"sort":{"#time":-1},"limit":5}'
+
+# insertOne
+curl -X POST localhost:8080/data -H 'Content-Type: application/ejson' -d '{
+  "action":"insertOne","collection":"event",
+  "document":{"#event_name":"login","#time":{"$date":"2026-01-01T00:00:00Z"}}}'
+
+# updateOne（upsert）
+curl -X POST localhost:8080/data -H 'Content-Type: application/ejson' -d '{
+  "action":"updateOne","collection":"user","filter":{"#user_id":{"$numberLong":"1"}},
+  "update":{"$set":{"vip":true}},"upsert":true}'
+
+# aggregate
+curl -X POST localhost:8080/data -H 'Content-Type: application/ejson' -d '{
+  "action":"aggregate","collection":"event",
+  "pipeline":[{"$group":{"_id":"$#event_name","n":{"$sum":1}}}]}'
+```
+
+cli 端等价（一次性，从 stdin 读一个请求、stdout 输出一个响应）：
+
+```bash
+echo '{"action":"find","collection":"event","filter":{},"limit":5}' \
+  | tango --role.mode cli --role.cli.function data --dao.mongo.uri mongodb://localhost:27017/tango
+```
 
 ## CLI Upload
 
@@ -72,6 +118,9 @@ cat events.ndjson | tango --role.mode cli --process.mode batch --dao.mongo.uri m
 
 `process.mode` 取 `single` / `batch` / `pipeline`（默认 `batch`），可来自配置文件、`TANGO_PROCESS_MODE` 或 `--process.mode`。
 `role.mode=cli` 是 gateway `POST /upload` 的控制台等价入口（从 stdin 读取）。
+
+cli 角色由 `role.cli.function` 选功能：`upload`（默认，上面这种日志上报）或 `data`（Mongo Data API，
+读一个 EJSON 请求、输出 EJSON 响应，等价于 `POST /data`，见上节）。
 
 ## 作为库使用（api 角色）
 
@@ -90,4 +139,16 @@ defer eng.Close()
 eng.EnsureIndexes(ctx)
 
 res, _ := eng.Upload(ctx, lines)
+```
+
+同一引擎也暴露 Mongo Data API（与上报共用连接，不需要 process/parser 配置）：
+
+```go
+import "github.com/aura-studio/tango/internal/dataapi"
+
+resp, _ := eng.Data(ctx, &dataapi.Request{
+    Action: dataapi.ActionFind, Collection: "event",
+    Filter: bson.M{"#event_name": "login"}, Limit: 5,
+})
+// resp.Documents ...
 ```

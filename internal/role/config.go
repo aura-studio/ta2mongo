@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/aura-studio/tango/internal/cfgtree"
+	"github.com/aura-studio/tango/internal/role/cli"
 	"github.com/aura-studio/tango/internal/role/daemon"
 	"github.com/aura-studio/tango/internal/role/gateway"
 )
@@ -36,6 +37,8 @@ type Config struct {
 	Daemon *daemon.Config `mapstructure:"daemon"`
 	// Gateway is the HTTP gateway role config (file key role.gateway.*).
 	Gateway *gateway.Config `mapstructure:"gateway"`
+	// Cli is the cli role config (file key role.cli.*).
+	Cli *cli.Config `mapstructure:"cli"`
 }
 
 // Validate delegates to the configured role sub-configs.
@@ -56,6 +59,11 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("gateway: %w", err)
 		}
 	}
+	if c.Cli != nil {
+		if err := c.Cli.Validate(); err != nil {
+			return fmt.Errorf("cli: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -64,6 +72,7 @@ func (c *Config) RegisterDefaults(set func(key string, value any), prefix string
 	set(prefix+".mode", "")
 	new(daemon.Config).RegisterDefaults(set, prefix+".daemon")
 	new(gateway.Config).RegisterDefaults(set, prefix+".gateway")
+	new(cli.Config).RegisterDefaults(set, prefix+".cli")
 }
 
 // ApplyDefaults allocates child configs and lets them own their defaults.
@@ -79,4 +88,8 @@ func (c *Config) ApplyDefaults() {
 		c.Gateway = &gateway.Config{}
 	}
 	c.Gateway.ApplyDefaults()
+	if c.Cli == nil {
+		c.Cli = &cli.Config{}
+	}
+	c.Cli.ApplyDefaults()
 }

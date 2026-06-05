@@ -17,7 +17,7 @@
 |------|--------|
 | `daemon`（默认） | `logging` · `dao` · `parser` · `source` · `process` |
 | `gateway` | `logging` · `dao` · `parser` · `process` · `role.gateway` |
-| `cli` | `logging` · `dao` · `parser` · `process` |
+| `cli` | `logging` · `dao` · `parser` · `process` · `role.cli`（`function=data` 时仅 `logging` · `dao` · `role.cli`） |
 
 `--config` 留空时在**二进制同级目录**按 `tango.yaml → tango.yml → tango.json` 取首个存在者。
 文件缺失或解析为空时静默跳过（回退到默认值 + 环境变量 + flag）。
@@ -41,6 +41,7 @@
 | `role.mode` | `TANGO_ROLE_MODE` |
 | `source.tailer.tailMode` | `TANGO_SOURCE_TAILER_TAILMODE` |
 | `role.gateway.addr` | `TANGO_ROLE_GATEWAY_ADDR` |
+| `role.cli.function` | `TANGO_ROLE_CLI_FUNCTION` |
 
 ---
 
@@ -112,8 +113,18 @@
 |----|----|----|----|
 | `role.gateway.addr` | optional | `:8080` | HTTP 监听地址 |
 
+gateway 同时暴露独立的 Mongo Data API 路径 `POST /data`（与 `/upload` 互不影响，无额外配置项，完全放开）。
+用法与 action/字段见 [usage.md](usage.md#mongo-data-apidata--cli-data--apidata)。
+
+### role.cli（cli） → `internal/role/cli`
+
+| 键 | required/optional | 默认 | 说明 |
+|----|----|----|----|
+| `role.cli.function` | optional | `upload` | cli 角色功能：`upload`（从 stdin 读日志数组上报）或 `data`（从 stdin 读一个 EJSON Mongo Data API 请求、输出 EJSON 响应，等价 `POST /data`） |
+
 完整样例：[daemon](../examples/config/daemon/daemon.max.yaml)、
-[gateway](../examples/config/gateway/gateway.max.yaml)。
+[gateway](../examples/config/gateway/gateway.max.yaml)、
+[cli data](../examples/config/cli/cli.data.yaml)。
 
 ---
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/aura-studio/tango/internal/dao"
+	"github.com/aura-studio/tango/internal/dataapi"
 	"github.com/aura-studio/tango/internal/logging"
 	"github.com/aura-studio/tango/internal/parser"
 	"github.com/aura-studio/tango/internal/process"
@@ -46,13 +47,26 @@ func (s *Server) Upload(ctx context.Context, lines []string) (api.Result, error)
 	return s.engine.Upload(ctx, lines)
 }
 
-// Run starts the HTTP server and blocks until ctx is cancelled.
-func (s *Server) Run(ctx context.Context, addr string) error {
+// Data executes a Mongo Data API request (the engine entry point, exposed for
+// programmatic/test use).
+func (s *Server) Data(ctx context.Context, req *dataapi.Request) (*dataapi.Response, error) {
+	return s.engine.Data(ctx, req)
+}
+
+// Handler builds the HTTP handler exposing the gateway's routes: /healthz, the
+// TA-ingest /upload, and the Mongo Data API /data. It is exported so the routes
+// can be exercised directly (e.g. via httptest) without binding a socket.
+func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	mux.HandleFunc("/upload", s.handleUpload)
+	mux.HandleFunc("/data", s.handleData)
+	return mux
+}
 
-	httpSrv := &http.Server{Addr: addr, Handler: mux}
+// Run starts the HTTP server and blocks until ctx is cancelled.
+func (s *Server) Run(ctx context.Context, addr string) error {
+	httpSrv := &http.Server{Addr: addr, Handler: s.Handler()}
 	errCh := make(chan error, 1)
 	go func() {
 		defer logging.Recover("gateway http server")
@@ -80,6 +94,17 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 func writeErr(w http.ResponseWriter, code int, err error) {
 	writeJSON(w, code, map[string]string{"error": err.Error()})
+}
+
+func writeEJSON(w http.ResponseWriter, code int, resp *dataapi.Response) {
+	body, err := resp.MarshalEJSON()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/ejson")
+	w.WriteHeader(code)
+	_, _ = w.Write(body)
 }
 
 func decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
@@ -121,4 +146,31 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+// handleData executes a Mongo Data API request. The body is Extended JSON (or
+// plain JSON, a subset) carrying the action plus its operands; the response is
+// relaxed Extended JSON. It is the independent Mongo Data API path, separate from
+// the TA-ingest /upload endpoint.
+func (s *Server) handleData(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, http.StatusMethodNotAllowed, errors.New("POST required"))
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	req, err := dataapi.DecodeRequest(body)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	resp, err := s.engine.Data(r.Context(), req)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeEJSON(w, http.StatusOK, resp)
 }

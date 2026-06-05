@@ -13,18 +13,23 @@
 
 ## Gateway Mongo Data API 方案
 
-- [ ] 确认 gateway 新增 Mongo Data API 的边界：只做受控 CRUD/aggregate，不开放任意 `runCommand`。
-- [ ] 采用 `Extended JSON v2 + MQL 子集 + Data API 风格 action` 作为 HTTP body 方案。
-- [ ] 定义 action 列表：`findOne`、`find`、`insertOne`、`updateOne`、`deleteOne`、`aggregate`。
-- [ ] 定义请求外壳字段：`database`、`collection`、`filter`、`projection`、`sort`、`limit`、`skip`、`document`、`update`、`pipeline`、`upsert`。
-- [ ] 定义响应格式，统一使用 relaxed Extended JSON 返回 BSON 类型。
-- [ ] 明确 Content-Type 约定：优先支持 `application/ejson`，兼容 `application/json`。
-- [ ] 在 Go 层使用官方 driver 的 `bson.UnmarshalExtJSON` / `bson.MarshalExtJSON` 处理 EJSON。
-- [ ] 设计 database / collection 白名单配置，避免任意库表访问。
-- [ ] 设计 MQL operator 白名单，禁止 `$where`、server-side JavaScript、危险 command 和不支持 DocumentDB 的语法。
-- [ ] 设计 aggregation stage 白名单，先只开放 `$match`、`$project`、`$group`、`$sort`、`$limit`、`$skip`。
-- [ ] 为 `limit`、body size、执行超时、返回文档数量设置默认上限。
-- [ ] 明确 gateway 与现有 `/upload` 的关系：保留 `/upload` 作为 TA 日志上报入口，新 Mongo Data API 使用独立 path。
+> 决策调整：按"最大化功能、忽略安全限制"实现，并对齐 upload 在 **cli / gateway / api 三端**落地
+> （功能核心 `internal/dataapi` 完全一致，仅入口不同）。原方案中的白名单 / operator 黑名单 /
+> stage 限制 / 各类上限**全部放弃**（下方标注）。
+
+- [x] ~~确认 Mongo Data API 的边界：固定 6 个 action（无任意 `runCommand`），但 action 之内完全放开（无白名单/无上限）。~~
+- [x] ~~采用 `Extended JSON v2 + Data API 风格 action` 作为 body 方案（MQL 不做子集限制，原样转发）。~~
+- [x] ~~定义 action 列表：`findOne`、`find`、`insertOne`、`updateOne`、`deleteOne`、`aggregate`。~~
+- [x] ~~定义请求外壳字段：`database`、`collection`、`filter`、`projection`、`sort`、`limit`、`skip`、`document`、`update`、`pipeline`、`upsert`。~~
+- [x] ~~定义响应格式，统一使用 relaxed Extended JSON 返回 BSON 类型。~~
+- [x] ~~明确 Content-Type 约定：优先支持 `application/ejson`，兼容 `application/json`。~~
+- [x] ~~在 Go 层使用官方 driver 的 `bson.UnmarshalExtJSON` / `bson.MarshalExtJSON` 处理 EJSON。~~
+- [x] ~~（放弃）设计 database / collection 白名单配置~~ —— 按决策完全放开，可访问任意库表。
+- [x] ~~（放弃）设计 MQL operator 白名单~~ —— 不限制 operator，原样转发驱动。
+- [x] ~~（放弃）设计 aggregation stage 白名单~~ —— 不限制 stage，原样转发驱动。
+- [x] ~~（放弃）为 `limit`、body size、执行超时、返回文档数量设置默认上限~~ —— 不设任何上限。
+- [x] ~~明确 gateway 与现有 `/upload` 的关系：保留 `/upload` 作为 TA 日志上报入口，新 Mongo Data API 使用独立 path `/data`。~~
+- [x] ~~三端实现：gateway `POST /data`、cli `role.cli.function=data`（stdin→stdout）、库 `api.Engine.Data`，共享 `internal/dataapi` 核心。~~
 
 ## Lambda / DocumentDB 部署方案
 
@@ -36,11 +41,11 @@
 
 ## 测试与文档
 
-- [ ] 为 EJSON decode/encode 增加单元测试，覆盖 `$oid`、`$date`、`$numberLong`、`$numberDecimal`。
-- [ ] 为 MQL/operator/stage 白名单增加拒绝测试。
-- [ ] 为每个 action 增加 handler 单元测试。
-- [ ] 为 gateway Mongo Data API 增加 MongoDB 集成测试。
-- [ ] 为 DocumentDB 兼容路径补充测试说明，使用 `TANGO_TEST_MONGO_URI` 手动验证。
-- [ ] 更新 `doc/usage.md`，补充 Mongo Data API 请求示例。
-- [ ] 更新 `doc/config.md`，补充 Mongo Data API 白名单、超时、limit 等配置项。
-- [ ] 更新 `doc/arch.md`，补充 gateway 中 `/upload` 与 Mongo Data API 的职责分离。
+- [x] ~~为 EJSON decode/encode 增加单元测试，覆盖 `$oid`、`$date`、`$numberLong`、`$numberDecimal`。~~（`internal/dataapi/dataapi_test.go`）
+- [x] ~~（放弃）为 MQL/operator/stage 白名单增加拒绝测试~~ —— 已无白名单；改为校验 unknown action / 缺字段拒绝。
+- [x] ~~为每个 action 增加 handler 测试。~~（dataapi 集成测试逐 action 往返 + gateway/cli 端到端）
+- [x] ~~为 gateway Mongo Data API 增加 MongoDB 集成测试。~~（`tests/dataapi_test.go`，httptest + cli，连真实 DocumentDB 通过）
+- [x] ~~为 DocumentDB 兼容路径补充测试说明，使用 `TANGO_TEST_MONGO_URI` 手动验证。~~（测试均读 `TANGO_TEST_MONGO_URI`，无则跳过）
+- [x] ~~更新 `doc/usage.md`，补充 Mongo Data API 请求示例。~~
+- [x] ~~更新 `doc/config.md`，补充 `role.cli.function` 配置项（白名单/上限已放弃，无对应配置）。~~
+- [x] ~~更新 `doc/arch.md`，补充 gateway 中 `/upload` 与 Mongo Data API 的职责分离。~~

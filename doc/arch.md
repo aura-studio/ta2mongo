@@ -9,9 +9,12 @@
 | 角色 | `role.mode` | 来源 | 职责 |
 |---|---|---|---|
 | **Daemon** | `daemon` | tailer（文件） | 常驻：文件追尾、解析、filter、identity、流水线批量写 MongoDB |
-| **Gateway** | `gateway` | httpbody（HTTP 请求体） | 常驻 HTTP：单个 `/upload`，按 `process.mode` 选 single/batch/pipeline |
-| **CLI** | `cli` | stdin（控制台） | 一次性：对齐 gateway `/upload`，从 stdin 读日志数组，按 `process.mode` 上报 |
-| **API** | （库，不可派发） | httpbody（调用方传入） | 作为 Go 库被业务代码 import：`api.New(...).Upload(lines)` |
+| **Gateway** | `gateway` | httpbody（HTTP 请求体） | 常驻 HTTP：`/upload`（按 `process.mode` 选 single/batch/pipeline）+ 独立的 `/data`（Mongo Data API） |
+| **CLI** | `cli` | stdin（控制台） | 一次性：`role.cli.function=upload` 对齐 `/upload`；`=data` 对齐 `/data`（读一个 EJSON 请求→响应） |
+| **API** | （库，不可派发） | httpbody（调用方传入） | 作为 Go 库被业务代码 import：`api.New(...).Upload(lines)` / `.Data(req)` |
+
+除上报外，三端还共享一个**通用 Mongo Data API**（`internal/dataapi`）：gateway `POST /data`、cli `function=data`、
+库 `engine.Data(req)`，功能核心完全一致、只是入口形态不同（与上报的 `api.Engine` 复用模式一致）。见 §5.2。
 
 运行角色由配置键 `role.mode` 选定（不是子命令），`role.Get(mode)` 取对应 `Role` 对象执行。
 gateway / cli / api 三者都通过同一个 `process.mode` 配置选择 single/batch/pipeline（都内嵌 api 引擎）；
@@ -95,6 +98,7 @@ daemon 是长驻的 pipeline 流水线。api 只作为库使用，不由 `role.m
     │   ├── config.go # dao.Config：聚合 mongo.Config + store.Config
     │   ├── store/    # MongoDB 持久化 + store.Config
     │   └── mongo/    # 连接装配 + mongo.Config + MongoDBFromURI
+    ├── dataapi/    # 通用 Mongo Data API 共享核心：Request/Response/Execute + EJSON 编解码（被 role/api 暴露）
     ├── process/    # process.go 统一管理三种上传方式（唯一对外入口；Uploader 接口 + New）
     │   ├── core/    # 共享 Processor（parse→filter→identity→写模型；经 dao/parser 根包门面）+ stats（Counters/StatsCollector）
     │   ├── single/  # 逐行即时写 Uploader
@@ -103,8 +107,8 @@ daemon 是长驻的 pipeline 流水线。api 只作为库使用，不由 `role.m
     └── role/       # 运行角色：Role 接口 + Get(mode) 派发；role.Config 聚合 daemon/gateway
         ├── api/     # 可复用引擎库：api.Engine（New/Upload/Run/EnsureIndexes/Close）——非可派发角色
         ├── daemon/  # daemon.Role + daemon.Service（pipeline + tailer；含信号处理/启动日志）
-        ├── gateway/ # gateway.Role + HTTP Server：内嵌 api.Engine + /upload；gateway.Config（role.gateway.*）
-        └── cli/     # cli.Role：内嵌 api.Engine + stdin 源，统计 JSON → stdout
+        ├── gateway/ # gateway.Role + HTTP Server：内嵌 api.Engine + /upload + /data；gateway.Config（role.gateway.*）
+        └── cli/     # cli.Role：内嵌 api.Engine + stdin 源；cli.Config（role.cli.function=upload|data）
 ```
 
 依赖方向：
@@ -113,9 +117,10 @@ daemon 是长驻的 pipeline 流水线。api 只作为库使用，不由 `role.m
 main             -> config + role + logging
 client           -> role/api                                       (公共门面，redis-go 风格，包装引擎)
 role             -> cfgtree + role/(daemon/gateway/cli/api)         (Role 接口 + Get(mode) 派发)
-role/api         -> process + parser + dao + source + logging       (引擎库，被 gateway/cli 内嵌)
-role/gateway     -> api + dao + process + parser + cfgtree + logging (gateway.Role + HTTP 面)
-role/cli         -> api + dao + process + parser + source + cfgtree  (cli.Role + stdin 面)
+role/api         -> process + parser + dao + dataapi + source + logging  (引擎库，被 gateway/cli 内嵌)
+role/gateway     -> api + dao + dataapi + process + parser + cfgtree + logging (gateway.Role + HTTP 面)
+role/cli         -> api + dao + dataapi + process + parser + source + cfgtree   (cli.Role + stdin/数据 面)
+dataapi          -> mongo 驱动（bson/mongo/options）                (无项目内依赖；MongoDB client 由调用方传入)
 role/daemon      -> process + parser + dao + source + cfgtree + logging (daemon.Role + Service)
 process          -> process/(core/single/batch/pipeline) + source + dao + parser + cfgtree
 process/<子包>   -> dao + parser + source + (core)                  (经 dao/parser 根包门面，不碰 dao/store、parser/talog|filter)
@@ -191,6 +196,13 @@ config           -> cfgtree + 各模块（仅用其 RegisterDefaults 注册键�
 | `dao/mongo/mongo.go` | `MongoResource` + `ConnectMongo`/`Borrow`/`DatabaseFromClient`/`Close` |
 | `dao/mongo/config.go` | `mongo.Config`（URI + 连接超时）+ `MongoDBFromURI` |
 
+#### Mongo Data API `internal/dataapi`（通用读写共享核心）
+
+| 文件 | 职责 |
+|---|---|
+| `dataapi/dataapi.go` | `Request`/`Response` 类型 + action 常量 + `Execute(ctx, *mongo.Client, defaultDB, *Request)`：解析 db/collection、按 action 分发 findOne/find/insertOne/updateOne/deleteOne/aggregate，选项（sort/projection/limit/skip/upsert）原样转发；无白名单/上限 |
+| `dataapi/ejson.go` | `DecodeRequest`（`bson.UnmarshalExtJSON`，relaxed，兼容 JSON）+ `(*Response).MarshalEJSON`（`bson.MarshalExtJSON` relaxed） |
+
 #### 处理层 `internal/process`（`process.go` 唯一对外）
 
 | 文件 | 职责 |
@@ -214,16 +226,17 @@ config           -> cfgtree + 各模块（仅用其 RegisterDefaults 注册键�
 | 文件 | 职责 |
 |---|---|
 | `role/role.go` | `Role` 接口（`Run(ctx, cfgtree.Tree) error`）+ `Get(mode) (Role,error)` 派发 + 角色名常量（`API`/`CLI`/`Daemon`/`Gateway`） |
-| `role/config.go` | `role.Config`：聚合 `daemon`/`gateway` + `ApplyDefaults`/`Validate`/`RegisterDefaults` + `FromTree` |
-| `role/api/api.go` | 可复用引擎库 `api.Engine`：`New(ctx, *dao.Config, *process.Config, *parser.Config)`/`Upload(lines)`（经 `source.NewLines`）/`Run(src)`/`EnsureIndexes`/`Close` + `Result`（非可派发角色） |
+| `role/config.go` | `role.Config`：聚合 `daemon`/`gateway`/`cli` + `ApplyDefaults`/`Validate`/`RegisterDefaults` + `FromTree` |
+| `role/api/api.go` | 可复用引擎库 `api.Engine`：`New(ctx, *dao.Config, *process.Config, *parser.Config)`/`Upload(lines)`（经 `source.NewLines`）/`Run(src)`/`Data(req)`（Mongo Data API，经 `dataapi.Execute`）/`EnsureIndexes`/`Close` + `Result`（非可派发角色） |
 | `role/daemon/role.go` | `daemon.Role.Run`：从 Tree 取 dao/parser/source/process → 信号处理 + 启动日志 + `New` → `Run`；含 `maskURI` |
 | `role/daemon/report.go` | `daemon.Service`：持有 `*source.Config`，经 `source.NewTailer(srcCfg.Tailer)` 建源 → 强制 pipeline `process.New(cfg).Run` → MongoDB；周期/最终统计日志 |
 | `role/daemon/config.go` | `daemon.Config`（`role.daemon.*`，暂空，schema 对称用） |
 | `role/gateway/role.go` | `gateway.Role.Run`：从 Tree 取 dao/process/parser + `role.gateway` → `New` → `EnsureIndexes` → `Run(addr)` |
-| `role/gateway/server.go` | gateway `Server`：内嵌 `*api.Engine` + HTTP 面；`New(ctx, *dao.Config, *process.Config, *parser.Config, cfg)`/`Upload`/`EnsureIndexes`/`Close`/`Run`；`/healthz` + 单个 `/upload`（按 `process.mode` 选策略） |
+| `role/gateway/server.go` | gateway `Server`：内嵌 `*api.Engine` + HTTP 面；`New(...)`/`Upload`/`Data`/`EnsureIndexes`/`Close`/`Handler`/`Run`；路由 `/healthz` + `/upload`（按 `process.mode` 选策略）+ `/data`（Mongo Data API，EJSON） |
 | `role/gateway/config.go` | `gateway.Config`（仅 `role.gateway.addr`）+ `ApplyDefaults`/`Validate`/`RegisterDefaults` |
-| `role/cli/role.go` | `cli.Role.Run`：从 Tree 取 dao/process/parser → `Run(…, os.Stdin)` → 统计 JSON 写 `os.Stdout` |
-| `role/cli/cli.go` | `cli.Run(ctx, *dao.Config, *process.Config, *parser.Config, in)`：内嵌 `api.Engine` + `source.NewReader(in)` 源，一次性上报（核心，被 `cli.Role` 包装） |
+| `role/cli/role.go` | `cli.Role.Run`：取 dao + `role.cli`；`function=upload` 走 stdin 上报（统计 JSON → stdout），`function=data` 走 `RunData` |
+| `role/cli/cli.go` | `cli.Run(...)`：内嵌 `api.Engine` + `source.NewReader(in)` 一次性上报；`cli.RunData(ctx, *dao.Config, in, out)`：stdin EJSON 请求 → `engine.Data` → out EJSON 响应 |
+| `role/cli/config.go` | `cli.Config`（`role.cli.function`=upload\|data）+ `ApplyDefaults`/`Validate`/`RegisterDefaults` |
 
 ## 4. Daemon Service（daemon 模式）
 
@@ -240,6 +253,7 @@ Tailer -> Dispatcher(按用户亲和性路由) -> Worker[i](Parse -> Filter -> I
 ```text
 GET  /healthz
 POST /upload   # body: {line?, lines?[]}；上传策略来自 process.mode
+POST /data     # body: EJSON {action, collection, ...}；通用 Mongo Data API（见 §5.2）
 ```
 
 `/upload` 把请求体的日志数组经 `source.NewLines` 包成 Source，按 `process.mode` 选上传策略（single/batch/pipeline）
@@ -255,6 +269,27 @@ POST /upload   # body: {line?, lines?[]}；上传策略来自 process.mode
 因此三者提供**完全相同**的 single/batch/pipeline 上传能力。`cli` 角色（`role.mode=cli`）从 stdin 读日志数组、`process.mode` 选策略，
 统计 JSON 写 stdout；`api` 不由 `role.mode` 派发，作为库 import。公共 SDK `client`（`client.New(...).Upload(...)`）
 也内嵌同一 `api.Engine`，见 §7。
+
+## 5.2 Mongo Data API（`/data` · cli `data` · `api.Data`）
+
+`internal/dataapi` 是通用 MongoDB 读写的**共享功能核心**，与上报链路（process/parser）完全解耦——
+只需 `dao.Mongo.Client`。三端经同一个 `dataapi.Execute(ctx, client, defaultDB, req)` 落地，入口不同：
+
+- **api（库）**：`(*api.Engine).Data(ctx, *dataapi.Request)`，用引擎已有的 MongoDB 连接（`dao.Mongo.Client` + 默认库 `dao.Mongo.DB.Name()`）。
+- **gateway（HTTP）**：`POST /data`，`handleData` 读 body → `dataapi.DecodeRequest` → `engine.Data` → relaxed EJSON 响应（`writeEJSON`）。
+- **cli（控制台）**：`role.cli.function=data` 时 `cli.RunData` 从 stdin 读一个请求 → `engine.Data` → stdout 写响应。
+
+请求/响应体为 **Extended JSON v2**，用官方驱动 `bson.UnmarshalExtJSON` / `bson.MarshalExtJSON`，
+故 `ObjectId`/`Date`/`Decimal128` 等 BSON 类型可无损往返；请求 `Content-Type` 推荐 `application/ejson`，
+也接受 `application/json`（EJSON 的子集，同一解析路径）。
+
+action：`findOne`/`find`/`insertOne`/`updateOne`/`deleteOne`/`aggregate`；请求外壳字段：
+`action`、`collection`（必填）、`database`（缺省取连接 URI 的库）、`filter`、`projection`、`sort`、
+`limit`、`skip`、`document`、`update`、`pipeline`、`upsert`。
+
+**设计上完全放开**（按需求"最大化功能、忽略安全限制"）：不做 database/collection 白名单、不做
+operator/stage 黑白名单、不设 limit/返回条数/body/超时上限，请求原样转发给驱动。任意受控/鉴权由调用方负责。
+注意 DocumentDB 不支持 aggregation-pipeline 形式的 `update`；此类请求会把引擎错误透传给调用方（普通 `$set` 文档更新正常）。
 
 ## 6. 上报 filter
 
@@ -277,7 +312,9 @@ POST /upload   # body: {line?, lines?[]}；上传策略来自 process.mode
 | `role/api` | **dao** | `dao.New(ctx, *dao.Config) → *dao.Dao`；`(*Dao).Store`；`(*Dao).Mongo.Close()`；`(*Store).EnsureIndexes(ctx)` | 连接 MongoDB、建索引、收尾 |
 | `role/api` | **parser** | `(*parser.Config).Build() → *parser.Parser` | 装配解析器（含 filter） |
 | `role/api` | **process** | `process.New(cfg, *dao.Dao, *parser.Parser, *Counters, WriteOptions) → Uploader`；`(Uploader).Run(ctx, Source)`；`process.Counters`/`Snapshot`/`WriteOptions`；`(*process.Config).ModeValue()` | 选策略并驱动上传 |
-| `role/{gateway,cli}` | **role/api** | `api.New(ctx, *dao.Config, *process.Config, *parser.Config) → *Engine`；`(*Engine).Upload`/`Run`/`EnsureIndexes`/`Close`；`api.Result` | 内嵌同一引擎 |
+| `role/{gateway,cli}` | **role/api** | `api.New(ctx, *dao.Config, *process.Config, *parser.Config) → *Engine`；`(*Engine).Upload`/`Run`/`Data`/`EnsureIndexes`/`Close`；`api.Result` | 内嵌同一引擎（上报 + Mongo Data API） |
+| `role/api` | **dataapi** | `dataapi.Execute(ctx, *mongo.Client, defaultDB, *Request) → *Response`；`dataapi.Request`/`Response` | Mongo Data API 功能核心（`engine.Data` 经此落地） |
+| `role/{gateway,cli}` | **dataapi** | `dataapi.DecodeRequest(body) → *Request`；`(*Response).MarshalEJSON()` | HTTP / stdin 的 EJSON 请求解析与响应编码 |
 | `role/daemon` | **dao/parser/source/process** | `dao.New`；`(*parser.Config).Build`；`source.NewTailer(srcCfg.Tailer)`；`process.New(pipelineCfg, …).Run(ctx, tailerSrc)` | 编排长驻流水线 |
 | `client`（公共 SDK） | **role/api** | `api.New(o.ctx, &o.dao, &o.proc, &o.parser)`；`(*Engine).Upload`/`EnsureIndexes`/`Close` | redis-go 风格门面，复用真实 config 结构体 |
 | `config` | **dao/parser/source/process/role/logging** | 各 `(*Config).RegisterDefaults(set, prefix)`；各模块 `FromTree(t)` | 注册全键 + 按子树解码 |

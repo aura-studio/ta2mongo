@@ -13,6 +13,7 @@ tango 是**单一二进制**（用法见 [../../doc/usage.md](../../doc/usage.md
 |------|--------|------|------|
 | daemon | `daemon`（默认） | [daemon/](daemon/) | logging · dao · parser · source · process |
 | gateway    | `gateway`    | [gateway/](gateway/)       | logging · dao · parser · process · role.gateway |
+| cli (data) | `cli`        | [cli/](cli/)               | logging · dao · role.cli（`function=data` 的 Mongo Data API 样例） |
 
 > 留空 `--config` 时二进制读取同级目录的 `tango.{yaml,yml,json}`；本目录下的样例需用 `--config` 显式指定。
 
@@ -39,3 +40,4 @@ TANGO_DAO_MONGO_URI=mongodb://user:pass@host/db examples/config/daemon/start.sh
 |------|------|
 | daemon | `dao.mongo.uri`、`source.tailer.logPattern` |
 | gateway    | `dao.mongo.uri` |
+| cli (data) | `dao.mongo.uri`、`role.cli.function: data` |

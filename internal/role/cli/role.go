@@ -11,19 +11,34 @@ import (
 	"github.com/aura-studio/tango/internal/process"
 )
 
-// Role is the cli runtime role (role.mode = cli): the console equivalent of the
-// gateway /upload — read TA log lines from stdin, ingest them with the configured
-// process.mode, and print the run statistics as JSON to stdout.
+// Role is the cli runtime role (role.mode = cli). With role.cli.function=upload
+// (the default) it is the console equivalent of the gateway /upload — read TA log
+// lines from stdin, ingest them with the configured process.mode, and print the
+// run statistics as JSON to stdout. With role.cli.function=data it is the console
+// equivalent of POST /data — read one Extended-JSON Mongo Data API request from
+// stdin and write the Extended-JSON response to stdout.
 type Role struct{}
 
-// Run slices the dao / process / parser branches from cfg, ingests stdin through
-// the embedded engine via the package-level Run, and writes the result as
-// indented JSON to stdout.
+// Run slices the role.cli config and dispatches to the upload or data function.
 func (Role) Run(ctx context.Context, cfg cfgtree.Tree) error {
 	daoCfg, err := dao.FromTree(cfg)
 	if err != nil {
 		return err
 	}
+
+	var cliCfg Config
+	if err := cfg.Sub("role").Sub("cli").Into(&cliCfg); err != nil {
+		return err
+	}
+	cliCfg.ApplyDefaults()
+	if err := cliCfg.Validate(); err != nil {
+		return err
+	}
+
+	if cliCfg.Function == FunctionData {
+		return RunData(ctx, daoCfg, os.Stdin, os.Stdout)
+	}
+
 	procCfg, err := process.FromTree(cfg)
 	if err != nil {
 		return err
