@@ -365,3 +365,36 @@ import "github.com/aura-studio/tango/internal/role/api"
 - 是否仍需要 backfill / SQL。如果需要，建议作为独立 service 或独立 role 重新引入，避免重新污染上报引擎。
 - 是否仍需要 remote config。如果需要，需要定义 filter 版本、ack、回滚和安全边界，而不是只恢复旧 `_tango_config`。
 - 是否仍需要 taskqueue。如果需要，需要明确它是平台控制面的一部分，还是 tango 上报引擎之外的独立组件。
+
+## 待修复：DocumentDB 不支持聚合管道更新（pipeline update）
+
+**现象**：在 Amazon DocumentDB 上跑 `user_set` 上报，bulk write 报
+`Wrong type for parameter u`。（在 scp-api/tango Lambda 接 DocumentDB `rocket-nano`
+实测复现；`track` 事件正常。）
+
+**根因**：`internal/dao/store/writemodel.go` 里部分写模型用了**聚合管道更新**
+（update 传 `bson.A{ {$set: ...} }` 数组形式，注释标注 "aggregation pipeline update
+(MongoDB 4.2+)"）。DocumentDB **不支持** update 用聚合管道，要求 `u` 是文档对象而非数组，
+故拒绝并报 `Wrong type for parameter u`。
+
+**受影响的操作（用了管道，DocumentDB 上必失败）**：
+- `UserWriteModel`：`user_set`、`user_unset`、以及 user 默认分支（fallback 同 `user_set`）
+- `EventWriteModel`：`track_update`、`track_overwrite`
+
+**兼容、当前可正常写的（用传统操作符）**：
+- `track` / event 默认（`$setOnInsert`）、`user_setOnce`（`$setOnInsert`）、
+  `user_add`（`$inc`）、`user_append`（`$push`）、`user_uniq_append`（`$addToSet`）、
+  `user_del`（delete）
+
+**改造难点**：这些管道更新承载了"按 `_ts` 防回退"的条件语义
+（`tsCondSet` / `tsCondUnset` / `trackTsCondSetNoOp` / `trackTsCondReplacePipeline`：
+仅当 `incoming _ts >= existing _ts` 才覆盖/删除字段）。传统 update 操作符无法表达
+"按字段比较 `_ts` 再决定写不写"，所以不是简单替换，需要重新设计。可选方向（待评估）：
+1. 用 `$max`(\_ts) + `$set`/`$setOnInsert` 的组合近似，放弃严格的逐字段防回退；
+2. 把防回退判断上移到应用层：先读当前 `_ts`，再决定写法（多一次往返，注意并发）；
+3. 用 filter 表达 `_ts` 条件（如 `filter` 带 `_ts <= incoming` 的乐观更新 +
+   upsert/重试）来逼近顺序保护；
+4. 检测后端类型（MongoDB vs DocumentDB），分别走管道 / 传统两套写模型。
+
+**注意**：评估时要同时校验 `user`/`event` 的 `_ts` 防回退行为在 DocumentDB 上是否仍成立，
+并补充 DocumentDB 环境下的集成测试（现有 `tests/` 默认连本地 MongoDB，跑不到这条路径）。
