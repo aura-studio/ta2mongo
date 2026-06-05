@@ -9,7 +9,7 @@
 - [x] ~~校准 v2 API 差异，包括 `mongo.Connect`、`options`、`WriteModel`、bulk write options、index options、error 类型判断。~~
 - [x] ~~保留 DocumentDB 兼容连接参数要求，重点确认 `retryWrites=false`、TLS、server selection timeout、connect timeout。~~
 - [x] ~~跑通现有单元测试和可跳过的 MongoDB 集成测试。~~
-- [ ] 使用 `TANGO_TEST_MONGO_URI` 指向真实 DocumentDB 跑 store/gateway/api 关键集成测试。
+- [x] ~~使用 `TANGO_TEST_MONGO_URI` 指向真实 DocumentDB 跑 store/gateway/api 关键集成测试。~~
 
 ## Gateway Mongo Data API 方案
 

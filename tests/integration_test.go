@@ -57,11 +57,23 @@ func pingMongo(t *testing.T) {
 
 // freshDB returns a dao config pointed at a unique throwaway database, a verify
 // handle to that database, and a cleanup func.
+// withDBName injects the default database into a MongoDB URI's path, inserting
+// it before any "?query" component. Plain concatenation (uri + "/" + db) corrupts
+// URIs that carry query params — e.g. DocumentDB's tls/retryWrites string — by
+// appending the name after the query, so the last param's value swallows "/db".
+func withDBName(uri, dbName string) string {
+	base, query := uri, ""
+	if i := strings.IndexByte(uri, '?'); i >= 0 {
+		base, query = uri[:i], uri[i:]
+	}
+	return strings.TrimRight(base, "/") + "/" + dbName + query
+}
+
 func freshDB(t *testing.T) (*dao.Config, *mongo.Database, func()) {
 	t.Helper()
 	pingMongo(t)
 	dbName := fmt.Sprintf("tango_it_%d_%d", time.Now().UnixNano(), rand.Intn(100000))
-	uri := mongoURI() + "/" + dbName
+	uri := withDBName(mongoURI(), dbName)
 	daoCfg := &dao.Config{Mongo: &daomongo.Config{URI: uri}}
 
 	vc, err := mongo.Connect(options.Client().ApplyURI(uri))
