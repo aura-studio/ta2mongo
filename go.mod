@@ -13,6 +13,7 @@ require (
 	github.com/spf13/viper v1.21.0
 	github.com/tidwall/gjson v1.19.0
 	go.mongodb.org/mongo-driver/v2 v2.6.0
+	golang.org/x/net v0.55.0
 	vitess.io/vitess v0.24.1
 )
 
