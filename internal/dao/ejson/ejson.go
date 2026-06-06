@@ -55,17 +55,19 @@ type Request struct {
 }
 
 // Response carries the result of an action, encoded back as relaxed Extended
-// JSON. Only the fields relevant to the action are populated; count fields are
-// pointers so a legitimate zero (e.g. nothing matched) still serializes instead
-// of being dropped by omitempty.
+// JSON. Only the fields relevant to the action are populated. Pointer fields let
+// omitempty distinguish "not set" (nil -> dropped) from a legitimate empty value
+// that must still serialize: count fields keep a zero (e.g. nothing matched), and
+// Documents keeps an empty array so find/aggregate always emit "documents": []
+// rather than collapsing to {}.
 type Response struct {
-	Document      bson.M   `bson:"document,omitempty"`      // findOne
-	Documents     []bson.M `bson:"documents,omitempty"`     // find / aggregate
-	InsertedID    any      `bson:"insertedId,omitempty"`    // insertOne
-	MatchedCount  *int64   `bson:"matchedCount,omitempty"`  // updateOne
-	ModifiedCount *int64   `bson:"modifiedCount,omitempty"` // updateOne
-	UpsertedID    any      `bson:"upsertedId,omitempty"`    // updateOne (upsert)
-	DeletedCount  *int64   `bson:"deletedCount,omitempty"`  // deleteOne
+	Document      bson.M    `bson:"document,omitempty"`      // findOne
+	Documents     *[]bson.M `bson:"documents,omitempty"`     // find / aggregate (always set, possibly empty)
+	InsertedID    any       `bson:"insertedId,omitempty"`    // insertOne
+	MatchedCount  *int64    `bson:"matchedCount,omitempty"`  // updateOne
+	ModifiedCount *int64    `bson:"modifiedCount,omitempty"` // updateOne
+	UpsertedID    any       `bson:"upsertedId,omitempty"`    // updateOne (upsert)
+	DeletedCount  *int64    `bson:"deletedCount,omitempty"`  // deleteOne
 }
 
 // Execute dispatches req against the MongoDB resource. The target database is
@@ -212,14 +214,15 @@ func aggregate(ctx context.Context, coll *mongo.Collection, req *Request) (*Resp
 	return drain(ctx, cur)
 }
 
-// drain reads a cursor fully into a Response.Documents slice (never nil, so an
-// empty result encodes as "documents": []).
+// drain reads a cursor fully into a Response.Documents slice. The slice is always
+// non-nil (initialized to empty), and the field is a pointer, so even an empty
+// result encodes as "documents": [] rather than being dropped by omitempty.
 func drain(ctx context.Context, cur *mongo.Cursor) (*Response, error) {
 	docs := []bson.M{}
 	if err := cur.All(ctx, &docs); err != nil {
 		return nil, err
 	}
-	return &Response{Documents: docs}, nil
+	return &Response{Documents: &docs}, nil
 }
 
 // filterOrEmpty returns an empty filter when none was supplied, matching the

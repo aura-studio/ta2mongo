@@ -145,8 +145,8 @@ func TestEJSON_Integration(t *testing.T) {
 	exec(t, &Request{Action: ActionInsertOne, Document: bson.M{"name": "b", "n": int64(2)}})
 
 	// find (sorted)
-	if r := exec(t, &Request{Action: ActionFind, Filter: bson.M{}, Sort: bson.D{{Key: "n", Value: 1}}}); len(r.Documents) != 2 {
-		t.Fatalf("find: want 2 docs, got %d", len(r.Documents))
+	if r := exec(t, &Request{Action: ActionFind, Filter: bson.M{}, Sort: bson.D{{Key: "n", Value: 1}}}); r.Documents == nil || len(*r.Documents) != 2 {
+		t.Fatalf("find: want 2 docs, got %v", r.Documents)
 	}
 
 	// findOne
@@ -168,7 +168,7 @@ func TestEJSON_Integration(t *testing.T) {
 	r := exec(t, &Request{Action: ActionAggregate, Pipeline: bson.A{
 		bson.D{{Key: "$group", Value: bson.D{{Key: "_id", Value: nil}, {Key: "total", Value: bson.D{{Key: "$sum", Value: "$n"}}}}}},
 	}})
-	if len(r.Documents) != 1 || toInt64(r.Documents[0]["total"]) != 15 {
+	if r.Documents == nil || len(*r.Documents) != 1 || toInt64((*r.Documents)[0]["total"]) != 15 {
 		t.Fatalf("aggregate: want total 15, got %v", r.Documents)
 	}
 
