@@ -13,17 +13,35 @@
 - [x] ~~从 master(`221166d`) 建 `v1.4` 分支。~~
 - [x] ~~用本清单替换 `doc/todo.md` 并提交（之后逐行划掉）。~~
 
+## SQL：由拷贝改为依赖 mongosql（v1.4；master 与 v1.4 同步）
+
+> mongosql 已在 master(`adb703b`) 加 `driver.New(client,db)` 注入构造器 + Close 所有权（支持注入连接与 URI 两种）。
+> tango 删除 `internal/dao/sql` 的拷贝（translator 全树 + schema/codec），改为薄封装依赖 mongosql；vitess 退为间接依赖。
+
+- [x] ~~mongosql：`driver.New(client,db)` 注入构造器 + Close 所有权；合入 master(`adb703b`) 并推送。~~
+- [ ] tango `go get github.com/aura-studio/mongosql@adb703b` + `go mod tidy`（vitess 转间接）。
+- [ ] 删除拷贝：`internal/dao/sql/{schema.go,codec.go,translator/**,.DS_Store}`；`sql.go` 改薄封装（`New(res)`→`mongosql.New(client,db)`，`Exec`）；新增 `result.go`（`Result` 镜像 + `MarshalEJSON` + `fromMongosql`）。dao 门面/gateway/cli 不变。
+- [ ] 重写 `internal/dao/sql/sql_test.go`（New(nil) + 集成走薄封装，throwaway db 隔离）。
+- [ ] EC2 全绿（go build/vet/全量 test，连真实 DocumentDB）。
+- [ ] master 同步到 v1.4（保持一致）。
+
 ## Phase 1 — Backfill / TA-OpenAPI SQL 导入（新 domain `internal/backfill`）
 
-- [x] ~~移植 TA OpenAPI client：`client.go`+`httpclient.go`（submit-SQL→awaitFinished 轮询→分页；APIError/ErrTaskExpired/proxy）。~~（verbatim 拷贝，无改动）
-- [ ] 移植 `sqlbuilder.go`（buildDaySQL）、`ndjson.go`+`rowdecode.go`（TA 列式行→文档）。
-- [ ] 移植 `checkpoint.go`+`progress.go`（`_backfill_progress`，day/run 断点续传）与 `runner.go`/`executor.go` 编排。
-- [ ] 写层重设：用当前 `dao.EventWriteModel`/`UserWriteModel`+`BulkWrite`（DocumentDB 安全 `_ts` 守卫）替换 v1.0 的 event_ingester/user_writer 直写；identity 用 `dao.Store.Identity()`。
-- [ ] `internal/backfill/config.go`：`backfill.*`（apiBaseURL/token/proxy/sql/时间范围/progressCollection/pageSize/并发）+ FromTree/defaults/validate。
-- [ ] 入口（一次性）：`role.cli.function=backfill`（`cli.RunBackfill`）→ `backfill.Runner`。
-- [ ] 测试：单元（sqlbuilder/ndjson/rowdecode/checkpoint 状态机）+ 集成（httptest mock TA OpenAPI，写真实 DocumentDB 临时库）。
-- [ ] 文档/示例（arch/usage/config + `examples/config/backfill/*`）+ EC2 全绿。
-- [ ] 合入 v1.4，tag `v1.4.0`。
+> 设计：事件表行 → `rowdecode.EncodeRowAsJSONLine`（TA 列式行→TA JSON 行）→ 复用 `api.Engine.Run(source)`
+> （解析/过滤/identity/DocumentDB 安全写）；用户表行 → 新增 DocumentDB 安全的 `UserSnapshotWriteModel` 直写
+> （v1.3 无此模型）。`checkpoint` 由 driver v1 转 v2。弃用 v1.0 的 x/term `ProgressBar`，改用日志周期进度。
+
+- [x] ~~移植 TA OpenAPI client `client.go`+`httpclient.go`（submit→poll→paginate；APIError/ErrTaskExpired/proxy）。~~
+- [x] ~~移植 `ndjson.go`（NDJSON 流解码）+ `rowdecode.go`（`EncodeRowAsJSONLine`）。~~
+- [x] ~~加 `golang.org/x/net`(proxy) 依赖；`go build ./internal/backfill/...` 通过（EC2）。~~
+- [ ] `internal/backfill/config.go`：`backfill.*`（apiBaseURL/token/proxy/projectID/table/partDateRange/eventTimeRange/sql/pageSize/pollInterval/pollTimeout/pageRetries/limit/schemaPrefix/runID/progressCollection/forceSkip/skipLocalFilter）+ filter(include/exclude) + `buildDaySQL`/`backfillWhere`/`effectivePageSize` + FromTree/defaults/validate。
+- [ ] `internal/dao/store` 新增 `UserSnapshotWriteModel(userID, doc, skipExisting)`（DocumentDB 安全：普通 `$set`/`$setOnInsert` upsert，无 pipeline）+ `dao` 门面重导出。
+- [ ] 移植 `checkpoint.go` 到 driver v2（`_backfill_progress`：Run/DayProgress/SQLSignature/initDays/resume）。
+- [ ] `runner.go`/`executor.go` 重写接线：`daomongo.ConnectMongo` + `dao.Store`/`Identity`；事件表页→喂 `api.Engine.Run`；用户表页→`UserSnapshotWriteModel`+`BulkWrite`；日志周期进度（替代 ProgressBar）；stats 内嵌 `process.Counters`。
+- [ ] 入口：`role.cli.function=backfill`（`cli.RunBackfill`：按 day-range 或显式 SQL 跑）+ `role.go` 派发 + cli config `Validate` 增加 `backfill`。
+- [ ] 测试：单元（sqlbuilder/ndjson/rowdecode/checkpoint 状态机）+ 集成（`httptest` mock TA OpenAPI 三端点，写真实 DocumentDB 临时库；事件+用户两路）。
+- [ ] 文档/示例（arch §5.4 + usage + config + `examples/config/cli/cli.backfill.{min,max}.{yaml,json}`）。
+- [ ] EC2 全绿（gofmt/vet/全量 test）→ 合入 v1.4 → tag `v1.4.0`。
 
 ## Phase 2 — TaskQueue + Worker 控制面
 
