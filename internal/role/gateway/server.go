@@ -46,20 +46,20 @@ func (s *Server) Upload(ctx context.Context, lines []string) (api.Result, error)
 	return s.engine.Upload(ctx, lines)
 }
 
-// Data executes a Mongo Data API request (the engine entry point, exposed for
+// EJSON executes a Mongo Data API request (the engine entry point, exposed for
 // programmatic/test use).
-func (s *Server) Data(ctx context.Context, req *dao.DataRequest) (*dao.DataResponse, error) {
-	return s.engine.Data(ctx, req)
+func (s *Server) EJSON(ctx context.Context, req *dao.EJSONRequest) (*dao.EJSONResponse, error) {
+	return s.engine.EJSON(ctx, req)
 }
 
 // Handler builds the HTTP handler exposing the gateway's routes: /healthz, the
-// TA-ingest /upload, and the Mongo Data API /data. It is exported so the routes
+// TA-ingest /upload, and the Mongo Data API /ejson. It is exported so the routes
 // can be exercised directly (e.g. via httptest) without binding a socket.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	mux.HandleFunc("/upload", s.handleUpload)
-	mux.HandleFunc("/data", s.handleData)
+	mux.HandleFunc("/ejson", s.handleEJSON)
 	return mux
 }
 
@@ -95,7 +95,7 @@ func writeErr(w http.ResponseWriter, code int, err error) {
 	writeJSON(w, code, map[string]string{"error": err.Error()})
 }
 
-func writeEJSON(w http.ResponseWriter, code int, resp *dao.DataResponse) {
+func writeEJSON(w http.ResponseWriter, code int, resp *dao.EJSONResponse) {
 	body, err := resp.MarshalEJSON()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
@@ -147,11 +147,11 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
-// handleData executes a Mongo Data API request. The body is Extended JSON (or
+// handleEJSON executes a Mongo Data API request. The body is Extended JSON (or
 // plain JSON, a subset) carrying the action plus its operands; the response is
 // relaxed Extended JSON. It is the independent Mongo Data API path, separate from
 // the TA-ingest /upload endpoint.
-func (s *Server) handleData(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleEJSON(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeErr(w, http.StatusMethodNotAllowed, errors.New("POST required"))
 		return
@@ -161,12 +161,12 @@ func (s *Server) handleData(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	req, err := dao.DecodeDataRequest(body)
+	req, err := dao.DecodeEJSONRequest(body)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	resp, err := s.engine.Data(r.Context(), req)
+	resp, err := s.engine.EJSON(r.Context(), req)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return

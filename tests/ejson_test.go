@@ -16,10 +16,10 @@ import (
 	"github.com/aura-studio/tango/internal/role/gateway"
 )
 
-// TestDataAPI_GatewayAndCLI exercises the Mongo Data API through two of its three
-// ends — the gateway HTTP /data endpoint and the cli data sub-mode — sharing the
-// same functional core. Skipped when no MongoDB is reachable (see freshDB).
-func TestDataAPI_GatewayAndCLI(t *testing.T) {
+// TestEJSON_GatewayAndCLI exercises the Mongo Data API through two of its three
+// ends — the gateway HTTP /ejson endpoint and the cli ejson sub-mode — sharing
+// the same functional core. Skipped when no MongoDB is reachable (see freshDB).
+func TestEJSON_GatewayAndCLI(t *testing.T) {
 	daoCfg, db, cleanup := freshDB(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -33,18 +33,18 @@ func TestDataAPI_GatewayAndCLI(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	post := func(t *testing.T, body string) *dao.DataResponse {
+	post := func(t *testing.T, body string) *dao.EJSONResponse {
 		t.Helper()
-		resp, err := http.Post(ts.URL+"/data", "application/ejson", strings.NewReader(body))
+		resp, err := http.Post(ts.URL+"/ejson", "application/ejson", strings.NewReader(body))
 		if err != nil {
-			t.Fatalf("POST /data: %v", err)
+			t.Fatalf("POST /ejson: %v", err)
 		}
 		defer resp.Body.Close()
 		b, _ := io.ReadAll(resp.Body)
 		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("POST /data status %d: %s", resp.StatusCode, b)
+			t.Fatalf("POST /ejson status %d: %s", resp.StatusCode, b)
 		}
-		var out dao.DataResponse
+		var out dao.EJSONResponse
 		if err := bson.UnmarshalExtJSON(b, false, &out); err != nil {
 			t.Fatalf("decode response: %v (%s)", err, b)
 		}
@@ -68,10 +68,10 @@ func TestDataAPI_GatewayAndCLI(t *testing.T) {
 	// --- cli end: same data path over stdin/stdout ---
 	var buf bytes.Buffer
 	in := strings.NewReader(`{"action":"findOne","collection":"widgets","filter":{"name":"x"}}`)
-	if err := cli.RunData(ctx, daoCfg, in, &buf); err != nil {
-		t.Fatalf("cli.RunData: %v", err)
+	if err := cli.RunEJSON(ctx, daoCfg, in, &buf); err != nil {
+		t.Fatalf("cli.RunEJSON: %v", err)
 	}
-	var cliResp dao.DataResponse
+	var cliResp dao.EJSONResponse
 	if err := bson.UnmarshalExtJSON(buf.Bytes(), false, &cliResp); err != nil {
 		t.Fatalf("decode cli response: %v (%s)", err, buf.Bytes())
 	}

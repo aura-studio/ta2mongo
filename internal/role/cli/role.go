@@ -14,8 +14,8 @@ import (
 // Role is the cli runtime role (role.mode = cli). With role.cli.function=upload
 // (the default) it is the console equivalent of the gateway /upload — read TA log
 // lines from stdin, ingest them with the configured process.mode, and print the
-// run statistics as JSON to stdout. With role.cli.function=data it is the console
-// equivalent of POST /data — read one Extended-JSON Mongo Data API request from
+// run statistics as JSON to stdout. With role.cli.function=ejson it is the console
+// equivalent of POST /ejson — read one Extended-JSON Mongo Data API request from
 // stdin and write the Extended-JSON response to stdout.
 type Role struct{}
 
@@ -35,8 +35,8 @@ func (Role) Run(ctx context.Context, cfg cfgtree.Tree) error {
 		return err
 	}
 
-	if cliCfg.Function == FunctionData {
-		return RunData(ctx, daoCfg, os.Stdin, os.Stdout)
+	if cliCfg.Function == FunctionEJSON {
+		return RunEJSON(ctx, daoCfg, os.Stdin, os.Stdout)
 	}
 
 	procCfg, err := process.FromTree(cfg)

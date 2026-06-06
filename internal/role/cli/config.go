@@ -7,10 +7,10 @@ const (
 	// FunctionUpload is the default: read TA log lines from stdin and ingest them
 	// with the configured process.mode (the console equivalent of /upload).
 	FunctionUpload = "upload"
-	// FunctionData reads a single Extended-JSON Mongo Data API request from stdin,
+	// FunctionEJSON reads a single Extended-JSON Mongo Data API request from stdin,
 	// executes it, and writes the Extended-JSON response to stdout (the console
-	// equivalent of the gateway POST /data endpoint).
-	FunctionData = "data"
+	// equivalent of the gateway POST /ejson endpoint).
+	FunctionEJSON = "ejson"
 )
 
 // DefaultFunction is the cli function used when role.cli.function is unset.
@@ -21,7 +21,7 @@ const DefaultFunction = FunctionUpload
 // cli-specific knobs live here.
 type Config struct {
 	// Function selects what the cli role does (file key role.cli.function):
-	// upload (stdin log ingest) or data (stdin Mongo Data API request).
+	// upload (stdin log ingest) or ejson (stdin Mongo Data API request).
 	Function string `mapstructure:"function"`
 }
 
@@ -35,11 +35,11 @@ func (c *Config) ApplyDefaults() {
 // Validate checks cli-specific config.
 func (c *Config) Validate() error {
 	switch c.Function {
-	case FunctionUpload, FunctionData:
+	case FunctionUpload, FunctionEJSON:
 		return nil
 	default:
 		return fmt.Errorf("function %q is invalid (want %q / %q)",
-			c.Function, FunctionUpload, FunctionData)
+			c.Function, FunctionUpload, FunctionEJSON)
 	}
 }
 

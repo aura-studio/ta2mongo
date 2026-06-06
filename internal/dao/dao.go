@@ -9,7 +9,7 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
-	"github.com/aura-studio/tango/internal/dao/data"
+	"github.com/aura-studio/tango/internal/dao/ejson"
 	daomongo "github.com/aura-studio/tango/internal/dao/mongo"
 	"github.com/aura-studio/tango/internal/dao/store"
 	"github.com/aura-studio/tango/internal/logging"
@@ -77,42 +77,42 @@ func DeadLetterModel(line string, parseErr error) mongo.WriteModel {
 }
 
 // ---------------------------------------------------------------------------
-// data (Mongo Data API) facade
+// ejson (Mongo Data API) facade
 //
-// The dao package fronts the dao/data subpackage so external layers (api /
-// gateway / cli) depend only on dao, never on dao/data directly. DataRequest /
-// DataResponse are type aliases and DecodeDataRequest a thin pass-through;
-// (*Dao).Data is the relay that runs a request against this Dao's MongoDB
+// The dao package fronts the dao/ejson subpackage so external layers (api /
+// gateway / cli) depend only on dao, never on dao/ejson directly. EJSONRequest /
+// EJSONResponse are type aliases and DecodeEJSONRequest a thin pass-through;
+// (*Dao).EJSON is the relay that runs a request against this Dao's MongoDB
 // connection. This mirrors the store facade above.
 // ---------------------------------------------------------------------------
 
-// DataRequest is a Mongo Data API request shell. Alias for data.Request.
-type DataRequest = data.Request
+// EJSONRequest is a Mongo Data API request shell. Alias for ejson.Request.
+type EJSONRequest = ejson.Request
 
-// DataResponse is a Mongo Data API response. Alias for data.Response, so its
-// MarshalEJSON method is available directly on a *dao.DataResponse.
-type DataResponse = data.Response
+// EJSONResponse is a Mongo Data API response. Alias for ejson.Response, so its
+// MarshalEJSON method is available directly on a *dao.EJSONResponse.
+type EJSONResponse = ejson.Response
 
-// Mongo Data API action identifiers (re-exported from dao/data).
+// Mongo Data API action identifiers (re-exported from dao/ejson).
 const (
-	DataActionFindOne   = data.ActionFindOne
-	DataActionFind      = data.ActionFind
-	DataActionInsertOne = data.ActionInsertOne
-	DataActionUpdateOne = data.ActionUpdateOne
-	DataActionDeleteOne = data.ActionDeleteOne
-	DataActionAggregate = data.ActionAggregate
+	EJSONActionFindOne   = ejson.ActionFindOne
+	EJSONActionFind      = ejson.ActionFind
+	EJSONActionInsertOne = ejson.ActionInsertOne
+	EJSONActionUpdateOne = ejson.ActionUpdateOne
+	EJSONActionDeleteOne = ejson.ActionDeleteOne
+	EJSONActionAggregate = ejson.ActionAggregate
 )
 
-// DecodeDataRequest parses an Extended-JSON Mongo Data API request body. See
-// data.DecodeRequest.
-func DecodeDataRequest(b []byte) (*DataRequest, error) {
-	return data.DecodeRequest(b)
+// DecodeEJSONRequest parses an Extended-JSON Mongo Data API request body. See
+// ejson.DecodeRequest.
+func DecodeEJSONRequest(b []byte) (*EJSONRequest, error) {
+	return ejson.DecodeRequest(b)
 }
 
-// Data executes a Mongo Data API request against this Dao's MongoDB connection,
+// EJSON executes a Mongo Data API request against this Dao's MongoDB connection,
 // defaulting the database to the one named in the connection URI when the
-// request omits it. It is the relay behind api.Engine.Data / gateway POST /data /
-// cli function=data.
-func (d *Dao) Data(ctx context.Context, req *DataRequest) (*DataResponse, error) {
-	return data.Execute(ctx, d.Mongo, req)
+// request omits it. It is the relay behind api.Engine.EJSON / gateway POST
+// /ejson / cli function=ejson.
+func (d *Dao) EJSON(ctx context.Context, req *EJSONRequest) (*EJSONResponse, error) {
+	return ejson.Execute(ctx, d.Mongo, req)
 }

@@ -1,17 +1,17 @@
-// Package data is the shared functional core of Tango's Mongo Data API: a thin,
+// Package ejson is the shared functional core of Tango's Mongo Data API: a thin,
 // fully-open passthrough to MongoDB CRUD/aggregate driven by a single
-// Extended-JSON request shell with a Data-API-style action. It is a dao
+// Extended-JSON (EJSON) request shell with a Data-API-style action. It is a dao
 // subpackage and is fronted by the dao root package (see dao.go); other domains
-// reach it through dao, never importing dao/data directly.
+// reach it through dao, never importing dao/ejson directly.
 //
-// It is interface-agnostic — the api (Go method), gateway (HTTP POST /data) and
+// It is interface-agnostic — the api (Go method), gateway (HTTP POST /ejson) and
 // cli (stdin) ends all call Execute with the same Request and get the same
 // Response, exactly the way the upload path shares the api.Engine.
 //
 // By design there are no restrictions: any database, any collection, any filter,
 // operator, or aggregation pipeline is forwarded to the driver as-is, and no
 // limit / return-count / timeout caps are imposed. Callers own access control.
-package data
+package ejson
 
 import (
 	"context"
@@ -35,10 +35,10 @@ const (
 	ActionAggregate = "aggregate"
 )
 
-// Request is the Data-API request shell. It is decoded from Extended JSON, so
-// every BSON-bearing field (filter, document, update, pipeline, ...) round-trips
-// native BSON types such as ObjectId and Date. Fields not relevant to the chosen
-// action are ignored.
+// Request is the EJSON Data-API request shell. It is decoded from Extended JSON,
+// so every BSON-bearing field (filter, document, update, pipeline, ...)
+// round-trips native BSON types such as ObjectId and Date. Fields not relevant
+// to the chosen action are ignored.
 type Request struct {
 	Action     string `bson:"action"`
 	Database   string `bson:"database,omitempty"` // empty -> default DB from the connection URI
@@ -74,7 +74,7 @@ type Response struct {
 // action — everything else is forwarded to the driver.
 func Execute(ctx context.Context, res *daomongo.MongoResource, req *Request) (*Response, error) {
 	if req == nil {
-		return nil, errors.New("data: nil request")
+		return nil, errors.New("ejson: nil request")
 	}
 	// Validate the request shell before touching the connection, so bad-request
 	// errors (unknown action, missing collection/database) never depend on a live
@@ -82,22 +82,22 @@ func Execute(ctx context.Context, res *daomongo.MongoResource, req *Request) (*R
 	switch req.Action {
 	case ActionFindOne, ActionFind, ActionInsertOne, ActionUpdateOne, ActionDeleteOne, ActionAggregate:
 	case "":
-		return nil, errors.New("data: action is required")
+		return nil, errors.New("ejson: action is required")
 	default:
-		return nil, fmt.Errorf("data: unknown action %q", req.Action)
+		return nil, fmt.Errorf("ejson: unknown action %q", req.Action)
 	}
 	if req.Collection == "" {
-		return nil, errors.New("data: collection is required")
+		return nil, errors.New("ejson: collection is required")
 	}
 	dbName := req.Database
 	if dbName == "" && res != nil && res.DB != nil {
 		dbName = res.DB.Name()
 	}
 	if dbName == "" {
-		return nil, errors.New("data: database is required (none in request or connection URI)")
+		return nil, errors.New("ejson: database is required (none in request or connection URI)")
 	}
 	if res == nil || res.Client == nil {
-		return nil, errors.New("data: no MongoDB connection")
+		return nil, errors.New("ejson: no MongoDB connection")
 	}
 	coll := res.Client.Database(dbName).Collection(req.Collection)
 
@@ -162,7 +162,7 @@ func find(ctx context.Context, coll *mongo.Collection, req *Request) (*Response,
 
 func insertOne(ctx context.Context, coll *mongo.Collection, req *Request) (*Response, error) {
 	if req.Document == nil {
-		return nil, errors.New("data: insertOne requires a document")
+		return nil, errors.New("ejson: insertOne requires a document")
 	}
 	res, err := coll.InsertOne(ctx, req.Document)
 	if err != nil {
@@ -173,7 +173,7 @@ func insertOne(ctx context.Context, coll *mongo.Collection, req *Request) (*Resp
 
 func updateOne(ctx context.Context, coll *mongo.Collection, req *Request) (*Response, error) {
 	if req.Update == nil {
-		return nil, errors.New("data: updateOne requires an update")
+		return nil, errors.New("ejson: updateOne requires an update")
 	}
 	opts := options.UpdateOne()
 	if req.Upsert {

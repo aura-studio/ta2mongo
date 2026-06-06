@@ -1,4 +1,4 @@
-package data
+package ejson
 
 import (
 	"context"
@@ -97,13 +97,13 @@ func TestExecute_Validation(t *testing.T) {
 
 // --- Integration test (real MongoDB / DocumentDB) -------------------------
 
-// TestDataAPI_Integration exercises every action end-to-end. It is skipped
-// unless TANGO_TEST_MONGO_URI is set (point it at MongoDB or Amazon DocumentDB,
+// TestEJSON_Integration exercises every action end-to-end. It is skipped unless
+// TANGO_TEST_MONGO_URI is set (point it at MongoDB or Amazon DocumentDB,
 // including its tls/retryWrites query params).
-func TestDataAPI_Integration(t *testing.T) {
+func TestEJSON_Integration(t *testing.T) {
 	uri := os.Getenv("TANGO_TEST_MONGO_URI")
 	if uri == "" {
-		t.Skip("set TANGO_TEST_MONGO_URI to run the data integration test")
+		t.Skip("set TANGO_TEST_MONGO_URI to run the ejson integration test")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -119,7 +119,7 @@ func TestDataAPI_Integration(t *testing.T) {
 	}
 	defer res.Close()
 
-	dbName := fmt.Sprintf("tango_data_it_%d", time.Now().UnixNano())
+	dbName := fmt.Sprintf("tango_ejson_it_%d", time.Now().UnixNano())
 	const coll = "items"
 	defer func() {
 		dctx, dcancel := context.WithTimeout(context.Background(), 10*time.Second)

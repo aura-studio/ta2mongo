@@ -1,0 +1,16 @@
+# cli.ejson.yaml — `tango --config cli.ejson.yaml` runs the cli role's Mongo Data
+# API (EJSON) function. It reads one Extended-JSON request from stdin, executes
+# it, and writes the Extended-JSON response to stdout (equivalent to the gateway
+# POST /ejson endpoint).
+#
+#   echo '{"action":"find","collection":"event","filter":{},"limit":5}' \
+#     | tango --config cli.ejson.yaml
+#
+# Fully open: any database/collection, any filter/operator/pipeline, no caps.
+role:
+  mode: cli                                # [required] select the cli role (default is daemon)
+  cli:
+    function: ejson                        # upload (default, stdin log ingest) | ejson (Mongo Data API)
+dao:
+  mongo:
+    uri: mongodb://localhost:27017/tango   # [required]; the default database is taken from this URI path

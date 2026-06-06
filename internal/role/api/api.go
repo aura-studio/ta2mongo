@@ -124,12 +124,12 @@ func (c *Engine) Upload(ctx context.Context, lines []string) (Result, error) {
 	return c.Run(ctx, source.NewLines(lines))
 }
 
-// Data executes a Mongo Data API request against the engine's MongoDB
+// EJSON executes a Mongo Data API request against the engine's MongoDB
 // connection and returns the result. It is the shared functional core behind the
-// gateway POST /data endpoint and the cli data sub-mode, and is independent of
+// gateway POST /ejson endpoint and the cli ejson sub-mode, and is independent of
 // the upload pipeline (process/parser config is unused). The request's database
 // defaults to the one named in the connection URI when omitted. It relays
-// through the dao facade (dao/data is fronted by dao).
-func (c *Engine) Data(ctx context.Context, req *dao.DataRequest) (*dao.DataResponse, error) {
-	return c.dao.Data(ctx, req)
+// through the dao facade (dao/ejson is fronted by dao).
+func (c *Engine) EJSON(ctx context.Context, req *dao.EJSONRequest) (*dao.EJSONResponse, error) {
+	return c.dao.EJSON(ctx, req)
 }

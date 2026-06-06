@@ -31,16 +31,16 @@ func Run(ctx context.Context, daoCfg *dao.Config, procCfg *process.Config, parse
 	return eng.Run(ctx, source.NewReader(in))
 }
 
-// RunData reads a single Extended-JSON Mongo Data API request from in, executes
+// RunEJSON reads a single Extended-JSON Mongo Data API request from in, executes
 // it through the embedded api engine, and writes the Extended-JSON response to
-// out. It is the console equivalent of the gateway POST /data endpoint and does
+// out. It is the console equivalent of the gateway POST /ejson endpoint and does
 // not use the process/parser config.
-func RunData(ctx context.Context, daoCfg *dao.Config, in io.Reader, out io.Writer) error {
+func RunEJSON(ctx context.Context, daoCfg *dao.Config, in io.Reader, out io.Writer) error {
 	body, err := io.ReadAll(in)
 	if err != nil {
 		return err
 	}
-	req, err := dao.DecodeDataRequest(body)
+	req, err := dao.DecodeEJSONRequest(body)
 	if err != nil {
 		return err
 	}
@@ -51,7 +51,7 @@ func RunData(ctx context.Context, daoCfg *dao.Config, in io.Reader, out io.Write
 	}
 	defer eng.Close()
 
-	resp, err := eng.Data(ctx, req)
+	resp, err := eng.EJSON(ctx, req)
 	if err != nil {
 		return err
 	}
