@@ -23,7 +23,7 @@
 - [x] ~~删除拷贝：`internal/dao/sql/{schema.go,codec.go,translator/**,.DS_Store}`；`sql.go` 改薄封装（`New(res)`→`mongosql.New(client,db)`，`Exec`）；新增 `result.go`（`Result` 镜像 + `MarshalEJSON` + `fromMongosql`）。dao 门面/gateway/cli 不变。~~
 - [x] ~~重写 `internal/dao/sql/sql_test.go`（New(nil) + 集成走薄封装，throwaway db 隔离）。~~
 - [x] ~~EC2 全绿（go build/vet/全量 test，连真实 DocumentDB）。~~
-- [ ] master 同步到 v1.4（保持一致）。
+- [x] ~~master 同步到 v1.4（保持一致）。~~
 
 ## Phase 1 — Backfill / TA-OpenAPI SQL 导入（新 domain `internal/backfill`）
 
