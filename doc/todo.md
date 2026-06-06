@@ -26,7 +26,7 @@
 - [x] ~~新增 `New(res *mongo.MongoResource) (*Driver, error)`：用 `res.Client`/`res.DB` + `translator.New()` 构造，不再 dial。~~
 - [x] ~~保留 `Exec(ctx, sql) (*Result, error)` 及 `execFind/Aggregate/Insert/Update/Delete/InsertSelect`、`drainCursor`、`SchemaStore` 原逻辑。~~
 - [x] ~~给 `Result` 增加 `MarshalEJSON()`（`bson.MarshalExtJSON`，因为 rows 内含 BSON 类型，需 EJSON 编码）。~~
-- [ ] 备注（不可勾，仅说明）：未拷贝 DDL（CREATE/ALTER TABLE 在 mysql 层），schema 为空时 AUTO_INCREMENT/DEFAULT/ON UPDATE 自动跳过，DML/SELECT 仍可用。
+> 备注：未拷贝 DDL（CREATE/ALTER TABLE 在 mysql 层），schema 为空时 AUTO_INCREMENT/DEFAULT/ON UPDATE 自动跳过，DML/SELECT 仍可用。
 
 ### 2. dao 根包中转（仿 ejson 门面）
 
