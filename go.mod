@@ -3,6 +3,7 @@ module github.com/aura-studio/tango
 go 1.26.2
 
 require (
+	github.com/aura-studio/mongosql v0.0.0-20260606114459-adb703bff614
 	github.com/cenkalti/backoff/v4 v4.3.0
 	github.com/expr-lang/expr v1.17.8
 	github.com/go-viper/mapstructure/v2 v2.5.0
@@ -14,14 +15,13 @@ require (
 	github.com/tidwall/gjson v1.19.0
 	go.mongodb.org/mongo-driver/v2 v2.6.0
 	golang.org/x/net v0.55.0
-	vitess.io/vitess v0.24.1
 )
 
 require (
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/golang/glog v1.2.5 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	github.com/klauspost/compress v1.18.5 // indirect
+	github.com/klauspost/compress v1.18.6 // indirect
 	github.com/lmittmann/tint v1.1.3 // indirect
 	github.com/mattn/go-isatty v0.0.21 // indirect
 	github.com/pelletier/go-toml/v2 v2.3.0 // indirect
@@ -47,4 +47,5 @@ require (
 	gopkg.in/check.v1 v1.0.0-20190902080502-41f04d3bba15 // indirect
 	gopkg.in/fsnotify.v1 v1.4.7 // indirect
 	gopkg.in/tomb.v1 v1.0.0-20141024135613-dd632973f1e7 // indirect
+	vitess.io/vitess v0.24.1 // indirect
 )

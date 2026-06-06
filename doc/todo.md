@@ -19,10 +19,10 @@
 > tango 删除 `internal/dao/sql` 的拷贝（translator 全树 + schema/codec），改为薄封装依赖 mongosql；vitess 退为间接依赖。
 
 - [x] ~~mongosql：`driver.New(client,db)` 注入构造器 + Close 所有权；合入 master(`adb703b`) 并推送。~~
-- [ ] tango `go get github.com/aura-studio/mongosql@adb703b` + `go mod tidy`（vitess 转间接）。
-- [ ] 删除拷贝：`internal/dao/sql/{schema.go,codec.go,translator/**,.DS_Store}`；`sql.go` 改薄封装（`New(res)`→`mongosql.New(client,db)`，`Exec`）；新增 `result.go`（`Result` 镜像 + `MarshalEJSON` + `fromMongosql`）。dao 门面/gateway/cli 不变。
-- [ ] 重写 `internal/dao/sql/sql_test.go`（New(nil) + 集成走薄封装，throwaway db 隔离）。
-- [ ] EC2 全绿（go build/vet/全量 test，连真实 DocumentDB）。
+- [x] ~~tango `go get github.com/aura-studio/mongosql@adb703b`（pseudo v0.0.0-…-adb703bff614）+ `go mod tidy`（vitess 转间接）。~~
+- [x] ~~删除拷贝：`internal/dao/sql/{schema.go,codec.go,translator/**,.DS_Store}`；`sql.go` 改薄封装（`New(res)`→`mongosql.New(client,db)`，`Exec`）；新增 `result.go`（`Result` 镜像 + `MarshalEJSON` + `fromMongosql`）。dao 门面/gateway/cli 不变。~~
+- [x] ~~重写 `internal/dao/sql/sql_test.go`（New(nil) + 集成走薄封装，throwaway db 隔离）。~~
+- [x] ~~EC2 全绿（go build/vet/全量 test，连真实 DocumentDB）。~~
 - [ ] master 同步到 v1.4（保持一致）。
 
 ## Phase 1 — Backfill / TA-OpenAPI SQL 导入（新 domain `internal/backfill`）
