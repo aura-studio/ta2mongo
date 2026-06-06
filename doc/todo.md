@@ -1,68 +1,53 @@
-# TODO
+# TODO — v1.4 开发线（加回 v1.0 被删特性，按 v1.3 架构重设）
 
-本文件只保留尚未完成的任务。任务完成后先改成 `- [x] ~~任务内容~~`，方便本轮核对；下一次整理 TODO 时删除已完成项。
-（已完成并合入的历史项——MongoDB Driver v2 升级、Gateway Mongo Data API/ejson、相关测试与文档——已清理，见 git 历史。）
+本文件只保留尚未完成的任务。完成后改成 `- [x] ~~任务内容~~`，下次整理时删除。
+（v1.3 已完成项——Driver v2 / Mongo Data API(ejson) / SQL Data API(dao/sql) / cli 配置——见 git 历史。）
 
-## SQL 支持（拷贝 mongosql 到 internal/dao/sql）
+> 目标：把 `doc/diff.md` 记录的 v1.0→v1.1 删除的控制面特性（backfill/TA-OpenAPI SQL 导入、
+> taskqueue+worker、remote config、operator/控制面接口、文件断点续传）**按 v1.3 架构重新引入**到
+> **v1.4 开发线**。不回滚 v1.0；复用现有 dao.Store 写模型（DocumentDB 安全）、source/process/api 引擎、
+> parser.Filter 原子热替换。公开 Go SDK 本轮不做。源码参照 `git show v1.0:<path>`（tag 8bc899b）。
 
-> 目标：把 `github.com/aura-studio/mongosql` 的 SQL→MongoDB 翻译+执行能力以**拷贝**方式引入
-> `internal/dao/sql`，作为 dao 子包、依赖 `dao/mongo`（注入连接），并**完全仿照 ejson** 在 dao 根包
-> 中转、贯通 api / gateway / cli 三端。不引入 mongosql 的 MySQL 协议层（`mysql/`），不作为外部 module 依赖。
-> 源提交：mongosql `fix/sql-semantics-correctness`（95072c1）。
+## Phase 0 — v1.4 线建立
 
-### 0. 依赖与构建打底（先跑通隔离编译）
+- [x] ~~从 master(`221166d`) 建 `v1.4` 分支。~~
+- [x] ~~用本清单替换 `doc/todo.md` 并提交（之后逐行划掉）。~~
 
-- [x] ~~拷贝 mongosql `driver/`(2) + `translator/`(11) 共 13 个 .go 到 `internal/dao/sql/`：`driver/driver.go`→`sql.go`、`driver/schema.go`→`schema.go`、`translator/**` 原样到 `internal/dao/sql/translator/**`；跳过 `mysql/`、`tests/`、`scripts/`、`doc/`。~~
-- [x] ~~改包名：`package driver` → `package sql`（sql.go、schema.go）。~~
-- [x] ~~改 import 路径：`github.com/aura-studio/mongosql/translator...` → `github.com/aura-studio/tango/internal/dao/sql/translator...`（全部拷贝文件）。~~
-- [x] ~~tango go.mod 增加 `vitess.io/vitess v0.24.1`；`go mod tidy` 拉齐 vitess 及其间接依赖。~~
-- [x] ~~处理 Go 版本：`go get` 自动把 `go` 指令从 1.25.0 上调到 1.26.2（GOTOOLCHAIN=auto 拉取 go1.26.2 工具链）。~~
-- [x] ~~`go build ./internal/dao/sql/...` 隔离编译通过（EC2）。~~
-- [x] ~~`gofmt -l internal/dao/sql` 干净。~~
+## Phase 1 — Backfill / TA-OpenAPI SQL 导入（新 domain `internal/backfill`）
 
-### 1. sql 包适配（注入连接，仿 ejson 的 Execute(res,…)）
+- [ ] 移植 TA OpenAPI client：`client.go`+`httpclient.go`（submit-SQL→awaitFinished 轮询→分页；APIError/ErrTaskExpired/proxy）。
+- [ ] 移植 `sqlbuilder.go`（buildDaySQL）、`ndjson.go`+`rowdecode.go`（TA 列式行→文档）。
+- [ ] 移植 `checkpoint.go`+`progress.go`（`_backfill_progress`，day/run 断点续传）与 `runner.go`/`executor.go` 编排。
+- [ ] 写层重设：用当前 `dao.EventWriteModel`/`UserWriteModel`+`BulkWrite`（DocumentDB 安全 `_ts` 守卫）替换 v1.0 的 event_ingester/user_writer 直写；identity 用 `dao.Store.Identity()`。
+- [ ] `internal/backfill/config.go`：`backfill.*`（apiBaseURL/token/proxy/sql/时间范围/progressCollection/pageSize/并发）+ FromTree/defaults/validate。
+- [ ] 入口（一次性）：`role.cli.function=backfill`（`cli.RunBackfill`）→ `backfill.Runner`。
+- [ ] 测试：单元（sqlbuilder/ndjson/rowdecode/checkpoint 状态机）+ 集成（httptest mock TA OpenAPI，写真实 DocumentDB 临时库）。
+- [ ] 文档/示例（arch/usage/config + `examples/config/backfill/*`）+ EC2 全绿。
+- [ ] 合入 v1.4，tag `v1.4.0`。
 
-- [x] ~~去掉自拨号 `Connect` 和 `Close` 的 `Disconnect`（连接由 tango 持有，不可在此关闭）。~~
-- [x] ~~新增 `New(res *mongo.MongoResource) (*Driver, error)`：用 `res.Client`/`res.DB` + `translator.New()` 构造，不再 dial。~~
-- [x] ~~保留 `Exec(ctx, sql) (*Result, error)` 及 `execFind/Aggregate/Insert/Update/Delete/InsertSelect`、`drainCursor`、`SchemaStore` 原逻辑。~~
-- [x] ~~给 `Result` 增加 `MarshalEJSON()`（`bson.MarshalExtJSON`，因为 rows 内含 BSON 类型，需 EJSON 编码）。~~
-> 备注：未拷贝 DDL（CREATE/ALTER TABLE 在 mysql 层），schema 为空时 AUTO_INCREMENT/DEFAULT/ON UPDATE 自动跳过，DML/SELECT 仍可用。
+## Phase 2 — TaskQueue + Worker 控制面
 
-### 2. dao 根包中转（仿 ejson 门面）
+- [ ] `internal/dao/taskqueue`（dao 子包，dao 门面中转）：`Task`/`TaskType`/`TaskStatus` + publish/claim(lease)/heartbeat/reap/complete，集合 `_tango_tasks`(+`_tango_instances`)。
+- [ ] `internal/role/worker`（新 `role.mode=worker`）：claim 循环 + 按 TaskType 分发 handler（backfill / report-sync / sql）；`role.worker.*` 配置；接入 `role.Get`/`role.Config` + 信号处理/panic recover。
+- [ ] publish 入口：gateway `POST /publish/{backfill,sql,report-sync}` + cli `function=publish`。
+- [ ] 测试：taskqueue claim/lease/reap 并发（真实 DocumentDB）；worker 跑通已发布 backfill 任务；`/publish/*` httptest。
+- [ ] 文档/示例 + EC2 全绿；合入 v1.4，tag `v1.4.1`。
 
-- [x] ~~`dao.go` 增加 `type SQLResult = sql.Result`。~~
-- [x] ~~`Dao` 持有惰性初始化的 `*sql.Driver`（`sync.Once`，避免非 SQL 角色启动开销/失败）。~~
-- [x] ~~`func (d *Dao) SQL(ctx, query string) (*SQLResult, error)` 中转到 `sql.Driver.Exec`。~~
+## Phase 3 — Remote config + 文件断点续传 + operator/控制面接口
 
-### 3. 三端入口（仿 ejson）
+- [ ] `internal/remoteconfig`（移植 Fetch/Merge/FilterChanged，集合 `_tango_config`）：轮询热替换 `parser.Filter()` holder；接入 daemon+gateway；`remoteconfig.*`（enabled/documentID/pollInterval）。
+- [ ] `internal/source/filebatch`（新 `source.Source`）：glob 文件 + `_tango_fileupload` 断点续传 → 喂 process 流水线；入口 cli `function=fileupload`（和/或 gateway 文件模式）；`source.filebatch.*`。
+- [ ] 补齐 operator cli functions（upload|ejson|sql|backfill|publish|fileupload）与 gateway 控制面路由（`/publish/*`、`/backfill`）；确认 `/ingest` 仍不提供。
+- [ ] 测试：remoteconfig 运行中热替换 filter；filebatch 中断后续传；控制面接口 httptest —— 全连真实 DocumentDB。
+- [ ] 文档/示例 + EC2 全绿；合入 v1.4，tag `v1.4.2`。
 
-- [x] ~~api：`func (c *Engine) SQL(ctx, query string) (*dao.SQLResult, error)` → `c.dao.SQL`。~~
-- [x] ~~gateway：路由 `POST /sql`（`handleSQL`）；请求体 JSON `{"sql":"..."}`；响应 relaxed EJSON（`writeEJSON` 泛化为 `ejsonMarshaler` 接口）；`Server.SQL` 透传。~~
-- [x] ~~cli：`role.cli.function=sql`；`RunSQL(ctx, daoCfg, in, out)` 读 stdin 全文为一条 SQL → `eng.SQL` → EJSON 写 out；`role.go` 派发。~~
-- [x] ~~cli config：`function` 取值新增 `sql`（`FunctionSQL`，`Validate` 允许 upload|ejson|sql）。~~
+## 不在本轮范围
 
-### 4. 测试（连真实 DocumentDB，仿 ejson）
+- 公开 Go SDK（`client/`）：延后；将来用薄封装包装 `internal/role/api` + 新入口，不暴露 internal。
+- `/ingest` 接口（被 `/upload` 取代）。
 
-- [x] ~~`internal/dao/sql/sql_test.go`：单元（New(nil) 报错）+ 集成（insert→select→update→delete 往返，gated `TANGO_TEST_MONGO_URI`，连真实 DocumentDB 通过）。~~
-- [x] ~~`tests/sql_test.go`：gateway `POST /sql` + cli `RunSQL` 端到端（连真实 DocumentDB 通过）。~~
-- [x] ~~注意 DocumentDB 限制：含表达式的 UPDATE 走 pipeline 形式，DocumentDB 不支持；测试用常量 `SET n = 10`（plain $set）验证通过。~~
+## 跨阶段约定
 
-### 5. 示例与文档（仿 ejson）
-
-- [x] ~~`examples/config/cli/cli.sql.{min,max}.{yaml,json}`（4 份，`function=sql`）+ `queries.sample.sql` + `examples/config/README.md` 更新。~~
-- [x] ~~`doc/usage.md`：`POST /sql` 与 cli sql 示例、库用法（并修正遗留的 `--role.cli.function data`→`ejson`）。~~
-- [x] ~~`doc/config.md`：`role.cli.function` 增加 `sql`。~~
-- [x] ~~`doc/arch.md`：新增 §5.3 SQL（dao/sql 子包、依赖 dao/mongo + vitess、三端入口）、目录树、§3.1 文件清单、依赖表。~~
-
-### 6. 收尾验证（EC2 + 真实 DocumentDB）
-
-- [x] ~~干净检出：`gofmt -l`、`go vet ./...`、全量 `go test ./... -count=1`（带 `TANGO_TEST_MONGO_URI`）全绿（EC2 + 真实 DocumentDB）。~~
-- [x] ~~手测：`curl -X POST :18099/sql -d '{"sql":"SELECT ..."}'` 与 `echo 'INSERT/SELECT/DELETE ...' | tango --config cli.sql.{min.yaml,max.json}` 均通过（真实 DocumentDB）。~~
-
-## Lambda / DocumentDB 部署方案
-
-- [ ] 输出 Lambda 部署建议文档：API Gateway HTTP API -> Lambda/Tango gateway -> DocumentDB。
-- [ ] 说明 Lambda execution environment 复用 Mongo client / connection pool 的约束。
-- [ ] 说明 Lambda VPC、security group、private subnet、Secrets Manager / VPC endpoint / NAT 的部署要求。
-- [ ] 说明 DocumentDB 连接串模板和 CA bundle 放置方式。
-- [ ] 给出并发与连接池计算方法，避免 Lambda 并发放大 DocumentDB 连接数。
+- 恢复集合：`_backfill_progress`、`_tango_tasks`、`_tango_instances`、`_tango_config`、`_tango_fileupload`。
+- 每阶段交付：配置（键=包路径）+ 真实 DocumentDB 测试 + 文档（arch/usage/config）+ 示例（max 仅写实际用到的段）+ todo 划掉；分支→合 v1.4→tag。
+- 依赖：backfill 仅用 stdlib net/http（+ 现有 logrus），预期不引入重依赖；保持 go 1.26.2。
