@@ -56,8 +56,8 @@ func TestEJSON_GatewayAndCLI(t *testing.T) {
 	}
 	post(t, `{"action":"insertOne","collection":"widgets","document":{"name":"y","n":2}}`)
 
-	if r := post(t, `{"action":"find","collection":"widgets","filter":{},"sort":{"n":1}}`); len(r.Documents) != 2 {
-		t.Fatalf("gateway find: want 2 docs, got %d", len(r.Documents))
+	if r := post(t, `{"action":"find","collection":"widgets","filter":{},"sort":{"n":1}}`); r.Documents == nil || len(*r.Documents) != 2 {
+		t.Fatalf("gateway find: want 2 docs, got %v", r.Documents)
 	}
 
 	// Confirm the writes landed, via the independent verify handle.

@@ -9,7 +9,10 @@
     "store": { "maxElapsedTime": "10s" }
   },
   "parser": {
-    "filter": { "include": [], "exclude": [] }
+    "filter": {
+      "include": ["#type == \"track\"", "#type == \"user_set\""],
+      "exclude": ["debug == true"]
+    }
   },
   "source": {
     "tailer": {

@@ -23,10 +23,13 @@ dao:                              # internal/dao
   store:                          # internal/dao/store
     maxElapsedTime: 10s           # [optional]（默认 10s）单次 bulk-write 退避重试总时长上限（ejson 不走 bulk，故无效）
 
-parser:                           # internal/parser（上报 filter；ejson 功能忽略）
+parser:                           # internal/parser（上报 filter；ejson 功能忽略，此处仅为 max 完整性示例）
   filter:                         # internal/parser/filter
-    include: []                   # [optional]（默认 [] = 全放行）
-    exclude: []                   # [optional]（默认 []）
+    include:                      # [optional]（默认 [] = 全放行）
+      - '#type == "track"'
+      - '#type == "user_set"'
+    exclude:                      # [optional]（默认 []）
+      - 'debug == true'
 
 source:                           # internal/source（daemon 的文件来源；ejson 忽略）
   tailer:                         # internal/source/tailer
