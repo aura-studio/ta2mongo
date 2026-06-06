@@ -3,7 +3,7 @@ module github.com/aura-studio/tango
 go 1.26.2
 
 require (
-	github.com/aura-studio/mongosql v0.0.0-20260606114459-adb703bff614
+	github.com/aura-studio/mongosql v0.0.0-20260606120049-eecd31ac3a56
 	github.com/cenkalti/backoff/v4 v4.3.0
 	github.com/expr-lang/expr v1.17.8
 	github.com/go-viper/mapstructure/v2 v2.5.0
