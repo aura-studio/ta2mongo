@@ -65,3 +65,34 @@ func RunEJSON(ctx context.Context, daoCfg *dao.Config, in io.Reader, out io.Writ
 	_, err = out.Write([]byte("\n"))
 	return err
 }
+
+// RunSQL reads a single SQL statement from in, executes it through the embedded
+// api engine (SQL Data API), and writes the Extended-JSON result to out. It is
+// the console equivalent of the gateway POST /sql endpoint and does not use the
+// process/parser config.
+func RunSQL(ctx context.Context, daoCfg *dao.Config, in io.Reader, out io.Writer) error {
+	body, err := io.ReadAll(in)
+	if err != nil {
+		return err
+	}
+
+	eng, err := api.New(ctx, daoCfg, nil, nil)
+	if err != nil {
+		return err
+	}
+	defer eng.Close()
+
+	res, err := eng.SQL(ctx, string(body))
+	if err != nil {
+		return err
+	}
+	encoded, err := res.MarshalEJSON()
+	if err != nil {
+		return err
+	}
+	if _, err := out.Write(encoded); err != nil {
+		return err
+	}
+	_, err = out.Write([]byte("\n"))
+	return err
+}

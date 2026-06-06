@@ -22,24 +22,24 @@
 
 ### 1. sql 包适配（注入连接，仿 ejson 的 Execute(res,…)）
 
-- [ ] 去掉自拨号 `Connect` 和 `Close` 的 `Disconnect`（连接由 tango 持有，不可在此关闭）。
-- [ ] 新增 `New(res *mongo.MongoResource) (*Driver, error)`：用 `res.Client`/`res.DB` + `translator.New()` 构造，不再 dial。
-- [ ] 保留 `Exec(ctx, sql) (*Result, error)` 及 `execFind/Aggregate/Insert/Update/Delete/InsertSelect`、`drainCursor`、`SchemaStore` 原逻辑。
-- [ ] 给 `Result` 增加 `MarshalEJSON()`（`bson.MarshalExtJSON`，因为 rows 内含 BSON 类型，需 EJSON 编码）。
+- [x] ~~去掉自拨号 `Connect` 和 `Close` 的 `Disconnect`（连接由 tango 持有，不可在此关闭）。~~
+- [x] ~~新增 `New(res *mongo.MongoResource) (*Driver, error)`：用 `res.Client`/`res.DB` + `translator.New()` 构造，不再 dial。~~
+- [x] ~~保留 `Exec(ctx, sql) (*Result, error)` 及 `execFind/Aggregate/Insert/Update/Delete/InsertSelect`、`drainCursor`、`SchemaStore` 原逻辑。~~
+- [x] ~~给 `Result` 增加 `MarshalEJSON()`（`bson.MarshalExtJSON`，因为 rows 内含 BSON 类型，需 EJSON 编码）。~~
 - [ ] 备注（不可勾，仅说明）：未拷贝 DDL（CREATE/ALTER TABLE 在 mysql 层），schema 为空时 AUTO_INCREMENT/DEFAULT/ON UPDATE 自动跳过，DML/SELECT 仍可用。
 
 ### 2. dao 根包中转（仿 ejson 门面）
 
-- [ ] `dao.go` 增加 `type SQLResult = sql.Result`。
-- [ ] `Dao` 持有惰性初始化的 `*sql.Driver`（`sync.Once`，避免非 SQL 角色启动开销/失败）。
-- [ ] `func (d *Dao) SQL(ctx, query string) (*SQLResult, error)` 中转到 `sql.Driver.Exec`。
+- [x] ~~`dao.go` 增加 `type SQLResult = sql.Result`。~~
+- [x] ~~`Dao` 持有惰性初始化的 `*sql.Driver`（`sync.Once`，避免非 SQL 角色启动开销/失败）。~~
+- [x] ~~`func (d *Dao) SQL(ctx, query string) (*SQLResult, error)` 中转到 `sql.Driver.Exec`。~~
 
 ### 3. 三端入口（仿 ejson）
 
-- [ ] api：`func (c *Engine) SQL(ctx, query string) (*dao.SQLResult, error)` → `c.dao.SQL`。
-- [ ] gateway：路由 `POST /sql`（`handleSQL`）；请求体 JSON `{"sql":"..."}`；响应 relaxed EJSON；`Server.SQL` 透传。
-- [ ] cli：`role.cli.function=sql`；`RunSQL(ctx, daoCfg, in, out)` 读 stdin 全文为一条 SQL → `eng.SQL` → EJSON 写 out；`role.go` 派发。
-- [ ] cli config：`function` 取值新增 `sql`（`FunctionSQL`，`Validate` 允许 upload|ejson|sql）。
+- [x] ~~api：`func (c *Engine) SQL(ctx, query string) (*dao.SQLResult, error)` → `c.dao.SQL`。~~
+- [x] ~~gateway：路由 `POST /sql`（`handleSQL`）；请求体 JSON `{"sql":"..."}`；响应 relaxed EJSON（`writeEJSON` 泛化为 `ejsonMarshaler` 接口）；`Server.SQL` 透传。~~
+- [x] ~~cli：`role.cli.function=sql`；`RunSQL(ctx, daoCfg, in, out)` 读 stdin 全文为一条 SQL → `eng.SQL` → EJSON 写 out；`role.go` 派发。~~
+- [x] ~~cli config：`function` 取值新增 `sql`（`FunctionSQL`，`Validate` 允许 upload|ejson|sql）。~~
 
 ### 4. 测试（连真实 DocumentDB，仿 ejson）
 

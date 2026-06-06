@@ -133,3 +133,11 @@ func (c *Engine) Upload(ctx context.Context, lines []string) (Result, error) {
 func (c *Engine) EJSON(ctx context.Context, req *dao.EJSONRequest) (*dao.EJSONResponse, error) {
 	return c.dao.EJSON(ctx, req)
 }
+
+// SQL parses and executes a SQL statement against the engine's MongoDB
+// connection (SQL Data API) and returns the result. Like EJSON it relays through
+// the dao facade (dao/sql is fronted by dao) and is independent of the upload
+// pipeline.
+func (c *Engine) SQL(ctx context.Context, query string) (*dao.SQLResult, error) {
+	return c.dao.SQL(ctx, query)
+}

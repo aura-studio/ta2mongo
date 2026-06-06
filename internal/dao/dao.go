@@ -6,11 +6,13 @@ package dao
 
 import (
 	"context"
+	"sync"
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"github.com/aura-studio/tango/internal/dao/ejson"
 	daomongo "github.com/aura-studio/tango/internal/dao/mongo"
+	daosql "github.com/aura-studio/tango/internal/dao/sql"
 	"github.com/aura-studio/tango/internal/dao/store"
 	"github.com/aura-studio/tango/internal/logging"
 )
@@ -21,6 +23,13 @@ import (
 type Dao struct {
 	Mongo *daomongo.MongoResource
 	Store *store.Store
+
+	// sql is the lazily-built SQL Data API driver (holds the vitess parser +
+	// schema cache). It is created on first (*Dao).SQL call so roles that never
+	// run SQL pay neither the build cost nor a failure mode at startup.
+	sqlOnce sync.Once
+	sqlEng  *daosql.Driver
+	sqlErr  error
 }
 
 // New opens a MongoDB connection from cfg and constructs a Dao. The caller
@@ -115,4 +124,31 @@ func DecodeEJSONRequest(b []byte) (*EJSONRequest, error) {
 // /ejson / cli function=ejson.
 func (d *Dao) EJSON(ctx context.Context, req *EJSONRequest) (*EJSONResponse, error) {
 	return ejson.Execute(ctx, d.Mongo, req)
+}
+
+// ---------------------------------------------------------------------------
+// sql (SQL Data API) facade
+//
+// The dao package fronts the dao/sql subpackage (vendored mongosql) so external
+// layers depend only on dao. SQLResult is a type alias; (*Dao).SQL lazily builds
+// the SQL driver (vitess parser + schema cache) over this Dao's MongoDB resource
+// and relays a SQL string to it. Mirrors the ejson facade above.
+// ---------------------------------------------------------------------------
+
+// SQLResult is the outcome of a SQL Data API statement. Alias for sql.Result, so
+// its MarshalEJSON method is available directly on a *dao.SQLResult.
+type SQLResult = daosql.Result
+
+// SQL parses and executes a SQL statement against this Dao's MongoDB connection,
+// using the database named in the connection URI. The SQL driver is built once
+// on first use. It is the relay behind api.Engine.SQL / gateway POST /sql / cli
+// function=sql.
+func (d *Dao) SQL(ctx context.Context, query string) (*SQLResult, error) {
+	d.sqlOnce.Do(func() {
+		d.sqlEng, d.sqlErr = daosql.New(d.Mongo)
+	})
+	if d.sqlErr != nil {
+		return nil, d.sqlErr
+	}
+	return d.sqlEng.Exec(ctx, query)
 }

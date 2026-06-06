@@ -16,7 +16,9 @@ import (
 // lines from stdin, ingest them with the configured process.mode, and print the
 // run statistics as JSON to stdout. With role.cli.function=ejson it is the console
 // equivalent of POST /ejson — read one Extended-JSON Mongo Data API request from
-// stdin and write the Extended-JSON response to stdout.
+// stdin and write the Extended-JSON response to stdout. With
+// role.cli.function=sql it is the console equivalent of POST /sql — read one SQL
+// statement from stdin and write the Extended-JSON result to stdout.
 type Role struct{}
 
 // Run slices the role.cli config and dispatches to the upload or data function.
@@ -37,6 +39,9 @@ func (Role) Run(ctx context.Context, cfg cfgtree.Tree) error {
 
 	if cliCfg.Function == FunctionEJSON {
 		return RunEJSON(ctx, daoCfg, os.Stdin, os.Stdout)
+	}
+	if cliCfg.Function == FunctionSQL {
+		return RunSQL(ctx, daoCfg, os.Stdin, os.Stdout)
 	}
 
 	procCfg, err := process.FromTree(cfg)

@@ -52,6 +52,12 @@ func (s *Server) EJSON(ctx context.Context, req *dao.EJSONRequest) (*dao.EJSONRe
 	return s.engine.EJSON(ctx, req)
 }
 
+// SQL executes a SQL statement (the engine entry point, exposed for
+// programmatic/test use).
+func (s *Server) SQL(ctx context.Context, query string) (*dao.SQLResult, error) {
+	return s.engine.SQL(ctx, query)
+}
+
 // Handler builds the HTTP handler exposing the gateway's routes: /healthz, the
 // TA-ingest /upload, and the Mongo Data API /ejson. It is exported so the routes
 // can be exercised directly (e.g. via httptest) without binding a socket.
@@ -60,6 +66,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	mux.HandleFunc("/upload", s.handleUpload)
 	mux.HandleFunc("/ejson", s.handleEJSON)
+	mux.HandleFunc("/sql", s.handleSQL)
 	return mux
 }
 
@@ -95,7 +102,11 @@ func writeErr(w http.ResponseWriter, code int, err error) {
 	writeJSON(w, code, map[string]string{"error": err.Error()})
 }
 
-func writeEJSON(w http.ResponseWriter, code int, resp *dao.EJSONResponse) {
+// ejsonMarshaler is anything that encodes itself as Extended JSON — both
+// *dao.EJSONResponse and *dao.SQLResult satisfy it.
+type ejsonMarshaler interface{ MarshalEJSON() ([]byte, error) }
+
+func writeEJSON(w http.ResponseWriter, code int, resp ejsonMarshaler) {
 	body, err := resp.MarshalEJSON()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
@@ -172,4 +183,26 @@ func (s *Server) handleEJSON(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeEJSON(w, http.StatusOK, resp)
+}
+
+// handleSQL parses and executes a SQL statement (SQL Data API). The body is JSON
+// {"sql":"..."}; the response is relaxed Extended JSON (SELECT rows carry BSON
+// types). It is an independent path, separate from /upload and /ejson.
+func (s *Server) handleSQL(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		SQL string `json:"sql"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if req.SQL == "" {
+		writeErr(w, http.StatusBadRequest, errors.New("sql is required"))
+		return
+	}
+	res, err := s.engine.SQL(r.Context(), req.SQL)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeEJSON(w, http.StatusOK, res)
 }

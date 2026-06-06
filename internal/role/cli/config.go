@@ -11,6 +11,10 @@ const (
 	// executes it, and writes the Extended-JSON response to stdout (the console
 	// equivalent of the gateway POST /ejson endpoint).
 	FunctionEJSON = "ejson"
+	// FunctionSQL reads a single SQL statement from stdin, executes it via the SQL
+	// Data API, and writes the Extended-JSON result to stdout (the console
+	// equivalent of the gateway POST /sql endpoint).
+	FunctionSQL = "sql"
 )
 
 // DefaultFunction is the cli function used when role.cli.function is unset.
@@ -21,7 +25,8 @@ const DefaultFunction = FunctionUpload
 // cli-specific knobs live here.
 type Config struct {
 	// Function selects what the cli role does (file key role.cli.function):
-	// upload (stdin log ingest) or ejson (stdin Mongo Data API request).
+	// upload (stdin log ingest), ejson (stdin Mongo Data API request), or
+	// sql (stdin SQL statement).
 	Function string `mapstructure:"function"`
 }
 
@@ -35,11 +40,11 @@ func (c *Config) ApplyDefaults() {
 // Validate checks cli-specific config.
 func (c *Config) Validate() error {
 	switch c.Function {
-	case FunctionUpload, FunctionEJSON:
+	case FunctionUpload, FunctionEJSON, FunctionSQL:
 		return nil
 	default:
-		return fmt.Errorf("function %q is invalid (want %q / %q)",
-			c.Function, FunctionUpload, FunctionEJSON)
+		return fmt.Errorf("function %q is invalid (want %q / %q / %q)",
+			c.Function, FunctionUpload, FunctionEJSON, FunctionSQL)
 	}
 }
 
