@@ -1,5 +1,5 @@
-github.com/aura-studio/mongosql v0.0.0-20260606120049-eecd31ac3a56 h1:pO3EA+iGBpS05bL1PGiFB8ySDRvmd2KWd0nBRmSTO1Y=
-github.com/aura-studio/mongosql v0.0.0-20260606120049-eecd31ac3a56/go.mod h1:AuZCNjhw6ipIJacoIAtqjJ/dvu2FuWHenGl1XyNcwHE=
+github.com/aura-studio/mongosql v1.0.0 h1:nFLA83ky46UyHRswUUOsq8c+XJSoitRL0EBhok0zoxI=
+github.com/aura-studio/mongosql v1.0.0/go.mod h1:AuZCNjhw6ipIJacoIAtqjJ/dvu2FuWHenGl1XyNcwHE=
 github.com/cenkalti/backoff/v4 v4.3.0 h1:MyRJ/UdXutAwSAT+s3wNd7MfTIcy71VQueUuFK343L8=
 github.com/cenkalti/backoff/v4 v4.3.0/go.mod h1:Y3VNntkOUPxTVeUxJ/G5vcM//AlwfmyYozVcomhLiZE=
 github.com/cpuguy83/go-md2man/v2 v2.0.6/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6NIQQ7OS05n1F4g=

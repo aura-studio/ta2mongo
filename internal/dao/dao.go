@@ -129,10 +129,11 @@ func (d *Dao) EJSON(ctx context.Context, req *EJSONRequest) (*EJSONResponse, err
 // ---------------------------------------------------------------------------
 // sql (SQL Data API) facade
 //
-// The dao package fronts the dao/sql subpackage (vendored mongosql) so external
-// layers depend only on dao. SQLResult is a type alias; (*Dao).SQL lazily builds
-// the SQL driver (vitess parser + schema cache) over this Dao's MongoDB resource
-// and relays a SQL string to it. Mirrors the ejson facade above.
+// The dao package fronts the dao/sql subpackage (a thin adapter over the
+// external github.com/aura-studio/mongosql dependency) so external layers depend
+// only on dao. SQLResult is a type alias; (*Dao).SQL lazily builds the SQL driver
+// (vitess parser + schema cache) over this Dao's MongoDB resource and relays a
+// SQL string to it. Mirrors the ejson facade above.
 // ---------------------------------------------------------------------------
 
 // SQLResult is the outcome of a SQL Data API statement. Alias for sql.Result, so

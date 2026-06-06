@@ -22,14 +22,16 @@ type Driver struct {
 	d *mongosql.Driver
 }
 
-// New builds a SQL driver over an existing MongoDB resource. The connection is
-// owned by tango's dao; mongosql is created with driver.New (injection), so it
-// never dials or closes the connection.
+// New builds a SQL driver over an existing MongoDB resource. The resolved
+// *mongo.Database is passed straight into mongosql.New (injection): tango's dao
+// owns the connection's lifecycle, so mongosql never dials or closes it, and
+// both share one connection pool. mongosql derives the underlying *mongo.Client
+// from db.Client().
 func New(res *daomongo.MongoResource) (*Driver, error) {
-	if res == nil || res.Client == nil || res.DB == nil {
+	if res == nil || res.DB == nil {
 		return nil, fmt.Errorf("sql: nil MongoDB resource")
 	}
-	d, err := mongosql.New(res.Client, res.DB.Name())
+	d, err := mongosql.New(res.DB)
 	if err != nil {
 		return nil, err
 	}
