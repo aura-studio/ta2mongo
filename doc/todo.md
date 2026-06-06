@@ -31,9 +31,9 @@
 > （解析/过滤/identity/DocumentDB 安全写）；用户表行 → 新增 DocumentDB 安全的 `UserSnapshotWriteModel` 直写
 > （v1.3 无此模型）。`checkpoint` 由 driver v1 转 v2。弃用 v1.0 的 x/term `ProgressBar`，改用日志周期进度。
 
-- [x] ~~移植 TA OpenAPI client `client.go`+`httpclient.go`（submit→poll→paginate；APIError/ErrTaskExpired/proxy）。~~
-- [x] ~~移植 `ndjson.go`（NDJSON 流解码）+ `rowdecode.go`（`EncodeRowAsJSONLine`）。~~
-- [x] ~~加 `golang.org/x/net`(proxy) 依赖；`go build ./internal/backfill/...` 通过（EC2）。~~
+- [ ] 移植 TA OpenAPI client `client.go`+`httpclient.go`（submit→poll→paginate；APIError/ErrTaskExpired/proxy）。
+- [ ] 移植 `ndjson.go`（NDJSON 流解码）+ `rowdecode.go`（`EncodeRowAsJSONLine`）。
+- [ ] 加 `golang.org/x/net`(proxy) 依赖；`go build ./internal/backfill/...` 通过（EC2）。
 - [ ] `internal/backfill/config.go`：`backfill.*`（apiBaseURL/token/proxy/projectID/table/partDateRange/eventTimeRange/sql/pageSize/pollInterval/pollTimeout/pageRetries/limit/schemaPrefix/runID/progressCollection/forceSkip/skipLocalFilter）+ filter(include/exclude) + `buildDaySQL`/`backfillWhere`/`effectivePageSize` + FromTree/defaults/validate。
 - [ ] `internal/dao/store` 新增 `UserSnapshotWriteModel(userID, doc, skipExisting)`（DocumentDB 安全：普通 `$set`/`$setOnInsert` upsert，无 pipeline）+ `dao` 门面重导出。
 - [ ] 移植 `checkpoint.go` 到 driver v2（`_backfill_progress`：Run/DayProgress/SQLSignature/initDays/resume）。
