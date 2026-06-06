@@ -1,35 +1,63 @@
 # TODO
 
 本文件只保留尚未完成的任务。任务完成后先改成 `- [x] ~~任务内容~~`，方便本轮核对；下一次整理 TODO 时删除已完成项。
+（已完成并合入的历史项——MongoDB Driver v2 升级、Gateway Mongo Data API/ejson、相关测试与文档——已清理，见 git 历史。）
 
-## MongoDB Driver v2 升级
+## SQL 支持（拷贝 mongosql 到 internal/dao/sql）
 
-- [x] ~~将依赖从 `go.mongodb.org/mongo-driver v1.x` 升级到 `go.mongodb.org/mongo-driver/v2`。~~
-- [x] ~~全量替换 MongoDB driver import 路径，避免 v1/v2 BSON 类型混用。~~
-- [x] ~~校准 v2 API 差异，包括 `mongo.Connect`、`options`、`WriteModel`、bulk write options、index options、error 类型判断。~~
-- [x] ~~保留 DocumentDB 兼容连接参数要求，重点确认 `retryWrites=false`、TLS、server selection timeout、connect timeout。~~
-- [x] ~~跑通现有单元测试和可跳过的 MongoDB 集成测试。~~
-- [x] ~~使用 `TANGO_TEST_MONGO_URI` 指向真实 DocumentDB 跑 store/gateway/api 关键集成测试。~~
+> 目标：把 `github.com/aura-studio/mongosql` 的 SQL→MongoDB 翻译+执行能力以**拷贝**方式引入
+> `internal/dao/sql`，作为 dao 子包、依赖 `dao/mongo`（注入连接），并**完全仿照 ejson** 在 dao 根包
+> 中转、贯通 api / gateway / cli 三端。不引入 mongosql 的 MySQL 协议层（`mysql/`），不作为外部 module 依赖。
+> 源提交：mongosql `fix/sql-semantics-correctness`（95072c1）。
 
-## Gateway Mongo Data API 方案
+### 0. 依赖与构建打底（先跑通隔离编译）
 
-> 决策调整：按"最大化功能、忽略安全限制"实现，并对齐 upload 在 **cli / gateway / api 三端**落地
-> （功能核心 `internal/dao/ejson` 完全一致，仅入口不同）。原方案中的白名单 / operator 黑名单 /
-> stage 限制 / 各类上限**全部放弃**（下方标注）。
+- [ ] 拷贝 mongosql `driver/`(2) + `translator/`(11) 共 13 个 .go 到 `internal/dao/sql/`：`driver/driver.go`→`sql.go`、`driver/schema.go`→`schema.go`、`translator/**` 原样到 `internal/dao/sql/translator/**`；跳过 `mysql/`、`tests/`、`scripts/`、`doc/`。
+- [ ] 改包名：`package driver` → `package sql`（sql.go、schema.go）。
+- [ ] 改 import 路径：`github.com/aura-studio/mongosql/translator...` → `github.com/aura-studio/tango/internal/dao/sql/translator...`（全部拷贝文件）。
+- [ ] tango go.mod 增加 `vitess.io/vitess v0.24.1`；`go mod tidy` 拉齐 vitess 及其间接依赖。
+- [ ] 处理 Go 版本：mongosql/vitess 需 go≥1.26，tango 现为 1.25；按需上调 tango `go` 指令，并在 EC2 安装对应 Go 工具链。
+- [ ] `go build ./internal/dao/sql/...` 隔离编译通过（先不接任何 tango 入口）。
+- [ ] `gofmt -l internal/dao/sql` 干净。
 
-- [x] ~~确认 Mongo Data API 的边界：固定 6 个 action（无任意 `runCommand`），但 action 之内完全放开（无白名单/无上限）。~~
-- [x] ~~采用 `Extended JSON v2 + Data API 风格 action` 作为 body 方案（MQL 不做子集限制，原样转发）。~~
-- [x] ~~定义 action 列表：`findOne`、`find`、`insertOne`、`updateOne`、`deleteOne`、`aggregate`。~~
-- [x] ~~定义请求外壳字段：`database`、`collection`、`filter`、`projection`、`sort`、`limit`、`skip`、`document`、`update`、`pipeline`、`upsert`。~~
-- [x] ~~定义响应格式，统一使用 relaxed Extended JSON 返回 BSON 类型。~~
-- [x] ~~明确 Content-Type 约定：优先支持 `application/ejson`，兼容 `application/json`。~~
-- [x] ~~在 Go 层使用官方 driver 的 `bson.UnmarshalExtJSON` / `bson.MarshalExtJSON` 处理 EJSON。~~
-- [x] ~~（放弃）设计 database / collection 白名单配置~~ —— 按决策完全放开，可访问任意库表。
-- [x] ~~（放弃）设计 MQL operator 白名单~~ —— 不限制 operator，原样转发驱动。
-- [x] ~~（放弃）设计 aggregation stage 白名单~~ —— 不限制 stage，原样转发驱动。
-- [x] ~~（放弃）为 `limit`、body size、执行超时、返回文档数量设置默认上限~~ —— 不设任何上限。
-- [x] ~~明确 gateway 与现有 `/upload` 的关系：保留 `/upload` 作为 TA 日志上报入口，新 Mongo Data API 使用独立 path `/ejson`。~~
-- [x] ~~三端实现：gateway `POST /ejson`、cli `role.cli.function=ejson`（stdin→stdout）、库 `api.Engine.EJSON`，共享 `internal/dao/ejson` 核心（经 dao 根包中转）。~~
+### 1. sql 包适配（注入连接，仿 ejson 的 Execute(res,…)）
+
+- [ ] 去掉自拨号 `Connect` 和 `Close` 的 `Disconnect`（连接由 tango 持有，不可在此关闭）。
+- [ ] 新增 `New(res *mongo.MongoResource) (*Driver, error)`：用 `res.Client`/`res.DB` + `translator.New()` 构造，不再 dial。
+- [ ] 保留 `Exec(ctx, sql) (*Result, error)` 及 `execFind/Aggregate/Insert/Update/Delete/InsertSelect`、`drainCursor`、`SchemaStore` 原逻辑。
+- [ ] 给 `Result` 增加 `MarshalEJSON()`（`bson.MarshalExtJSON`，因为 rows 内含 BSON 类型，需 EJSON 编码）。
+- [ ] 备注（不可勾，仅说明）：未拷贝 DDL（CREATE/ALTER TABLE 在 mysql 层），schema 为空时 AUTO_INCREMENT/DEFAULT/ON UPDATE 自动跳过，DML/SELECT 仍可用。
+
+### 2. dao 根包中转（仿 ejson 门面）
+
+- [ ] `dao.go` 增加 `type SQLResult = sql.Result`。
+- [ ] `Dao` 持有惰性初始化的 `*sql.Driver`（`sync.Once`，避免非 SQL 角色启动开销/失败）。
+- [ ] `func (d *Dao) SQL(ctx, query string) (*SQLResult, error)` 中转到 `sql.Driver.Exec`。
+
+### 3. 三端入口（仿 ejson）
+
+- [ ] api：`func (c *Engine) SQL(ctx, query string) (*dao.SQLResult, error)` → `c.dao.SQL`。
+- [ ] gateway：路由 `POST /sql`（`handleSQL`）；请求体 JSON `{"sql":"..."}`；响应 relaxed EJSON；`Server.SQL` 透传。
+- [ ] cli：`role.cli.function=sql`；`RunSQL(ctx, daoCfg, in, out)` 读 stdin 全文为一条 SQL → `eng.SQL` → EJSON 写 out；`role.go` 派发。
+- [ ] cli config：`function` 取值新增 `sql`（`FunctionSQL`，`Validate` 允许 upload|ejson|sql）。
+
+### 4. 测试（连真实 DocumentDB，仿 ejson）
+
+- [ ] `internal/dao/sql/sql_test.go`：单元（基本 SELECT/INSERT 解析不报错）+ 集成（insert→select→update→delete 往返，gated `TANGO_TEST_MONGO_URI`）。
+- [ ] `tests/sql_test.go`：gateway `POST /sql` + cli `RunSQL` 端到端。
+- [ ] 注意 DocumentDB 限制：含表达式的 UPDATE 走 pipeline 形式，DocumentDB 不支持；测试用简单 `$set`/常量更新。
+
+### 5. 示例与文档（仿 ejson）
+
+- [ ] `examples/config/cli/cli.sql.{min,max}.{yaml,json}`（4 份，`function=sql`）+ `examples/config/README.md` 更新。
+- [ ] `doc/usage.md`：`POST /sql` 与 cli sql 示例、库用法。
+- [ ] `doc/config.md`：`role.cli.function` 增加 `sql`。
+- [ ] `doc/arch.md`：新增 §5.3 SQL（dao/sql 子包、依赖 dao/mongo + vitess、三端入口）、目录树、§3.1 文件清单、依赖表。
+
+### 6. 收尾验证（EC2 + 真实 DocumentDB）
+
+- [ ] 干净检出：`gofmt -l`、`go vet ./...`、全量 `go test ./... -count=1`（带 `TANGO_TEST_MONGO_URI`）全绿。
+- [ ] 手测：`curl -X POST :8080/sql -d '{"sql":"SELECT ..."}'`；`echo 'SELECT ...' | tango --config cli.sql.min.yaml`。
 
 ## Lambda / DocumentDB 部署方案
 
@@ -38,14 +66,3 @@
 - [ ] 说明 Lambda VPC、security group、private subnet、Secrets Manager / VPC endpoint / NAT 的部署要求。
 - [ ] 说明 DocumentDB 连接串模板和 CA bundle 放置方式。
 - [ ] 给出并发与连接池计算方法，避免 Lambda 并发放大 DocumentDB 连接数。
-
-## 测试与文档
-
-- [x] ~~为 EJSON decode/encode 增加单元测试，覆盖 `$oid`、`$date`、`$numberLong`、`$numberDecimal`。~~（`internal/dao/ejson/ejson_test.go`）
-- [x] ~~（放弃）为 MQL/operator/stage 白名单增加拒绝测试~~ —— 已无白名单；改为校验 unknown action / 缺字段拒绝。
-- [x] ~~为每个 action 增加 handler 测试。~~（`dao/ejson` 集成测试逐 action 往返 + gateway/cli 端到端）
-- [x] ~~为 gateway Mongo Data API 增加 MongoDB 集成测试。~~（`tests/ejson_test.go`，httptest + cli，连真实 DocumentDB 通过）
-- [x] ~~为 DocumentDB 兼容路径补充测试说明，使用 `TANGO_TEST_MONGO_URI` 手动验证。~~（测试均读 `TANGO_TEST_MONGO_URI`，无则跳过）
-- [x] ~~更新 `doc/usage.md`，补充 Mongo Data API 请求示例。~~
-- [x] ~~更新 `doc/config.md`，补充 `role.cli.function` 配置项（白名单/上限已放弃，无对应配置）。~~
-- [x] ~~更新 `doc/arch.md`，补充 gateway 中 `/upload` 与 Mongo Data API 的职责分离。~~
