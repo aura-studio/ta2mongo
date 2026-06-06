@@ -29,7 +29,7 @@ func New(res *daomongo.MongoResource) (*Driver, error) {
 	if res == nil || res.Client == nil || res.DB == nil {
 		return nil, fmt.Errorf("sql: nil MongoDB resource")
 	}
-	d, err := mongosql.New(res.Client, res.DB)
+	d, err := mongosql.New(res.Client, res.DB.Name())
 	if err != nil {
 		return nil, err
 	}
