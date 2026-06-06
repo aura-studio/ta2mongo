@@ -15,7 +15,7 @@
 
 ## Phase 1 — Backfill / TA-OpenAPI SQL 导入（新 domain `internal/backfill`）
 
-- [ ] 移植 TA OpenAPI client：`client.go`+`httpclient.go`（submit-SQL→awaitFinished 轮询→分页；APIError/ErrTaskExpired/proxy）。
+- [x] ~~移植 TA OpenAPI client：`client.go`+`httpclient.go`（submit-SQL→awaitFinished 轮询→分页；APIError/ErrTaskExpired/proxy）。~~（verbatim 拷贝，无改动）
 - [ ] 移植 `sqlbuilder.go`（buildDaySQL）、`ndjson.go`+`rowdecode.go`（TA 列式行→文档）。
 - [ ] 移植 `checkpoint.go`+`progress.go`（`_backfill_progress`，day/run 断点续传）与 `runner.go`/`executor.go` 编排。
 - [ ] 写层重设：用当前 `dao.EventWriteModel`/`UserWriteModel`+`BulkWrite`（DocumentDB 安全 `_ts` 守卫）替换 v1.0 的 event_ingester/user_writer 直写；identity 用 `dao.Store.Identity()`。
