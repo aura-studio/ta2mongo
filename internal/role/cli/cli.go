@@ -9,7 +9,6 @@ import (
 	"io"
 
 	"github.com/aura-studio/tango/internal/dao"
-	"github.com/aura-studio/tango/internal/dataapi"
 	"github.com/aura-studio/tango/internal/parser"
 	"github.com/aura-studio/tango/internal/process"
 	"github.com/aura-studio/tango/internal/role/api"
@@ -41,7 +40,7 @@ func RunData(ctx context.Context, daoCfg *dao.Config, in io.Reader, out io.Write
 	if err != nil {
 		return err
 	}
-	req, err := dataapi.DecodeRequest(body)
+	req, err := dao.DecodeDataRequest(body)
 	if err != nil {
 		return err
 	}

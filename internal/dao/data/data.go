@@ -1,14 +1,17 @@
-// Package dataapi is the shared functional core of Tango's Mongo Data API: a
-// thin, fully-open passthrough to MongoDB CRUD/aggregate driven by a single
-// Extended-JSON request shell with a Data-API-style action. It is interface-
-// agnostic — the api (Go method), gateway (HTTP POST /data) and cli (stdin)
-// ends all call Execute with the same Request and get the same Response, exactly
-// the way the upload path shares the api.Engine.
+// Package data is the shared functional core of Tango's Mongo Data API: a thin,
+// fully-open passthrough to MongoDB CRUD/aggregate driven by a single
+// Extended-JSON request shell with a Data-API-style action. It is a dao
+// subpackage and is fronted by the dao root package (see dao.go); other domains
+// reach it through dao, never importing dao/data directly.
+//
+// It is interface-agnostic — the api (Go method), gateway (HTTP POST /data) and
+// cli (stdin) ends all call Execute with the same Request and get the same
+// Response, exactly the way the upload path shares the api.Engine.
 //
 // By design there are no restrictions: any database, any collection, any filter,
 // operator, or aggregation pipeline is forwarded to the driver as-is, and no
 // limit / return-count / timeout caps are imposed. Callers own access control.
-package dataapi
+package data
 
 import (
 	"context"
@@ -18,6 +21,8 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
+
+	daomongo "github.com/aura-studio/tango/internal/dao/mongo"
 )
 
 // Action identifiers accepted in Request.Action.
@@ -63,35 +68,38 @@ type Response struct {
 	DeletedCount  *int64   `bson:"deletedCount,omitempty"`  // deleteOne
 }
 
-// Execute dispatches req against the given client. The target database is
-// req.Database when set, otherwise defaultDB (the database named in the
+// Execute dispatches req against the MongoDB resource. The target database is
+// req.Database when set, otherwise the resource's default database (named in the
 // connection URI). No validation beyond requiring a collection and a known
 // action — everything else is forwarded to the driver.
-func Execute(ctx context.Context, client *mongo.Client, defaultDB string, req *Request) (*Response, error) {
+func Execute(ctx context.Context, res *daomongo.MongoResource, req *Request) (*Response, error) {
 	if req == nil {
-		return nil, errors.New("dataapi: nil request")
+		return nil, errors.New("data: nil request")
 	}
-	// Validate the request shell before touching the client, so bad-request errors
-	// (unknown action, missing collection/database) never depend on a live
+	// Validate the request shell before touching the connection, so bad-request
+	// errors (unknown action, missing collection/database) never depend on a live
 	// connection.
 	switch req.Action {
 	case ActionFindOne, ActionFind, ActionInsertOne, ActionUpdateOne, ActionDeleteOne, ActionAggregate:
 	case "":
-		return nil, errors.New("dataapi: action is required")
+		return nil, errors.New("data: action is required")
 	default:
-		return nil, fmt.Errorf("dataapi: unknown action %q", req.Action)
+		return nil, fmt.Errorf("data: unknown action %q", req.Action)
 	}
 	if req.Collection == "" {
-		return nil, errors.New("dataapi: collection is required")
+		return nil, errors.New("data: collection is required")
 	}
 	dbName := req.Database
-	if dbName == "" {
-		dbName = defaultDB
+	if dbName == "" && res != nil && res.DB != nil {
+		dbName = res.DB.Name()
 	}
 	if dbName == "" {
-		return nil, errors.New("dataapi: database is required (none in request or connection URI)")
+		return nil, errors.New("data: database is required (none in request or connection URI)")
 	}
-	coll := client.Database(dbName).Collection(req.Collection)
+	if res == nil || res.Client == nil {
+		return nil, errors.New("data: no MongoDB connection")
+	}
+	coll := res.Client.Database(dbName).Collection(req.Collection)
 
 	switch req.Action {
 	case ActionFindOne:
@@ -154,7 +162,7 @@ func find(ctx context.Context, coll *mongo.Collection, req *Request) (*Response,
 
 func insertOne(ctx context.Context, coll *mongo.Collection, req *Request) (*Response, error) {
 	if req.Document == nil {
-		return nil, errors.New("dataapi: insertOne requires a document")
+		return nil, errors.New("data: insertOne requires a document")
 	}
 	res, err := coll.InsertOne(ctx, req.Document)
 	if err != nil {
@@ -165,7 +173,7 @@ func insertOne(ctx context.Context, coll *mongo.Collection, req *Request) (*Resp
 
 func updateOne(ctx context.Context, coll *mongo.Collection, req *Request) (*Response, error) {
 	if req.Update == nil {
-		return nil, errors.New("dataapi: updateOne requires an update")
+		return nil, errors.New("data: updateOne requires an update")
 	}
 	opts := options.UpdateOne()
 	if req.Upsert {

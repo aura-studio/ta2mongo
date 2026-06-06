@@ -1,4 +1,4 @@
-package dataapi
+package data
 
 import (
 	"fmt"
@@ -14,7 +14,7 @@ import (
 func DecodeRequest(data []byte) (*Request, error) {
 	var r Request
 	if err := bson.UnmarshalExtJSON(data, false, &r); err != nil {
-		return nil, fmt.Errorf("dataapi: decode request: %w", err)
+		return nil, fmt.Errorf("data: decode request: %w", err)
 	}
 	return &r, nil
 }
@@ -24,7 +24,7 @@ func DecodeRequest(data []byte) (*Request, error) {
 func (r *Response) MarshalEJSON() ([]byte, error) {
 	b, err := bson.MarshalExtJSON(r, false, false)
 	if err != nil {
-		return nil, fmt.Errorf("dataapi: encode response: %w", err)
+		return nil, fmt.Errorf("data: encode response: %w", err)
 	}
 	return b, nil
 }

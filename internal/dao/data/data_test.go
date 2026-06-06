@@ -1,4 +1,4 @@
-package dataapi
+package data
 
 import (
 	"context"
@@ -17,7 +17,7 @@ import (
 // TestDecodeRequest_EJSONTypes verifies the request decoder preserves native
 // BSON types written in canonical Extended JSON.
 func TestDecodeRequest_EJSONTypes(t *testing.T) {
-	data := []byte(`{
+	in := []byte(`{
 		"action": "find",
 		"collection": "c",
 		"filter": {
@@ -27,7 +27,7 @@ func TestDecodeRequest_EJSONTypes(t *testing.T) {
 			"d":   {"$numberDecimal": "1.50"}
 		}
 	}`)
-	req, err := DecodeRequest(data)
+	req, err := DecodeRequest(in)
 	if err != nil {
 		t.Fatalf("DecodeRequest: %v", err)
 	}
@@ -60,8 +60,7 @@ func TestResponse_MarshalEJSON_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MarshalEJSON: %v", err)
 	}
-	// Re-parse into a request-shaped doc to confirm the bytes are valid EJSON and
-	// the ObjectID survived the round-trip.
+	// Re-parse to confirm the bytes are valid EJSON and the ObjectID survived.
 	var back struct {
 		Document bson.M `bson:"document"`
 	}
@@ -88,8 +87,8 @@ func TestExecute_Validation(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			// nil client + empty defaultDB: validation must fail before any client use.
-			if _, err := Execute(ctx, nil, "", tc.req); err == nil {
+			// nil resource: validation must fail before any connection use.
+			if _, err := Execute(ctx, nil, tc.req); err == nil {
 				t.Fatalf("expected error, got nil")
 			}
 		})
@@ -104,7 +103,7 @@ func TestExecute_Validation(t *testing.T) {
 func TestDataAPI_Integration(t *testing.T) {
 	uri := os.Getenv("TANGO_TEST_MONGO_URI")
 	if uri == "" {
-		t.Skip("set TANGO_TEST_MONGO_URI to run the dataapi integration test")
+		t.Skip("set TANGO_TEST_MONGO_URI to run the data integration test")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -119,21 +118,20 @@ func TestDataAPI_Integration(t *testing.T) {
 		t.Fatalf("connect: %v", err)
 	}
 	defer res.Close()
-	client := res.Client
 
-	dbName := fmt.Sprintf("tango_dataapi_it_%d", time.Now().UnixNano())
+	dbName := fmt.Sprintf("tango_data_it_%d", time.Now().UnixNano())
 	const coll = "items"
 	defer func() {
 		dctx, dcancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer dcancel()
-		_ = client.Database(dbName).Drop(dctx)
+		_ = res.Client.Database(dbName).Drop(dctx)
 	}()
 
 	exec := func(t *testing.T, req *Request) *Response {
 		t.Helper()
 		req.Database = dbName
 		req.Collection = coll
-		resp, err := Execute(ctx, client, "", req)
+		resp, err := Execute(ctx, res, req)
 		if err != nil {
 			t.Fatalf("%s: %v", req.Action, err)
 		}

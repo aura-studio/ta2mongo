@@ -66,7 +66,7 @@ gateway 是常驻 HTTP 服务，读取共享段 `logging` + `dao` + `parser` + `
 
 ## Mongo Data API（`/data` · cli `data` · `api.Data`）
 
-通用的 MongoDB 读写接口，与 `/upload` 完全独立。功能核心在 `internal/dataapi`，三端共享、只是入口不同：
+通用的 MongoDB 读写接口，与 `/upload` 完全独立。功能核心在 `internal/dao/data`（由 `dao` 根包经 `dao.go` 中转），三端共享、只是入口不同：
 gateway 的 `POST /data`、cli 的 `role.cli.function=data`（stdin→stdout）、库的 `engine.Data(ctx, req)`。
 
 请求/响应体均为 **Extended JSON v2**（`bson.UnmarshalExtJSON` / `MarshalExtJSON`）；请求 `Content-Type`
@@ -141,13 +141,13 @@ eng.EnsureIndexes(ctx)
 res, _ := eng.Upload(ctx, lines)
 ```
 
-同一引擎也暴露 Mongo Data API（与上报共用连接，不需要 process/parser 配置）：
+同一引擎也暴露 Mongo Data API（与上报共用连接，不需要 process/parser 配置；类型经 `dao` 根包中转）：
 
 ```go
-import "github.com/aura-studio/tango/internal/dataapi"
+import "github.com/aura-studio/tango/internal/dao"
 
-resp, _ := eng.Data(ctx, &dataapi.Request{
-    Action: dataapi.ActionFind, Collection: "event",
+resp, _ := eng.Data(ctx, &dao.DataRequest{
+    Action: dao.DataActionFind, Collection: "event",
     Filter: bson.M{"#event_name": "login"}, Limit: 5,
 })
 // resp.Documents ...

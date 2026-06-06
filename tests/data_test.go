@@ -11,7 +11,7 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 
-	"github.com/aura-studio/tango/internal/dataapi"
+	"github.com/aura-studio/tango/internal/dao"
 	"github.com/aura-studio/tango/internal/role/cli"
 	"github.com/aura-studio/tango/internal/role/gateway"
 )
@@ -33,7 +33,7 @@ func TestDataAPI_GatewayAndCLI(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	post := func(t *testing.T, body string) *dataapi.Response {
+	post := func(t *testing.T, body string) *dao.DataResponse {
 		t.Helper()
 		resp, err := http.Post(ts.URL+"/data", "application/ejson", strings.NewReader(body))
 		if err != nil {
@@ -44,7 +44,7 @@ func TestDataAPI_GatewayAndCLI(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("POST /data status %d: %s", resp.StatusCode, b)
 		}
-		var out dataapi.Response
+		var out dao.DataResponse
 		if err := bson.UnmarshalExtJSON(b, false, &out); err != nil {
 			t.Fatalf("decode response: %v (%s)", err, b)
 		}
@@ -71,7 +71,7 @@ func TestDataAPI_GatewayAndCLI(t *testing.T) {
 	if err := cli.RunData(ctx, daoCfg, in, &buf); err != nil {
 		t.Fatalf("cli.RunData: %v", err)
 	}
-	var cliResp dataapi.Response
+	var cliResp dao.DataResponse
 	if err := bson.UnmarshalExtJSON(buf.Bytes(), false, &cliResp); err != nil {
 		t.Fatalf("decode cli response: %v (%s)", err, buf.Bytes())
 	}

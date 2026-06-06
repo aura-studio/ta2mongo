@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/aura-studio/tango/internal/dao"
-	"github.com/aura-studio/tango/internal/dataapi"
 	"github.com/aura-studio/tango/internal/logging"
 	"github.com/aura-studio/tango/internal/parser"
 	"github.com/aura-studio/tango/internal/process"
@@ -49,7 +48,7 @@ func (s *Server) Upload(ctx context.Context, lines []string) (api.Result, error)
 
 // Data executes a Mongo Data API request (the engine entry point, exposed for
 // programmatic/test use).
-func (s *Server) Data(ctx context.Context, req *dataapi.Request) (*dataapi.Response, error) {
+func (s *Server) Data(ctx context.Context, req *dao.DataRequest) (*dao.DataResponse, error) {
 	return s.engine.Data(ctx, req)
 }
 
@@ -96,7 +95,7 @@ func writeErr(w http.ResponseWriter, code int, err error) {
 	writeJSON(w, code, map[string]string{"error": err.Error()})
 }
 
-func writeEJSON(w http.ResponseWriter, code int, resp *dataapi.Response) {
+func writeEJSON(w http.ResponseWriter, code int, resp *dao.DataResponse) {
 	body, err := resp.MarshalEJSON()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
@@ -162,7 +161,7 @@ func (s *Server) handleData(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	req, err := dataapi.DecodeRequest(body)
+	req, err := dao.DecodeDataRequest(body)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return

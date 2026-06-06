@@ -9,6 +9,7 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
+	"github.com/aura-studio/tango/internal/dao/data"
 	daomongo "github.com/aura-studio/tango/internal/dao/mongo"
 	"github.com/aura-studio/tango/internal/dao/store"
 	"github.com/aura-studio/tango/internal/logging"
@@ -73,4 +74,45 @@ func EventWriteModel(typ, uuid string, doc map[string]any) mongo.WriteModel {
 // resolve identity. See store.DeadLetterModel.
 func DeadLetterModel(line string, parseErr error) mongo.WriteModel {
 	return store.DeadLetterModel(line, parseErr)
+}
+
+// ---------------------------------------------------------------------------
+// data (Mongo Data API) facade
+//
+// The dao package fronts the dao/data subpackage so external layers (api /
+// gateway / cli) depend only on dao, never on dao/data directly. DataRequest /
+// DataResponse are type aliases and DecodeDataRequest a thin pass-through;
+// (*Dao).Data is the relay that runs a request against this Dao's MongoDB
+// connection. This mirrors the store facade above.
+// ---------------------------------------------------------------------------
+
+// DataRequest is a Mongo Data API request shell. Alias for data.Request.
+type DataRequest = data.Request
+
+// DataResponse is a Mongo Data API response. Alias for data.Response, so its
+// MarshalEJSON method is available directly on a *dao.DataResponse.
+type DataResponse = data.Response
+
+// Mongo Data API action identifiers (re-exported from dao/data).
+const (
+	DataActionFindOne   = data.ActionFindOne
+	DataActionFind      = data.ActionFind
+	DataActionInsertOne = data.ActionInsertOne
+	DataActionUpdateOne = data.ActionUpdateOne
+	DataActionDeleteOne = data.ActionDeleteOne
+	DataActionAggregate = data.ActionAggregate
+)
+
+// DecodeDataRequest parses an Extended-JSON Mongo Data API request body. See
+// data.DecodeRequest.
+func DecodeDataRequest(b []byte) (*DataRequest, error) {
+	return data.DecodeRequest(b)
+}
+
+// Data executes a Mongo Data API request against this Dao's MongoDB connection,
+// defaulting the database to the one named in the connection URI when the
+// request omits it. It is the relay behind api.Engine.Data / gateway POST /data /
+// cli function=data.
+func (d *Dao) Data(ctx context.Context, req *DataRequest) (*DataResponse, error) {
+	return data.Execute(ctx, d.Mongo, req)
 }
