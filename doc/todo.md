@@ -12,13 +12,13 @@
 
 ### 0. 依赖与构建打底（先跑通隔离编译）
 
-- [ ] 拷贝 mongosql `driver/`(2) + `translator/`(11) 共 13 个 .go 到 `internal/dao/sql/`：`driver/driver.go`→`sql.go`、`driver/schema.go`→`schema.go`、`translator/**` 原样到 `internal/dao/sql/translator/**`；跳过 `mysql/`、`tests/`、`scripts/`、`doc/`。
-- [ ] 改包名：`package driver` → `package sql`（sql.go、schema.go）。
-- [ ] 改 import 路径：`github.com/aura-studio/mongosql/translator...` → `github.com/aura-studio/tango/internal/dao/sql/translator...`（全部拷贝文件）。
-- [ ] tango go.mod 增加 `vitess.io/vitess v0.24.1`；`go mod tidy` 拉齐 vitess 及其间接依赖。
-- [ ] 处理 Go 版本：mongosql/vitess 需 go≥1.26，tango 现为 1.25；按需上调 tango `go` 指令，并在 EC2 安装对应 Go 工具链。
-- [ ] `go build ./internal/dao/sql/...` 隔离编译通过（先不接任何 tango 入口）。
-- [ ] `gofmt -l internal/dao/sql` 干净。
+- [x] ~~拷贝 mongosql `driver/`(2) + `translator/`(11) 共 13 个 .go 到 `internal/dao/sql/`：`driver/driver.go`→`sql.go`、`driver/schema.go`→`schema.go`、`translator/**` 原样到 `internal/dao/sql/translator/**`；跳过 `mysql/`、`tests/`、`scripts/`、`doc/`。~~
+- [x] ~~改包名：`package driver` → `package sql`（sql.go、schema.go）。~~
+- [x] ~~改 import 路径：`github.com/aura-studio/mongosql/translator...` → `github.com/aura-studio/tango/internal/dao/sql/translator...`（全部拷贝文件）。~~
+- [x] ~~tango go.mod 增加 `vitess.io/vitess v0.24.1`；`go mod tidy` 拉齐 vitess 及其间接依赖。~~
+- [x] ~~处理 Go 版本：`go get` 自动把 `go` 指令从 1.25.0 上调到 1.26.2（GOTOOLCHAIN=auto 拉取 go1.26.2 工具链）。~~
+- [x] ~~`go build ./internal/dao/sql/...` 隔离编译通过（EC2）。~~
+- [x] ~~`gofmt -l internal/dao/sql` 干净。~~
 
 ### 1. sql 包适配（注入连接，仿 ejson 的 Execute(res,…)）
 

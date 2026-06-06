@@ -32,9 +32,9 @@ type Driver struct {
 // to callers as relaxed Extended JSON (see MarshalEJSON), since SELECT rows carry
 // native BSON types.
 type Result struct {
-	Kind          string                   `bson:"kind"`                  // "select" | "insert" | "update" | "delete"
-	Rows          []map[string]interface{} `bson:"rows,omitempty"`        // populated for SELECT
-	InsertedIDs   []interface{}            `bson:"insertedIds,omitempty"` // populated for INSERT
+	Kind          string                   `bson:"kind"`                    // "select" | "insert" | "update" | "delete"
+	Rows          []map[string]interface{} `bson:"rows,omitempty"`          // populated for SELECT
+	InsertedIDs   []interface{}            `bson:"insertedIds,omitempty"`   // populated for INSERT
 	MatchedCount  int64                    `bson:"matchedCount,omitempty"`  // populated for UPDATE
 	ModifiedCount int64                    `bson:"modifiedCount,omitempty"` // populated for UPDATE
 	DeletedCount  int64                    `bson:"deletedCount,omitempty"`  // populated for DELETE
