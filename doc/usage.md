@@ -25,7 +25,7 @@ tango --role.mode gateway       # 角色也可用 flag / 环境变量覆盖（�
 |---|---|
 | `daemon`（默认） | `logging` · `dao` · `parser` · `source` · `process` |
 | `gateway` | `logging` · `dao` · `parser` · `process` · `role.gateway` |
-| `cli` | `logging` · `dao` · `parser` · `process` · `role.cli`（`function=ejson` 时仅 `logging` · `dao` · `role.cli`） |
+| `cli` | `logging` · `dao` · `parser` · `process` · `role.cli`（`function=ejson`/`sql` 时仅 `logging` · `dao` · `role.cli`） |
 
 ## Daemon Service
 
@@ -60,6 +60,7 @@ gateway 是常驻 HTTP 服务，读取共享段 `logging` + `dao` + `parser` + `
 | GET | `/healthz` | - | 健康检查 |
 | POST | `/upload` | `{"line":...,"lines":[...]}` | 日志数组上报，策略由 `process.mode` 决定 |
 | POST | `/ejson` | EJSON `{action, collection, ...}` | Mongo Data API：通用 CRUD/aggregate（见下） |
+| POST | `/sql` | JSON `{"sql":"..."}` | SQL Data API：SQL → MongoDB（见下） |
 
 请求体的 `line` / `lines` 会被包成一个 httpbody 源，按 `process.mode` 选 single / batch / pipeline
 三种上传策略之一写入 MongoDB，返回本次统计（行数 / user / event / 死信等）。
@@ -106,8 +107,39 @@ cli 端等价（一次性，从 stdin 读一个请求、stdout 输出一个响�
 
 ```bash
 echo '{"action":"find","collection":"event","filter":{},"limit":5}' \
-  | tango --role.mode cli --role.cli.function data --dao.mongo.uri mongodb://localhost:27017/tango
+  | tango --role.mode cli --role.cli.function ejson --dao.mongo.uri mongodb://localhost:27017/tango
 ```
+
+## SQL Data API（`/sql` · cli `sql` · `api.SQL`）
+
+用 SQL 读写 MongoDB，与 `/upload`、`/ejson` 完全独立。功能核心在 `internal/dao/sql`（由 `dao` 根包经 `dao.go`
+中转；代码自 `github.com/aura-studio/mongosql` 拷贝并适配），三端共享：gateway 的 `POST /sql`、cli 的
+`role.cli.function=sql`（stdin→stdout）、库的 `engine.SQL(ctx, query)`。
+
+SQL 由 vitess 解析（MySQL 方言），**表名即集合名**，操作的库取自连接 URI。请求体是 JSON `{"sql":"..."}`；
+响应是 relaxed Extended JSON（SELECT 行含 BSON 类型）。支持 `SELECT`（含 WHERE/ORDER BY/LIMIT/GROUP BY/聚合）、
+`INSERT`、`UPDATE`、`DELETE`、`INSERT ... SELECT`。
+
+```bash
+# SELECT
+curl -X POST localhost:8080/sql -H 'Content-Type: application/json' \
+  -d '{"sql":"SELECT * FROM event WHERE `#event_name` = '"'"'login'"'"' LIMIT 5"}'
+
+# INSERT
+curl -X POST localhost:8080/sql -H 'Content-Type: application/json' \
+  -d '{"sql":"INSERT INTO event (`#event_name`) VALUES ('"'"'login'"'"')"}'
+```
+
+cli 端等价（从 stdin 读一条 SQL）：
+
+```bash
+echo "SELECT * FROM event LIMIT 5" \
+  | tango --role.mode cli --role.cli.function sql --dao.mongo.uri mongodb://localhost:27017/tango
+```
+
+⚠️ DocumentDB 不支持含表达式的 `UPDATE`（翻译为 aggregation-pipeline 形式），如 `SET n = n + 1`；
+常量赋值 `SET n = 10` 走普通 `$set`，正常。DDL（CREATE/ALTER TABLE）未引入（在 mongosql 的 MySQL 协议层），
+故 AUTO_INCREMENT/DEFAULT/ON UPDATE 需要的 schema 不存在时自动跳过。
 
 ## CLI Upload
 
@@ -119,8 +151,9 @@ cat events.ndjson | tango --role.mode cli --process.mode batch --dao.mongo.uri m
 `process.mode` 取 `single` / `batch` / `pipeline`（默认 `batch`），可来自配置文件、`TANGO_PROCESS_MODE` 或 `--process.mode`。
 `role.mode=cli` 是 gateway `POST /upload` 的控制台等价入口（从 stdin 读取）。
 
-cli 角色由 `role.cli.function` 选功能：`upload`（默认，上面这种日志上报）或 `ejson`（Mongo Data API，
-读一个 EJSON 请求、输出 EJSON 响应，等价于 `POST /ejson`，见上节）。
+cli 角色由 `role.cli.function` 选功能：`upload`（默认，上面这种日志上报）、`ejson`（Mongo Data API，
+读一个 EJSON 请求、输出 EJSON 响应，等价 `POST /ejson`）或 `sql`（SQL Data API，读一条 SQL、输出 EJSON 结果，
+等价 `POST /sql`；见上面各节）。
 
 ## 作为库使用（api 角色）
 
@@ -151,4 +184,11 @@ resp, _ := eng.EJSON(ctx, &dao.EJSONRequest{
     Filter: bson.M{"#event_name": "login"}, Limit: 5,
 })
 // resp.Documents ...
+```
+
+以及 SQL Data API（SQL → MongoDB，同样复用引擎连接）：
+
+```go
+res, _ := eng.SQL(ctx, "SELECT * FROM event LIMIT 5")
+// res.Kind == "select"; res.Rows ...
 ```

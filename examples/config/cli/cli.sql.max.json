@@ -1,0 +1,45 @@
+{
+  "logging": { "level": "info", "format": "text" },
+  "dao": {
+    "mongo": {
+      "uri": "mongodb://localhost:27017/tango",
+      "connectTimeout": "10s",
+      "serverSelectionTimeout": "30s"
+    },
+    "store": { "maxElapsedTime": "10s" }
+  },
+  "parser": {
+    "filter": {
+      "include": ["#type == \"track\"", "#type == \"user_set\""],
+      "exclude": ["debug == true"]
+    }
+  },
+  "source": {
+    "tailer": {
+      "logPattern": ["/var/log/ta/.*\\.log"],
+      "tailMode": "hybrid",
+      "rescanInterval": "30s",
+      "pollInterval": "200ms",
+      "maxLineBytes": 10485760
+    }
+  },
+  "process": {
+    "mode": "batch",
+    "batchSize": 1000,
+    "pipeline": {
+      "batchSize": 1000,
+      "batchSizeMin": 0,
+      "batchSizeMax": 0,
+      "batchWorkers": 2,
+      "flushInterval": "1s",
+      "channelBuffer": 0,
+      "deadLetterCap": 128
+    }
+  },
+  "role": {
+    "mode": "cli",
+    "daemon": {},
+    "gateway": { "addr": ":8080" },
+    "cli": { "function": "sql" }
+  }
+}

@@ -9,12 +9,14 @@
 | 角色 | `role.mode` | 来源 | 职责 |
 |---|---|---|---|
 | **Daemon** | `daemon` | tailer（文件） | 常驻：文件追尾、解析、filter、identity、流水线批量写 MongoDB |
-| **Gateway** | `gateway` | httpbody（HTTP 请求体） | 常驻 HTTP：`/upload`（按 `process.mode` 选 single/batch/pipeline）+ 独立的 `/ejson`（Mongo Data API） |
-| **CLI** | `cli` | stdin（控制台） | 一次性：`role.cli.function=upload` 对齐 `/upload`；`=ejson` 对齐 `/ejson`（读一个 EJSON 请求→响应） |
-| **API** | （库，不可派发） | httpbody（调用方传入） | 作为 Go 库被业务代码 import：`api.New(...).Upload(lines)` / `.EJSON(req)` |
+| **Gateway** | `gateway` | httpbody（HTTP 请求体） | 常驻 HTTP：`/upload`（按 `process.mode` 选 single/batch/pipeline）+ 独立的 `/ejson`（Mongo Data API）+ `/sql`（SQL Data API） |
+| **CLI** | `cli` | stdin（控制台） | 一次性：`role.cli.function=upload` 对齐 `/upload`；`=ejson` 对齐 `/ejson`；`=sql` 对齐 `/sql` |
+| **API** | （库，不可派发） | httpbody（调用方传入） | 作为 Go 库被业务代码 import：`api.New(...).Upload(lines)` / `.EJSON(req)` / `.SQL(query)` |
 
-除上报外，三端还共享一个**通用 Mongo Data API**（`internal/dao/ejson`，由 `dao` 根包经 `dao.go` 中转）：
-gateway `POST /ejson`、cli `function=ejson`、库 `engine.EJSON(req)`，功能核心完全一致、只是入口形态不同
+除上报外，三端还共享两个 Data API：**Mongo Data API**（`internal/dao/ejson`）与 **SQL Data API**
+（`internal/dao/sql`，代码自 `aura-studio/mongosql` 拷贝），均由 `dao` 根包经 `dao.go` 中转：
+gateway `POST /ejson`+`/sql`、cli `function=ejson`/`sql`、库 `engine.EJSON(req)`/`engine.SQL(query)`，
+功能核心完全一致、只是入口形态不同
 （与上报的 `api.Engine` 复用模式一致）。见 §5.2。
 
 运行角色由配置键 `role.mode` 选定（不是子命令），`role.Get(mode)` 取对应 `Role` 对象执行。
@@ -95,11 +97,12 @@ daemon 是长驻的 pipeline 流水线。api 只作为库使用，不由 `role.m
     │   ├── tailer/  # 文件追尾来源 + tailer.Config / TailMode 常量（NewTailer；daemon 用）
     │   ├── stdin/   # 控制台 stdin 来源（NewReader；cli 用）
     │   └── taapi/   # 占位（未来 TA API 来源）
-    ├── dao/        # dao.go 整合 store + mongo + ejson 门面（Store 别名 / 写模型构造器 / Mongo Data API 重导出）
+    ├── dao/        # dao.go 整合 store + mongo + ejson + sql 门面（Store 别名 / 写模型构造器 / Mongo&SQL Data API 重导出）
     │   ├── config.go # dao.Config：聚合 mongo.Config + store.Config
     │   ├── store/    # MongoDB 持久化 + store.Config
     │   ├── mongo/    # 连接装配 + mongo.Config + MongoDBFromURI
-    │   └── ejson/    # 通用 Mongo Data API 共享核心：Request/Response/Execute + EJSON 编解码（经 dao.go 中转）
+    │   ├── ejson/    # 通用 Mongo Data API 共享核心：Request/Response/Execute + EJSON 编解码（经 dao.go 中转）
+    │   └── sql/      # SQL Data API 共享核心（拷贝自 mongosql）：vitess 解析 + translator + Driver.Exec（依赖 dao/mongo + vitess）
     ├── process/    # process.go 统一管理三种上传方式（唯一对外入口；Uploader 接口 + New）
     │   ├── core/    # 共享 Processor（parse→filter→identity→写模型；经 dao/parser 根包门面）+ stats（Counters/StatsCollector）
     │   ├── single/  # 逐行即时写 Uploader
@@ -108,8 +111,8 @@ daemon 是长驻的 pipeline 流水线。api 只作为库使用，不由 `role.m
     └── role/       # 运行角色：Role 接口 + Get(mode) 派发；role.Config 聚合 daemon/gateway
         ├── api/     # 可复用引擎库：api.Engine（New/Upload/Run/EnsureIndexes/Close）——非可派发角色
         ├── daemon/  # daemon.Role + daemon.Service（pipeline + tailer；含信号处理/启动日志）
-        ├── gateway/ # gateway.Role + HTTP Server：内嵌 api.Engine + /upload + /ejson；gateway.Config（role.gateway.*）
-        └── cli/     # cli.Role：内嵌 api.Engine + stdin 源；cli.Config（role.cli.function=upload|ejson）
+        ├── gateway/ # gateway.Role + HTTP Server：内嵌 api.Engine + /upload + /ejson + /sql；gateway.Config（role.gateway.*）
+        └── cli/     # cli.Role：内嵌 api.Engine + stdin 源；cli.Config（role.cli.function=upload|ejson|sql）
 ```
 
 依赖方向：
@@ -125,8 +128,9 @@ role/daemon      -> process + parser + dao + source + cfgtree + logging (daemon.
 process          -> process/(core/single/batch/pipeline) + source + dao + parser + cfgtree
 process/<子包>   -> dao + parser + source + (core)                  (经 dao/parser 根包门面，不碰 dao/store、parser/talog|filter)
 parser           -> talog + filter + cfgtree                        (根包整合，对外重导出 Record/categories/EnvelopeKeys)
-dao              -> store + mongo + ejson + cfgtree                  (根包整合，对外重导出 Store/写模型构造器 + Mongo Data API)
+dao              -> store + mongo + ejson + sql + cfgtree            (根包整合，对外重导出 Store/写模型构造器 + Mongo&SQL Data API)
 dao/ejson        -> dao/mongo（+ bson/mongo/options 驱动）           (dao 子包；用 MongoResource 取 client 与默认库)
+dao/sql          -> dao/mongo + vitess sqlparser（+ 驱动）           (dao 子包；拷贝自 mongosql，SQL→MongoDB)
 source           -> httpbody + stdin + tailer + cfgtree             (根包整合，对外暴露 Source + New{Lines,Reader,Tailer})
 cfgtree          -> mapstructure   (叶子载体，不依赖 viper)
 config           -> cfgtree + 各模块（仅用其 RegisterDefaults 注册键）；viper 只在 config
@@ -188,7 +192,7 @@ config           -> cfgtree + 各模块（仅用其 RegisterDefaults 注册键�
 
 | 文件 | 职责 |
 |---|---|
-| `dao/dao.go` | `Dao`：显式持有 `Mongo *mongo.MongoResource` + `Store *store.Store`；`New(res, cfg)` 装配 store；**store 门面**：`type Store = store.Store` 别名 + `UserWriteModel`/`EventWriteModel`/`EventWriteModelSkipExisting`/`DeadLetterModel` 重导出；**ejson 门面**：`type EJSONRequest/EJSONResponse = ejson.Request/Response` 别名 + `EJSONAction*` 常量 + `DecodeEJSONRequest` + `(*Dao).EJSON` 中转 |
+| `dao/dao.go` | `Dao`：显式持有 `Mongo *mongo.MongoResource` + `Store *store.Store`；`New(res, cfg)` 装配 store；**store 门面**：`type Store = store.Store` 别名 + `UserWriteModel`/`EventWriteModel`/`EventWriteModelSkipExisting`/`DeadLetterModel` 重导出；**ejson 门面**：`type EJSONRequest/EJSONResponse = ejson.Request/Response` 别名 + `EJSONAction*` 常量 + `DecodeEJSONRequest` + `(*Dao).EJSON` 中转；**sql 门面**：`type SQLResult = sql.Result` 别名 + `(*Dao).SQL`（惰性 `sync.Once` 建 `*sql.Driver`）中转 |
 | `dao/config.go` | `dao.Config`：聚合 `mongo.Config` + `store.Config` |
 | `dao/store/store.go` | `Store` + `store.Config`(MaxElapsedTime) + `WriteStats` + `BulkWrite(Ordered)` + 集合访问器 |
 | `dao/store/identity.go` | `IdentityResolver`：`#account_id`/`#distinct_id` → `#user_id` |
@@ -203,6 +207,15 @@ config           -> cfgtree + 各模块（仅用其 RegisterDefaults 注册键�
 |---|---|
 | `dao/ejson/ejson.go` | `Request`/`Response` 类型 + action 常量 + `Execute(ctx, *mongo.MongoResource, *Request)`：从 resource 取 client 与默认库、解析 db/collection、按 action 分发 findOne/find/insertOne/updateOne/deleteOne/aggregate，选项（sort/projection/limit/skip/upsert）原样转发；无白名单/上限 |
 | `dao/ejson/codec.go` | `DecodeRequest`（`bson.UnmarshalExtJSON`，relaxed，兼容 JSON）+ `(*Response).MarshalEJSON`（`bson.MarshalExtJSON` relaxed） |
+
+#### SQL Data API `internal/dao/sql`（dao 子包，拷贝自 mongosql，经 dao.go 中转）
+
+| 文件 | 职责 |
+|---|---|
+| `dao/sql/sql.go` | `Driver`（持有 client/db/translator/SchemaStore）+ `New(*mongo.MongoResource)`（注入连接，不自拨号/不 Close）+ `Exec(ctx, sql)` 按语句类型分发 `execFind/Aggregate/Insert/Update/Delete/InsertSelect`；`Result` 类型 |
+| `dao/sql/codec.go` | `(*Result).MarshalEJSON`（SELECT 行含 BSON 类型，relaxed EJSON 编码） |
+| `dao/sql/schema.go` | `SchemaStore`（表 schema 缓存）+ `ApplyDefaults`/`ApplyOnUpdate`/`NextAutoIncrement`（DDL 未引入时 schema 为空，自动跳过） |
+| `dao/sql/translator/**` | vitess 解析 + SQL→`stmt.Statement` 翻译（translator/stmt/plan/internal{expr,sel,write}），原样拷贝自 mongosql |
 
 #### 处理层 `internal/process`（`process.go` 唯一对外）
 
@@ -228,16 +241,16 @@ config           -> cfgtree + 各模块（仅用其 RegisterDefaults 注册键�
 |---|---|
 | `role/role.go` | `Role` 接口（`Run(ctx, cfgtree.Tree) error`）+ `Get(mode) (Role,error)` 派发 + 角色名常量（`API`/`CLI`/`Daemon`/`Gateway`） |
 | `role/config.go` | `role.Config`：聚合 `daemon`/`gateway`/`cli` + `ApplyDefaults`/`Validate`/`RegisterDefaults` + `FromTree` |
-| `role/api/api.go` | 可复用引擎库 `api.Engine`：`New(ctx, *dao.Config, *process.Config, *parser.Config)`/`Upload(lines)`（经 `source.NewLines`）/`Run(src)`/`EJSON(req)`（Mongo Data API，经 `dao.EJSON` 中转）/`EnsureIndexes`/`Close` + `Result`（非可派发角色） |
+| `role/api/api.go` | 可复用引擎库 `api.Engine`：`New(ctx, *dao.Config, *process.Config, *parser.Config)`/`Upload(lines)`（经 `source.NewLines`）/`Run(src)`/`EJSON(req)`（Mongo Data API，经 `dao.EJSON`）/`SQL(query)`（SQL Data API，经 `dao.SQL`）/`EnsureIndexes`/`Close` + `Result`（非可派发角色） |
 | `role/daemon/role.go` | `daemon.Role.Run`：从 Tree 取 dao/parser/source/process → 信号处理 + 启动日志 + `New` → `Run`；含 `maskURI` |
 | `role/daemon/report.go` | `daemon.Service`：持有 `*source.Config`，经 `source.NewTailer(srcCfg.Tailer)` 建源 → 强制 pipeline `process.New(cfg).Run` → MongoDB；周期/最终统计日志 |
 | `role/daemon/config.go` | `daemon.Config`（`role.daemon.*`，暂空，schema 对称用） |
 | `role/gateway/role.go` | `gateway.Role.Run`：从 Tree 取 dao/process/parser + `role.gateway` → `New` → `EnsureIndexes` → `Run(addr)` |
-| `role/gateway/server.go` | gateway `Server`：内嵌 `*api.Engine` + HTTP 面；`New(...)`/`Upload`/`EJSON`/`EnsureIndexes`/`Close`/`Handler`/`Run`；路由 `/healthz` + `/upload`（按 `process.mode` 选策略）+ `/ejson`（Mongo Data API，EJSON） |
+| `role/gateway/server.go` | gateway `Server`：内嵌 `*api.Engine` + HTTP 面；`New(...)`/`Upload`/`EJSON`/`SQL`/`EnsureIndexes`/`Close`/`Handler`/`Run`；路由 `/healthz` + `/upload`（按 `process.mode` 选策略）+ `/ejson`（Mongo Data API）+ `/sql`（SQL Data API）；`writeEJSON` 经 `ejsonMarshaler` 接口同时服务 EJSON/SQL 响应 |
 | `role/gateway/config.go` | `gateway.Config`（仅 `role.gateway.addr`）+ `ApplyDefaults`/`Validate`/`RegisterDefaults` |
-| `role/cli/role.go` | `cli.Role.Run`：取 dao + `role.cli`；`function=upload` 走 stdin 上报（统计 JSON → stdout），`function=ejson` 走 `RunEJSON` |
-| `role/cli/cli.go` | `cli.Run(...)`：内嵌 `api.Engine` + `source.NewReader(in)` 一次性上报；`cli.RunEJSON(ctx, *dao.Config, in, out)`：stdin EJSON 请求 → `engine.EJSON` → out EJSON 响应 |
-| `role/cli/config.go` | `cli.Config`（`role.cli.function`=upload\|ejson）+ `ApplyDefaults`/`Validate`/`RegisterDefaults` |
+| `role/cli/role.go` | `cli.Role.Run`：取 dao + `role.cli`；`function=upload` 走 stdin 上报（统计 JSON → stdout），`=ejson` 走 `RunEJSON`，`=sql` 走 `RunSQL` |
+| `role/cli/cli.go` | `cli.Run(...)`：内嵌 `api.Engine` + `source.NewReader(in)` 一次性上报；`cli.RunEJSON(...)`：stdin EJSON 请求 → `engine.EJSON` → out EJSON；`cli.RunSQL(...)`：stdin SQL → `engine.SQL` → out EJSON |
+| `role/cli/config.go` | `cli.Config`（`role.cli.function`=upload\|ejson\|sql）+ `ApplyDefaults`/`Validate`/`RegisterDefaults` |
 
 ## 4. Daemon Service（daemon 模式）
 
@@ -255,6 +268,7 @@ Tailer -> Dispatcher(按用户亲和性路由) -> Worker[i](Parse -> Filter -> I
 GET  /healthz
 POST /upload   # body: {line?, lines?[]}；上传策略来自 process.mode
 POST /ejson    # body: EJSON {action, collection, ...}；通用 Mongo Data API（见 §5.2）
+POST /sql      # body: JSON {"sql":"..."}；SQL Data API（见 §5.3）
 ```
 
 `/upload` 把请求体的日志数组经 `source.NewLines` 包成 Source，按 `process.mode` 选上传策略（single/batch/pipeline）
@@ -293,6 +307,25 @@ action：`findOne`/`find`/`insertOne`/`updateOne`/`deleteOne`/`aggregate`；请�
 operator/stage 黑白名单、不设 limit/返回条数/body/超时上限，请求原样转发给驱动。任意受控/鉴权由调用方负责。
 注意 DocumentDB 不支持 aggregation-pipeline 形式的 `update`；此类请求会把引擎错误透传给调用方（普通 `$set` 文档更新正常）。
 
+## 5.3 SQL Data API（`/sql` · cli `sql` · `api.SQL`）
+
+`internal/dao/sql` 用 SQL 读写 MongoDB，是 dao 子包，由 `dao` 根包经 `dao.go` 中转（`(*Dao).SQL`，
+首次调用惰性 `sync.Once` 构造 `*sql.Driver`）。代码**拷贝自 `github.com/aura-studio/mongosql`**
+（`driver/` + `translator/`，跳过其 MySQL 协议层），并适配为 `New(*mongo.MongoResource)` 注入连接、
+新增 `Result.MarshalEJSON`。三端入口与 ejson 同形：
+
+- **api（库）**：`(*api.Engine).SQL(ctx, query)` → `c.dao.SQL(...)`。
+- **gateway（HTTP）**：`POST /sql`，`handleSQL` 解 JSON `{"sql":...}` → `engine.SQL` → relaxed EJSON 响应。
+- **cli（控制台）**：`role.cli.function=sql` 时 `cli.RunSQL` 从 stdin 读一条 SQL → `engine.SQL` → stdout 写 EJSON。
+
+SQL 经 **vitess sqlparser**（MySQL 方言）解析，translator 翻译为 `stmt.Statement`，再由 `Driver.Exec`
+执行：`SELECT`→find/aggregate/distinct、`INSERT`/`UPDATE`/`DELETE`→对应写操作、`INSERT ... SELECT`→聚合后写入。
+**表名即集合名**，库取自连接 URI；响应 `Result` 经 `MarshalEJSON` 输出 relaxed EJSON（SELECT 行含 BSON 类型）。
+这是 tango 唯一引入 `vitess.io/vitess` 的地方（`go get` 时自动把 `go` 指令上调到 1.26.2）。
+
+限制：未拷贝 DDL（CREATE/ALTER TABLE 在 mongosql 的 MySQL 层），故 schema 表为空时 AUTO_INCREMENT/DEFAULT/
+ON UPDATE 自动跳过；含表达式的 `UPDATE`（如 `SET n = n + 1`）翻译为 pipeline 形式，DocumentDB 不支持（常量 `SET n = 10` 正常）。
+
 ## 6. 上报 filter
 
 上报 filter 作用于所有上报路径（daemon、gateway/cli/api upload），维度为
@@ -317,6 +350,8 @@ operator/stage 黑白名单、不设 limit/返回条数/body/超时上限，请�
 | `role/{gateway,cli}` | **role/api** | `api.New(ctx, *dao.Config, *process.Config, *parser.Config) → *Engine`；`(*Engine).Upload`/`Run`/`Data`/`EnsureIndexes`/`Close`；`api.Result` | 内嵌同一引擎（上报 + Mongo Data API） |
 | `role/api` | **dao** | `(*Dao).EJSON(ctx, *EJSONRequest) → *EJSONResponse`；`dao.EJSONRequest`/`EJSONResponse` | Mongo Data API 中转（实现在 dao/ejson，经 dao 门面；dao/ejson 内部依赖 dao/mongo） |
 | `role/{gateway,cli}` | **dao** | `dao.DecodeEJSONRequest(body) → *EJSONRequest`；`(*EJSONResponse).MarshalEJSON()` | HTTP / stdin 的 EJSON 请求解析与响应编码 |
+| `role/api` | **dao** | `(*Dao).SQL(ctx, query) → *SQLResult`；`dao.SQLResult` | SQL Data API 中转（实现在 dao/sql，经 dao 门面；dao/sql 内部依赖 dao/mongo + vitess） |
+| `role/{gateway,cli}` | **dao** | `(*SQLResult).MarshalEJSON()` | HTTP / stdin 的 SQL 结果 EJSON 编码 |
 | `role/daemon` | **dao/parser/source/process** | `dao.New`；`(*parser.Config).Build`；`source.NewTailer(srcCfg.Tailer)`；`process.New(pipelineCfg, …).Run(ctx, tailerSrc)` | 编排长驻流水线 |
 | `client`（公共 SDK） | **role/api** | `api.New(o.ctx, &o.dao, &o.proc, &o.parser)`；`(*Engine).Upload`/`EnsureIndexes`/`Close` | redis-go 风格门面，复用真实 config 结构体 |
 | `config` | **dao/parser/source/process/role/logging** | 各 `(*Config).RegisterDefaults(set, prefix)`；各模块 `FromTree(t)` | 注册全键 + 按子树解码 |

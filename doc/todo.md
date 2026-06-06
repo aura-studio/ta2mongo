@@ -43,16 +43,16 @@
 
 ### 4. 测试（连真实 DocumentDB，仿 ejson）
 
-- [ ] `internal/dao/sql/sql_test.go`：单元（基本 SELECT/INSERT 解析不报错）+ 集成（insert→select→update→delete 往返，gated `TANGO_TEST_MONGO_URI`）。
-- [ ] `tests/sql_test.go`：gateway `POST /sql` + cli `RunSQL` 端到端。
-- [ ] 注意 DocumentDB 限制：含表达式的 UPDATE 走 pipeline 形式，DocumentDB 不支持；测试用简单 `$set`/常量更新。
+- [x] ~~`internal/dao/sql/sql_test.go`：单元（New(nil) 报错）+ 集成（insert→select→update→delete 往返，gated `TANGO_TEST_MONGO_URI`，连真实 DocumentDB 通过）。~~
+- [x] ~~`tests/sql_test.go`：gateway `POST /sql` + cli `RunSQL` 端到端（连真实 DocumentDB 通过）。~~
+- [x] ~~注意 DocumentDB 限制：含表达式的 UPDATE 走 pipeline 形式，DocumentDB 不支持；测试用常量 `SET n = 10`（plain $set）验证通过。~~
 
 ### 5. 示例与文档（仿 ejson）
 
-- [ ] `examples/config/cli/cli.sql.{min,max}.{yaml,json}`（4 份，`function=sql`）+ `examples/config/README.md` 更新。
-- [ ] `doc/usage.md`：`POST /sql` 与 cli sql 示例、库用法。
-- [ ] `doc/config.md`：`role.cli.function` 增加 `sql`。
-- [ ] `doc/arch.md`：新增 §5.3 SQL（dao/sql 子包、依赖 dao/mongo + vitess、三端入口）、目录树、§3.1 文件清单、依赖表。
+- [x] ~~`examples/config/cli/cli.sql.{min,max}.{yaml,json}`（4 份，`function=sql`）+ `queries.sample.sql` + `examples/config/README.md` 更新。~~
+- [x] ~~`doc/usage.md`：`POST /sql` 与 cli sql 示例、库用法（并修正遗留的 `--role.cli.function data`→`ejson`）。~~
+- [x] ~~`doc/config.md`：`role.cli.function` 增加 `sql`。~~
+- [x] ~~`doc/arch.md`：新增 §5.3 SQL（dao/sql 子包、依赖 dao/mongo + vitess、三端入口）、目录树、§3.1 文件清单、依赖表。~~
 
 ### 6. 收尾验证（EC2 + 真实 DocumentDB）
 
