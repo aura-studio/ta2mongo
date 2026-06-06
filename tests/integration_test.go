@@ -154,8 +154,8 @@ func TestRolesModes(t *testing.T) {
 						t.Fatalf("api Upload: %v", err)
 					}
 				case "cli":
-					if _, err := clirole.Run(ctx, daoCfg, procCfg, nil, strings.NewReader(strings.Join(lines, "\n"))); err != nil {
-						t.Fatalf("cli Run: %v", err)
+					if _, err := clirole.RunUpload(ctx, daoCfg, procCfg, nil, strings.NewReader(strings.Join(lines, "\n"))); err != nil {
+						t.Fatalf("cli RunUpload: %v", err)
 					}
 				case "gateway":
 					srv, err := gateway.New(ctx, daoCfg, procCfg, nil, gateway.Config{})
