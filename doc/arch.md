@@ -249,7 +249,7 @@ config           -> cfgtree + 各模块（仅用其 RegisterDefaults 注册键�
 | `role/gateway/server.go` | gateway `Server`：内嵌 `*api.Engine` + HTTP 面；`New(...)`/`Upload`/`EJSON`/`SQL`/`EnsureIndexes`/`Close`/`Handler`/`Run`；路由 `/healthz` + `/upload`（按 `process.mode` 选策略）+ `/ejson`（Mongo Data API）+ `/sql`（SQL Data API）；`writeEJSON` 经 `ejsonMarshaler` 接口同时服务 EJSON/SQL 响应 |
 | `role/gateway/config.go` | `gateway.Config`（仅 `role.gateway.addr`）+ `ApplyDefaults`/`Validate`/`RegisterDefaults` |
 | `role/cli/role.go` | `cli.Role.Run`：取 dao + `role.cli`；`function=upload` 走 stdin 上报（统计 JSON → stdout），`=ejson` 走 `RunEJSON`，`=sql` 走 `RunSQL` |
-| `role/cli/cli.go` | `cli.Run(...)`：内嵌 `api.Engine` + `source.NewReader(in)` 一次性上报；`cli.RunEJSON(...)`：stdin EJSON 请求 → `engine.EJSON` → out EJSON；`cli.RunSQL(...)`：stdin SQL → `engine.SQL` → out EJSON |
+| `role/cli/cli.go` | `cli.RunUpload(...)`：内嵌 `api.Engine` + `source.NewReader(in)` 一次性上报；`cli.RunEJSON(...)`：stdin EJSON 请求 → `engine.EJSON` → out EJSON；`cli.RunSQL(...)`：stdin SQL → `engine.SQL` → out EJSON |
 | `role/cli/config.go` | `cli.Config`（`role.cli.function`=upload\|ejson\|sql）+ `ApplyDefaults`/`Validate`/`RegisterDefaults` |
 
 ## 4. Daemon Service（daemon 模式）

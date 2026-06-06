@@ -53,7 +53,7 @@ func (Role) Run(ctx context.Context, cfg cfgtree.Tree) error {
 		return err
 	}
 
-	res, err := Run(ctx, daoCfg, procCfg, parserCfg, os.Stdin)
+	res, err := RunUpload(ctx, daoCfg, procCfg, parserCfg, os.Stdin)
 	if err != nil {
 		return err
 	}

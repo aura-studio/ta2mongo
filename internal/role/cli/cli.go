@@ -15,10 +15,11 @@ import (
 	"github.com/aura-studio/tango/internal/source"
 )
 
-// Run reads log lines from in (the console's stdin) and ingests them with
+// RunUpload reads log lines from in (the console's stdin) and ingests them with
 // procCfg.Mode, returning per-run statistics. It builds an api engine, ensures
-// indexes, runs the stdin source to completion, and closes the engine.
-func Run(ctx context.Context, daoCfg *dao.Config, procCfg *process.Config, parserCfg *parser.Config, in io.Reader) (api.Result, error) {
+// indexes, runs the stdin source to completion, and closes the engine. It backs
+// the cli role's default function=upload.
+func RunUpload(ctx context.Context, daoCfg *dao.Config, procCfg *process.Config, parserCfg *parser.Config, in io.Reader) (api.Result, error) {
 	eng, err := api.New(ctx, daoCfg, procCfg, parserCfg)
 	if err != nil {
 		return api.Result{}, err

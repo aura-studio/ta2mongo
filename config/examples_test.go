@@ -3,12 +3,15 @@ package config
 import (
 	"path/filepath"
 	"testing"
+
+	"github.com/aura-studio/tango/internal/role"
+	"github.com/aura-studio/tango/internal/role/cli"
 )
 
 // TestExampleConfigsLoad ensures every shipped example config (yaml + json,
-// daemon + gateway, max + min) loads and decodes cleanly: Load builds the tree
-// and every module's FromTree slices + validates its own branch, so the examples
-// never drift from the schema.
+// daemon + gateway + cli, max + min) loads and decodes cleanly: Load builds the
+// tree and every module's FromTree slices + validates its own branch, so the
+// examples never drift from the schema.
 func TestExampleConfigsLoad(t *testing.T) {
 	matches, err := filepath.Glob(filepath.Join("..", "examples", "config", "*", "*.*"))
 	if err != nil {
@@ -42,9 +45,11 @@ func TestExampleConfigsLoad(t *testing.T) {
 	}
 }
 
-// TestMaxConfigsAreComplete checks each *.max.* example populates all six schema
-// sections (with representative leaf fields), so "max" stays a full reference of
-// the unified schema.
+// TestMaxConfigsAreComplete checks each *.max.* example populates exactly the
+// schema sections its role (and, for cli, its function) actually uses — "max" is
+// a full reference of the *used* paths, with unused sections intentionally
+// omitted. Every role uses logging + dao.mongo; the rest is role/function
+// specific.
 func TestMaxConfigsAreComplete(t *testing.T) {
 	maxes, _ := filepath.Glob(filepath.Join("..", "examples", "config", "*", "*.max.*"))
 	if len(maxes) == 0 {
@@ -61,27 +66,53 @@ func TestMaxConfigsAreComplete(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Load: %v", err)
 			}
+
+			// Universal: every role initializes logging and connects to MongoDB.
 			if logCfg(t, tree).Level == "" {
 				t.Error("logging.level empty")
 			}
 			if daoCfg(t, tree).Mongo.URI == "" {
 				t.Error("dao.mongo.uri empty")
 			}
-			if len(parserCfg(t, tree).Filter.Include) == 0 {
-				t.Error("parser.filter.include empty")
+
+			// requireProcess / requireParser are the upload-pipeline sections.
+			requireParser := func() {
+				if len(parserCfg(t, tree).Filter.Include) == 0 {
+					t.Error("parser.filter.include empty")
+				}
 			}
-			if len(srcCfg(t, tree).Tailer.LogPattern) == 0 {
-				t.Error("source.tailer.logPattern empty")
+			requireProcess := func() {
+				if procCfg(t, tree).Pipeline.BatchWorkers == 0 {
+					t.Error("process.pipeline.batchWorkers unset")
+				}
 			}
-			if procCfg(t, tree).Pipeline.BatchWorkers == 0 {
-				t.Error("process.pipeline.batchWorkers unset")
-			}
+
 			rc := roleCfg(t, tree)
-			if rc.Daemon == nil {
-				t.Error("role.daemon missing")
-			}
-			if rc.Gateway.Addr == "" {
-				t.Error("role.gateway.addr empty")
+			switch rc.Mode {
+			case role.Daemon:
+				requireParser()
+				requireProcess()
+				if len(srcCfg(t, tree).Tailer.LogPattern) == 0 {
+					t.Error("source.tailer.logPattern empty")
+				}
+			case role.Gateway:
+				requireParser()
+				requireProcess()
+				if rc.Gateway == nil || rc.Gateway.Addr == "" {
+					t.Error("role.gateway.addr empty")
+				}
+			case role.CLI:
+				if rc.Cli == nil || rc.Cli.Function == "" {
+					t.Error("role.cli.function empty")
+				}
+				// Only the upload function uses the parser + process pipeline; the
+				// ejson / sql functions use neither (they go straight to MongoDB).
+				if rc.Cli != nil && rc.Cli.Function == cli.FunctionUpload {
+					requireParser()
+					requireProcess()
+				}
+			default:
+				t.Errorf("unknown role.mode %q", rc.Mode)
 			}
 		})
 	}
