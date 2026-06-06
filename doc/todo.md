@@ -56,8 +56,8 @@
 
 ### 6. 收尾验证（EC2 + 真实 DocumentDB）
 
-- [ ] 干净检出：`gofmt -l`、`go vet ./...`、全量 `go test ./... -count=1`（带 `TANGO_TEST_MONGO_URI`）全绿。
-- [ ] 手测：`curl -X POST :8080/sql -d '{"sql":"SELECT ..."}'`；`echo 'SELECT ...' | tango --config cli.sql.min.yaml`。
+- [x] ~~干净检出：`gofmt -l`、`go vet ./...`、全量 `go test ./... -count=1`（带 `TANGO_TEST_MONGO_URI`）全绿（EC2 + 真实 DocumentDB）。~~
+- [x] ~~手测：`curl -X POST :18099/sql -d '{"sql":"SELECT ..."}'` 与 `echo 'INSERT/SELECT/DELETE ...' | tango --config cli.sql.{min.yaml,max.json}` 均通过（真实 DocumentDB）。~~
 
 ## Lambda / DocumentDB 部署方案
 
