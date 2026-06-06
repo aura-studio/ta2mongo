@@ -124,7 +124,8 @@ gateway 同时暴露独立的 Mongo Data API 路径 `POST /ejson`（与 `/upload
 
 完整样例：[daemon](../examples/config/daemon/daemon.max.yaml)、
 [gateway](../examples/config/gateway/gateway.max.yaml)、
-[cli ejson](../examples/config/cli/cli.ejson.yaml)。
+[cli upload](../examples/config/cli/cli.upload.max.yaml)、
+[cli ejson](../examples/config/cli/cli.ejson.max.yaml)。
 
 ---
 

@@ -7,13 +7,16 @@ tango 是**单一二进制**（用法见 [../../doc/usage.md](../../doc/usage.md
 `role.gateway.*`。每个角色只取自己需要的段。最外层 `config` 包只负责加载与覆盖，不定义具体字段。
 
 每个角色目录提供 yaml 与 json 各两份：**max**（全量，逐字段标注 required/optional 与默认值）
-与 **min**（最小，仅 required 字段），外加 `start.sh`。
+与 **min**（最小，仅 required 字段）。daemon / gateway 另含 `start.sh`。
+cli 角色有两种功能（`role.cli.function`：`upload` / `ejson`），各一套 max/min × yaml/json，
+共 8 份（`cli.upload.*` / `cli.ejson.*`）；cli 以管道喂 stdin 运行，无 `start.sh`。
 
 | 角色 | role.mode | 目录 | 主要配置段 |
 |------|--------|------|------|
 | daemon | `daemon`（默认） | [daemon/](daemon/) | logging · dao · parser · source · process |
 | gateway    | `gateway`    | [gateway/](gateway/)       | logging · dao · parser · process · role.gateway |
-| cli (ejson) | `cli`       | [cli/](cli/)               | logging · dao · role.cli（`function=ejson` 的 Mongo Data API 样例） |
+| cli (upload) | `cli`      | [cli/](cli/)               | logging · dao · parser · process · role.cli（`function=upload`，stdin 日志上报） |
+| cli (ejson) | `cli`       | [cli/](cli/)               | logging · dao · role.cli（`function=ejson`，Mongo Data API） |
 
 > 留空 `--config` 时二进制读取同级目录的 `tango.{yaml,yml,json}`；本目录下的样例需用 `--config` 显式指定。
 
@@ -28,6 +31,10 @@ examples/config/gateway/start.sh --role.gateway.addr :8080
 tango --config examples/config/daemon/daemon.max.yaml
 tango --config examples/config/gateway/gateway.max.yaml --role.gateway.addr :8080
 
+# cli 以管道喂 stdin（function=upload 读日志数组上报；function=ejson 读一个 EJSON Mongo Data API 请求）：
+cat events.ndjson | tango --config examples/config/cli/cli.upload.min.yaml
+echo '{"action":"find","collection":"event","filter":{},"limit":5}' | tango --config examples/config/cli/cli.ejson.min.yaml
+
 # flag 名即配置键（viper 原生层级），角色也可用 flag 覆盖：
 tango --role.mode daemon --dao.mongo.uri mongodb://host/db
 # 环境变量同理用原始层级（role.mode → TANGO_ROLE_MODE，dao.mongo.uri → TANGO_DAO_MONGO_URI）：
@@ -40,4 +47,5 @@ TANGO_DAO_MONGO_URI=mongodb://user:pass@host/db examples/config/daemon/start.sh
 |------|------|
 | daemon | `dao.mongo.uri`、`source.tailer.logPattern` |
 | gateway    | `dao.mongo.uri` |
+| cli (upload) | `dao.mongo.uri`（`role.cli.function` 默认即 upload） |
 | cli (ejson) | `dao.mongo.uri`、`role.cli.function: ejson` |

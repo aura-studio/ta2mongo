@@ -1,5 +1,5 @@
 // Sample Mongo Data API request bodies (Extended JSON v2).
-// One request per invocation — pipe a single object to `tango --config cli.ejson.yaml`,
+// One request per invocation — pipe a single object to `tango --config cli.ejson.min.yaml`,
 // or POST it to the gateway's /ejson endpoint:
 //   curl -X POST localhost:8080/ejson -H 'Content-Type: application/ejson' -d @<(...)
 //

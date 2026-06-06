@@ -1,0 +1,8 @@
+# cli.upload.min.yaml — `cat events.ndjson | tango --config cli.upload.min.yaml` 最精简配置：只含 required 字段。
+# 其余字段全部走默认值（详见同目录 cli.upload.max.yaml 的逐字段说明）。
+# 运行角色由 role.mode 选择；cli 必须显式指定（默认值是 daemon）。role.cli.function 默认即 upload。
+role:
+  mode: cli                                # [required] daemon / gateway / cli
+dao:
+  mongo:
+    uri: mongodb://localhost:27017/tango   # [required]

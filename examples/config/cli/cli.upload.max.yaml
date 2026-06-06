@@ -1,0 +1,61 @@
+# cli.upload.max.yaml — 全量配置参考（统一 schema 的全部 6 个段，逐字段说明）。
+#
+# 启动：cat events.ndjson | tango --config cli.upload.max.yaml   （角色由 role.mode 决定）
+#
+# cli + role.cli.function=upload = 一次性从 stdin 读 newline 分隔的 TA 日志，按
+# process.mode 选 single/batch/pipeline 上报，统计 JSON 写 stdout（gateway /upload 的控制台等价）。
+# 它读取 logging/dao/parser/process 共享段 + role.cli 专属段，忽略 source（不追尾文件）。
+#
+# tango 配置是统一 schema：键路径 = internal/ 下的包路径，同一份 max 配置对每个角色都完整可用。
+# 6 个段：logging · dao · parser · source · process · role。
+# 标注：[required] 必填；[required:daemon] 仅 daemon 必填；其余 [optional]（括号内默认值）。
+# 环境变量覆盖：键 . → _ 加 TANGO_ 前缀（dao.mongo.uri → TANGO_DAO_MONGO_URI）。
+
+logging:                          # internal/logging
+  level: info                     # [optional]（默认 info）debug / info / warn / error
+  format: text                    # [optional]（默认 text）text / json
+
+dao:                              # internal/dao
+  mongo:                          # internal/dao/mongo
+    uri: mongodb://localhost:27017/tango  # [required] MongoDB 连接串；库名取自 URI 路径
+    connectTimeout: 10s           # [optional]（默认 10s）初次连接握手超时
+    serverSelectionTimeout: 30s   # [optional]（默认 30s）选择可用节点超时
+  store:                          # internal/dao/store
+    maxElapsedTime: 10s           # [optional]（默认 10s）单次 bulk-write 退避重试总时长上限
+
+parser:                           # internal/parser（上报 filter，作用于每行）
+  filter:                         # internal/parser/filter
+    include:                      # [optional]（默认 [] = 全放行）OR 语义命中其一即保留
+      - '#type == "track"'
+      - '#type == "user_set"'
+    exclude:                      # [optional]（默认 []）命中其一即丢弃（在 include 之后）
+      - 'debug == true'
+
+source:                           # internal/source
+  tailer:                         # internal/source/tailer（daemon 的文件来源；cli 忽略）
+    logPattern:                   # [required:daemon] 至少一条 glob/正则，匹配要追尾的日志文件
+      - '/var/log/ta/.*\.log'
+    tailMode: hybrid              # [optional]（默认 hybrid）hybrid / poll / event
+    rescanInterval: 30s           # [optional]（默认 30s）重新扫描新文件的间隔
+    pollInterval: 200ms           # [optional]（默认 200ms）poll/hybrid 轮询节奏
+    maxLineBytes: 10485760        # [optional]（默认 10485760 = 10MB）单行最大字节
+
+process:                          # internal/process（上传策略处理参数）
+  mode: batch                     # [optional]（默认 batch）single / batch / pipeline
+  batchSize: 1000                 # [optional]（默认 1000）single/batch 模式 bulk-write 批大小
+  pipeline:                       # internal/process/pipeline
+    batchSize: 1000               # [optional]（默认 1000）单次 bulk-write 目标条数
+    batchSizeMin: 0               # [optional]（默认 0 = 自动 batchSize/4）自适应下限
+    batchSizeMax: 0               # [optional]（默认 0 = 自动 batchSize*2）自适应上限
+    batchWorkers: 2               # [optional]（默认 2）并行写 worker 数
+    flushInterval: 1s             # [optional]（默认 1s）未满批次刷新间隔
+    channelBuffer: 0              # [optional]（默认 0 = 自动 batchSize*2）每 worker 通道缓冲
+    deadLetterCap: 128            # [optional]（默认 128）每 worker 死信批容量
+
+role:                             # internal/role
+  mode: cli                       # [optional]（默认 daemon）daemon / gateway / cli —— 选择运行角色，替代旧的子命令
+  daemon: {}                      # internal/role/daemon —— daemon 角色专属配置（暂无字段）
+  gateway:                        # internal/role/gateway —— gateway 角色专属配置（cli 忽略）
+    addr: ":8080"                 # [optional]（默认 :8080）HTTP 监听地址
+  cli:                            # internal/role/cli —— cli 角色专属配置
+    function: upload              # [optional]（默认 upload）upload（stdin 日志上报）/ ejson（Mongo Data API）

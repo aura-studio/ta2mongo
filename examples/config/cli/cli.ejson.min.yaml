@@ -1,0 +1,11 @@
+# cli.ejson.min.yaml — `echo '{...}' | tango --config cli.ejson.min.yaml` 最精简配置：只含 required 字段。
+# 其余字段全部走默认值（详见同目录 cli.ejson.max.yaml 的逐字段说明）。
+# 运行角色由 role.mode 选择；cli 必须显式指定。role.cli.function 默认是 upload，跑 ejson 必须显式设为 ejson。
+# 完全放开的 Mongo Data API；请求示例见 requests.sample.ejson。
+role:
+  mode: cli                                # [required] daemon / gateway / cli
+  cli:
+    function: ejson                        # [required] 切到 Mongo Data API（不写则默认 upload）
+dao:
+  mongo:
+    uri: mongodb://localhost:27017/tango   # [required]；ejson 请求缺省的库取自该 URI 路径
