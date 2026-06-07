@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"github.com/aura-studio/tango/internal/dao/ejson"
 	daomongo "github.com/aura-studio/tango/internal/dao/mongo"
@@ -152,4 +153,24 @@ func (d *Dao) SQL(ctx context.Context, query string) (*SQLResult, error) {
 		return nil, d.sqlErr
 	}
 	return d.sqlEng.Exec(ctx, query)
+}
+
+// ---------------------------------------------------------------------------
+// watch facade
+//
+// The dao package fronts the MongoDB change-stream API on a collection so the
+// cfgsync domain can subscribe to config-document changes through dao alone,
+// never reaching for the driver collection directly. As with the write-model
+// constructors, the driver type (*mongo.ChangeStream) is intentionally left
+// exposed — it is a MongoDB type and not ours to hide behind the façade.
+// ---------------------------------------------------------------------------
+
+// Watch opens a change stream on a collection in this Dao's default database,
+// forwarding the pipeline and options to the driver as-is. The caller owns the
+// returned stream and must Close it. Change streams require a replica set (plain
+// MongoDB) or change streams enabled (DocumentDB); a topology that does not
+// support them (e.g. standalone mongod) surfaces the driver's error here.
+func (d *Dao) Watch(ctx context.Context, collection string, pipeline mongo.Pipeline, opts ...options.Lister[options.ChangeStreamOptions]) (*mongo.ChangeStream, error) {
+	coll := d.Mongo.DB.Collection(collection)
+	return coll.Watch(ctx, pipeline, opts...)
 }

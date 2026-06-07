@@ -13,6 +13,7 @@
 package config
 
 import (
+	"github.com/aura-studio/tango/internal/cfgsync"
 	"github.com/aura-studio/tango/internal/dao"
 	"github.com/aura-studio/tango/internal/logging"
 	"github.com/aura-studio/tango/internal/parser"
@@ -32,5 +33,6 @@ func registerAll(set func(key string, value any)) {
 	new(parser.Config).RegisterDefaults(set, "parser")
 	new(source.Config).RegisterDefaults(set, "source")
 	new(process.Config).RegisterDefaults(set, "process")
+	new(cfgsync.Config).RegisterDefaults(set, "cfgsync")
 	new(role.Config).RegisterDefaults(set, "role")
 }

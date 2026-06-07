@@ -31,6 +31,22 @@ func New(flt *filter.Filter) *Parser {
 // Store method (e.g. when a remote config update arrives).
 func (p *Parser) Filter() *filter.Holder { return p.filter }
 
+// SwapFilter compiles a new reporting filter from the given include/exclude
+// expressions and, only if it compiles cleanly, atomically swaps it onto the
+// holder. A compile failure returns the error and leaves the live filter
+// untouched (last-good), so a bad runtime config can never replace a working
+// filter — this is the parser-side half of the cfgsync validate-before-swap
+// guarantee. It is the root-package façade cfgsync (and the roles that embed it)
+// use so they never import parser/filter directly.
+func (p *Parser) SwapFilter(include, exclude []string) error {
+	flt, err := (&filter.Config{Include: include, Exclude: exclude}).Build()
+	if err != nil {
+		return err
+	}
+	p.filter.Store(flt)
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // talog facade
 //
