@@ -8,6 +8,9 @@ import (
 	"net/http"
 	"time"
 
+	"go.mongodb.org/mongo-driver/v2/bson"
+
+	"github.com/aura-studio/tango/internal/cfgsync"
 	"github.com/aura-studio/tango/internal/dao"
 	"github.com/aura-studio/tango/internal/logging"
 	"github.com/aura-studio/tango/internal/parser"
@@ -23,11 +26,12 @@ type Server struct {
 
 // New builds a Server, connecting to MongoDB via the api engine. It is wired
 // from the shared top-level module configs (dao, the process strategy config,
-// and the parser config carrying the reporting filter) plus the gateway role
-// config. The caller must Close it.
-func New(ctx context.Context, daoCfg *dao.Config, procCfg *process.Config, parserCfg *parser.Config, cfg Config) (*Server, error) {
+// the parser config carrying the reporting filter, and the cfgsync config for
+// runtime filter hot-swap and config publishing) plus the gateway role config.
+// cfgsyncCfg may be nil (cfgsync disabled). The caller must Close it.
+func New(ctx context.Context, daoCfg *dao.Config, procCfg *process.Config, parserCfg *parser.Config, cfgsyncCfg *cfgsync.Config, cfg Config) (*Server, error) {
 	cfg.ApplyDefaults()
-	eng, err := api.New(ctx, daoCfg, procCfg, parserCfg)
+	eng, err := api.New(ctx, daoCfg, procCfg, parserCfg, cfgsyncCfg)
 	if err != nil {
 		return nil, err
 	}
@@ -58,6 +62,13 @@ func (s *Server) SQL(ctx context.Context, query string) (*dao.SQLResult, error) 
 	return s.engine.SQL(ctx, query)
 }
 
+// PublishConfig validates and publishes a runtime config document, returning the
+// new monotonic version (the engine entry point, exposed for programmatic/test
+// use).
+func (s *Server) PublishConfig(ctx context.Context, doc bson.M) (int64, error) {
+	return s.engine.PublishConfig(ctx, doc)
+}
+
 // Handler builds the HTTP handler exposing the gateway's routes: /healthz, the
 // TA-ingest /upload, and the Mongo Data API /ejson. It is exported so the routes
 // can be exercised directly (e.g. via httptest) without binding a socket.
@@ -67,11 +78,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/upload", s.handleUpload)
 	mux.HandleFunc("/ejson", s.handleEJSON)
 	mux.HandleFunc("/sql", s.handleSQL)
+	mux.HandleFunc("/config", s.handleConfig)
 	return mux
 }
 
-// Run starts the HTTP server and blocks until ctx is cancelled.
+// Run starts the HTTP server and blocks until ctx is cancelled. It also launches
+// the cfgsync Watcher (when enabled) so the gateway's live reporting filter is
+// hot-swapped from the central config document while it serves.
 func (s *Server) Run(ctx context.Context, addr string) error {
+	s.engine.StartCfgsync(ctx)
+
 	httpSrv := &http.Server{Addr: addr, Handler: s.Handler()}
 	errCh := make(chan error, 1)
 	go func() {
@@ -205,4 +221,24 @@ func (s *Server) handleSQL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeEJSON(w, http.StatusOK, res)
+}
+
+// handleConfig publishes a runtime config document to the central collection
+// (the write side of cfgsync; the daemon/gateway watchers pick it up). The body
+// is the config content as JSON (e.g. {"filter":{"include":[...],"exclude":[...]}});
+// cfgsync owns _id and version. On success the response is {"version": <new>}. A
+// document carrying a subtree off the allowlist or a filter that does not compile
+// is rejected with 400 before any write. It is independent of /upload, /ejson and
+// /sql; /ingest is intentionally still not provided.
+func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
+	var doc bson.M
+	if !decodeBody(w, r, &doc) {
+		return
+	}
+	version, err := s.engine.PublishConfig(r.Context(), doc)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int64{"version": version})
 }

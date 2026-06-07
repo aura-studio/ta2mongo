@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 
+	"github.com/aura-studio/tango/internal/cfgsync"
 	"github.com/aura-studio/tango/internal/cfgtree"
 	"github.com/aura-studio/tango/internal/dao"
 	"github.com/aura-studio/tango/internal/parser"
@@ -42,6 +43,13 @@ func (Role) Run(ctx context.Context, cfg cfgtree.Tree) error {
 	}
 	if cliCfg.Function == FunctionSQL {
 		return RunSQL(ctx, daoCfg, os.Stdin, os.Stdout)
+	}
+	if cliCfg.Function == FunctionConfig {
+		cfgsyncCfg, err := cfgsync.FromTree(cfg)
+		if err != nil {
+			return err
+		}
+		return RunConfig(ctx, daoCfg, cfgsyncCfg, os.Stdin, os.Stdout)
 	}
 
 	procCfg, err := process.FromTree(cfg)

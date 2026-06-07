@@ -18,8 +18,12 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
+	"go.mongodb.org/mongo-driver/v2/bson"
+
+	"github.com/aura-studio/tango/internal/cfgsync"
 	"github.com/aura-studio/tango/internal/dao"
 	"github.com/aura-studio/tango/internal/logging"
 	"github.com/aura-studio/tango/internal/parser"
@@ -40,17 +44,20 @@ type Result struct {
 // concurrent use; the MongoDB driver manages the pool, and each upload run uses
 // its own stats collector.
 type Engine struct {
-	dao     *dao.Dao
-	parser  *parser.Parser
-	procCfg *process.Config
+	dao        *dao.Dao
+	parser     *parser.Parser
+	procCfg    *process.Config
+	cfgsyncCfg *cfgsync.Config
 }
 
 // New connects to MongoDB and builds the engine. procCfg selects the upload
 // strategy and tunes the single/batch flush size and the pipeline worker pool
 // (nil uses defaults); parserCfg carries the optional reporting filter applied
-// to every line (nil, or an empty parser.filter.*, keeps everything). The caller
-// must Close it.
-func New(ctx context.Context, daoCfg *dao.Config, procCfg *process.Config, parserCfg *parser.Config) (*Engine, error) {
+// to every line (nil, or an empty parser.filter.*, keeps everything);
+// cfgsyncCfg carries the runtime config-sync settings used by StartCfgsync and
+// PublishConfig (nil is defaulted to a disabled watcher with the default
+// collection/document id). The caller must Close it.
+func New(ctx context.Context, daoCfg *dao.Config, procCfg *process.Config, parserCfg *parser.Config, cfgsyncCfg *cfgsync.Config) (*Engine, error) {
 	if daoCfg == nil || daoCfg.Mongo == nil || daoCfg.Mongo.URI == "" {
 		return nil, fmt.Errorf("api: MongoDB URI is required")
 	}
@@ -71,7 +78,12 @@ func New(ctx context.Context, daoCfg *dao.Config, procCfg *process.Config, parse
 	}
 	procCfg.ApplyDefaults()
 
-	return &Engine{dao: da, parser: p, procCfg: procCfg}, nil
+	if cfgsyncCfg == nil {
+		cfgsyncCfg = &cfgsync.Config{}
+	}
+	cfgsyncCfg.ApplyDefaults()
+
+	return &Engine{dao: da, parser: p, procCfg: procCfg, cfgsyncCfg: cfgsyncCfg}, nil
 }
 
 // Close disconnects from MongoDB and releases all resources.
@@ -82,6 +94,39 @@ func (c *Engine) Close() error {
 // EnsureIndexes creates all required MongoDB indexes (idempotent).
 func (c *Engine) EnsureIndexes(ctx context.Context) error {
 	return c.dao.Store.EnsureIndexes(ctx)
+}
+
+// StartCfgsync launches the cfgsync Watcher in a goroutine when cfgsync is
+// enabled, wiring the engine's own dao + parser so the live reporting filter is
+// hot-swapped from the central config document (keeping last-good on a bad
+// config). A disabled config is a no-op. The goroutine exits when ctx is
+// cancelled; a fatal watcher error is logged rather than crashing the caller. It
+// is used by the long-running gateway role (which embeds this engine and holds a
+// live filter); the one-shot cli / library api callers do not start it.
+func (c *Engine) StartCfgsync(ctx context.Context) {
+	if !c.cfgsyncCfg.Enabled {
+		return
+	}
+	reg := cfgsync.NewRegistry()
+	cfgsync.RegisterFilter(reg, c.parser)
+	w := cfgsync.New(c.dao, c.cfgsyncCfg, reg.Apply)
+	go func() {
+		defer logging.Recover("cfgsync watcher")
+		if err := w.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			logging.WithError(err).Error("cfgsync: watcher exited with error")
+		}
+	}()
+}
+
+// PublishConfig validates and publishes a runtime config document to the central
+// collection, returning the new monotonic version. It is the api face of the
+// shared cfgsync.Publish (same core as gateway POST /config and cli
+// function=config) and is independent of the upload pipeline. doc carries the
+// config content (e.g. {"filter": {"include": [...], "exclude": [...]}}); cfgsync
+// owns _id and version. A document carrying a subtree off the allowlist, or a
+// filter that does not compile, is rejected before any write.
+func (c *Engine) PublishConfig(ctx context.Context, doc bson.M) (int64, error) {
+	return cfgsync.Publish(ctx, c.dao, c.cfgsyncCfg, doc)
 }
 
 // Run processes the source with c.procCfg.Mode, blocking until the source is

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/aura-studio/tango/internal/cfgsync"
 	"github.com/aura-studio/tango/internal/dao"
 	"github.com/aura-studio/tango/internal/logging"
 	"github.com/aura-studio/tango/internal/parser"
@@ -25,16 +26,18 @@ const statsReportInterval = 60 * time.Second
 // reaching the file-tailing config through srcCfg.Tailer rather than importing
 // source/tailer directly.
 type Service struct {
-	dao     *dao.Dao
-	parser  *parser.Parser
-	srcCfg  *source.Config
-	procCfg *process.Config
+	dao        *dao.Dao
+	parser     *parser.Parser
+	srcCfg     *source.Config
+	procCfg    *process.Config
+	cfgsyncCfg *cfgsync.Config
 }
 
 // New connects to MongoDB and creates a ready-to-run Service from the dao,
-// parser, source, and process module configs. The caller must call Shutdown
-// after Run returns to disconnect from MongoDB.
-func New(ctx context.Context, daoCfg *dao.Config, parserCfg *parser.Config, srcCfg *source.Config, procCfg *process.Config) (*Service, error) {
+// parser, source, process, and cfgsync module configs. cfgsyncCfg may be nil
+// (cfgsync disabled). The caller must call Shutdown after Run returns to
+// disconnect from MongoDB.
+func New(ctx context.Context, daoCfg *dao.Config, parserCfg *parser.Config, srcCfg *source.Config, procCfg *process.Config, cfgsyncCfg *cfgsync.Config) (*Service, error) {
 	if srcCfg == nil || srcCfg.Tailer == nil {
 		return nil, fmt.Errorf("report: source.tailer configuration is required")
 	}
@@ -53,7 +56,7 @@ func New(ctx context.Context, daoCfg *dao.Config, parserCfg *parser.Config, srcC
 		return nil, fmt.Errorf("report: %w", err)
 	}
 
-	return &Service{dao: da, parser: p, srcCfg: srcCfg, procCfg: procCfg}, nil
+	return &Service{dao: da, parser: p, srcCfg: srcCfg, procCfg: procCfg, cfgsyncCfg: cfgsyncCfg}, nil
 }
 
 // Shutdown disconnects the MongoDB client. It must be called after Run returns
@@ -104,6 +107,12 @@ func (d *Service) Run(ctx context.Context) error {
 	reportDone := make(chan struct{})
 	go d.reportStats(ctx, stats, startTime, reportDone)
 
+	// Launch the runtime config-sync watcher (opt-in): it hot-swaps the live
+	// reporting filter from the central config document. It shares this ctx, so
+	// it stops when the daemon does, and runs under its own panic recover like
+	// the stats reporter above.
+	d.startCfgsync(ctx)
+
 	// Drive the async pipeline strategy; it blocks until ctx is cancelled, then
 	// the workers flush and exit.
 	procCfg := *d.procCfg
@@ -123,6 +132,27 @@ func (d *Service) Run(ctx context.Context) error {
 	d.logFinalStats(stats, startTime)
 
 	return nil
+}
+
+// startCfgsync launches the cfgsync Watcher goroutine when cfgsync is enabled.
+// The Watcher feeds the central config document's filter subtree into the live
+// parser filter (atomic Holder swap), keeping last-good on a bad config. A nil or
+// disabled config is a no-op. The goroutine exits when ctx is cancelled; a fatal
+// watcher error (e.g. backend=changestream on an unsupported topology) is logged
+// rather than taking the daemon down.
+func (d *Service) startCfgsync(ctx context.Context) {
+	if d.cfgsyncCfg == nil || !d.cfgsyncCfg.Enabled {
+		return
+	}
+	reg := cfgsync.NewRegistry()
+	cfgsync.RegisterFilter(reg, d.parser)
+	w := cfgsync.New(d.dao, d.cfgsyncCfg, reg.Apply)
+	go func() {
+		defer logging.Recover("cfgsync watcher")
+		if err := w.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			logging.WithError(err).Error("cfgsync: watcher exited with error")
+		}
+	}()
 }
 
 // reportStats periodically logs processing statistics every statsReportInterval.

@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 
+	"github.com/aura-studio/tango/internal/cfgsync"
 	"github.com/aura-studio/tango/internal/cfgtree"
 	"github.com/aura-studio/tango/internal/dao"
 	"github.com/aura-studio/tango/internal/parser"
@@ -29,6 +30,10 @@ func (Role) Run(ctx context.Context, cfg cfgtree.Tree) error {
 	if err != nil {
 		return err
 	}
+	cfgsyncCfg, err := cfgsync.FromTree(cfg)
+	if err != nil {
+		return err
+	}
 
 	var gwCfg Config
 	if err := cfg.Sub("role").Sub("gateway").Into(&gwCfg); err != nil {
@@ -39,7 +44,7 @@ func (Role) Run(ctx context.Context, cfg cfgtree.Tree) error {
 		return err
 	}
 
-	srv, err := New(ctx, daoCfg, procCfg, parserCfg, gwCfg)
+	srv, err := New(ctx, daoCfg, procCfg, parserCfg, cfgsyncCfg, gwCfg)
 	if err != nil {
 		return err
 	}

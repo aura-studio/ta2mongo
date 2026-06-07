@@ -6,8 +6,12 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 
+	"go.mongodb.org/mongo-driver/v2/bson"
+
+	"github.com/aura-studio/tango/internal/cfgsync"
 	"github.com/aura-studio/tango/internal/dao"
 	"github.com/aura-studio/tango/internal/parser"
 	"github.com/aura-studio/tango/internal/process"
@@ -20,7 +24,7 @@ import (
 // indexes, runs the stdin source to completion, and closes the engine. It backs
 // the cli role's default function=upload.
 func RunUpload(ctx context.Context, daoCfg *dao.Config, procCfg *process.Config, parserCfg *parser.Config, in io.Reader) (api.Result, error) {
-	eng, err := api.New(ctx, daoCfg, procCfg, parserCfg)
+	eng, err := api.New(ctx, daoCfg, procCfg, parserCfg, nil)
 	if err != nil {
 		return api.Result{}, err
 	}
@@ -46,7 +50,7 @@ func RunEJSON(ctx context.Context, daoCfg *dao.Config, in io.Reader, out io.Writ
 		return err
 	}
 
-	eng, err := api.New(ctx, daoCfg, nil, nil)
+	eng, err := api.New(ctx, daoCfg, nil, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -77,7 +81,7 @@ func RunSQL(ctx context.Context, daoCfg *dao.Config, in io.Reader, out io.Writer
 		return err
 	}
 
-	eng, err := api.New(ctx, daoCfg, nil, nil)
+	eng, err := api.New(ctx, daoCfg, nil, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -96,4 +100,36 @@ func RunSQL(ctx context.Context, daoCfg *dao.Config, in io.Reader, out io.Writer
 	}
 	_, err = out.Write([]byte("\n"))
 	return err
+}
+
+// RunConfig reads a single runtime config document (JSON) from in, publishes it
+// to the central cfgsync collection through the embedded api engine, and writes
+// {"version":<new>} as JSON to out. It is the console equivalent of the gateway
+// POST /config endpoint. cfgsyncCfg supplies the target collection / document id
+// (so the cli publishes to the same document the daemon/gateway watch); it does
+// not use the process/parser config.
+func RunConfig(ctx context.Context, daoCfg *dao.Config, cfgsyncCfg *cfgsync.Config, in io.Reader, out io.Writer) error {
+	body, err := io.ReadAll(in)
+	if err != nil {
+		return err
+	}
+	var doc bson.M
+	if err := json.Unmarshal(body, &doc); err != nil {
+		return err
+	}
+
+	eng, err := api.New(ctx, daoCfg, nil, nil, cfgsyncCfg)
+	if err != nil {
+		return err
+	}
+	defer eng.Close()
+
+	version, err := eng.PublishConfig(ctx, doc)
+	if err != nil {
+		return err
+	}
+
+	enc := json.NewEncoder(out)
+	enc.SetIndent("", "  ")
+	return enc.Encode(map[string]int64{"version": version})
 }

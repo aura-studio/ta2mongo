@@ -15,6 +15,10 @@ const (
 	// Data API, and writes the Extended-JSON result to stdout (the console
 	// equivalent of the gateway POST /sql endpoint).
 	FunctionSQL = "sql"
+	// FunctionConfig reads a single runtime config document (JSON) from stdin,
+	// publishes it to the central cfgsync collection, and writes {"version":<new>}
+	// to stdout (the console equivalent of the gateway POST /config endpoint).
+	FunctionConfig = "config"
 )
 
 // DefaultFunction is the cli function used when role.cli.function is unset.
@@ -40,11 +44,11 @@ func (c *Config) ApplyDefaults() {
 // Validate checks cli-specific config.
 func (c *Config) Validate() error {
 	switch c.Function {
-	case FunctionUpload, FunctionEJSON, FunctionSQL:
+	case FunctionUpload, FunctionEJSON, FunctionSQL, FunctionConfig:
 		return nil
 	default:
-		return fmt.Errorf("function %q is invalid (want %q / %q / %q)",
-			c.Function, FunctionUpload, FunctionEJSON, FunctionSQL)
+		return fmt.Errorf("function %q is invalid (want %q / %q / %q / %q)",
+			c.Function, FunctionUpload, FunctionEJSON, FunctionSQL, FunctionConfig)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/aura-studio/tango/internal/cfgsync"
 	"github.com/aura-studio/tango/internal/cfgtree"
 	"github.com/aura-studio/tango/internal/dao"
 	"github.com/aura-studio/tango/internal/logging"
@@ -42,6 +43,10 @@ func (Role) Run(ctx context.Context, cfg cfgtree.Tree) error {
 	if err != nil {
 		return err
 	}
+	cfgsyncCfg, err := cfgsync.FromTree(cfg)
+	if err != nil {
+		return err
+	}
 	if len(srcCfg.Tailer.LogPattern) == 0 {
 		return fmt.Errorf("config: source.tailer.logPattern is required (at least one regex)")
 	}
@@ -56,7 +61,7 @@ func (Role) Run(ctx context.Context, cfg cfgtree.Tree) error {
 		"role":      "daemon",
 	}).Info("tango daemon: starting")
 
-	svc, err := New(ctx, daoCfg, parserCfg, srcCfg, procCfg)
+	svc, err := New(ctx, daoCfg, parserCfg, srcCfg, procCfg, cfgsyncCfg)
 	if err != nil {
 		logging.WithError(err).Error("tango daemon: init failed")
 		return err
