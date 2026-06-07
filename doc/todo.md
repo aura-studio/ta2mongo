@@ -51,9 +51,9 @@
 - [ ] 测试：taskqueue claim/lease/reap 并发（真实 DocumentDB）；worker 跑通已发布 backfill 任务；`/publish/*` httptest。
 - [ ] 文档/示例 + EC2 全绿；合入 v1.4，tag `v1.4.1`。
 
-## Phase 3 — Remote config + 文件断点续传 + operator/控制面接口
+## Phase 3 — cfgsync（动态配置同步）+ 文件断点续传 + operator/控制面接口
 
-- [ ] `internal/remoteconfig`（移植 Fetch/Merge/FilterChanged，集合 `_tango_config`）：轮询热替换 `parser.Filter()` holder；接入 daemon+gateway；`remoteconfig.*`（enabled/documentID/pollInterval）。
+- [ ] `internal/cfgsync`（原 `remoteconfig` 改名；与 `cfgtree` 一静一动成对）：盯 `_tango_config` 热替换 `parser.Filter()` holder，poll/changestream 可插拔 backend，接入 daemon+gateway，并经 gateway/cli/api 三面发布配置（同核 `cfgsync.Publish`）；`cfgsync.*`（enabled/backend/documentID/pollInterval/reconcileInterval）。**详见 [`doc/cfgsync.TODO.md`](cfgsync.TODO.md)**。
 - [ ] `internal/source/filebatch`（新 `source.Source`）：glob 文件 + `_tango_fileupload` 断点续传 → 喂 process 流水线；入口 cli `function=fileupload`（和/或 gateway 文件模式）；`source.filebatch.*`。
 - [ ] 补齐 operator cli functions（upload|ejson|sql|backfill|publish|fileupload）与 gateway 控制面路由（`/publish/*`、`/backfill`）；确认 `/ingest` 仍不提供。
 - [ ] 测试：remoteconfig 运行中热替换 filter；filebatch 中断后续传；控制面接口 httptest —— 全连真实 DocumentDB。
