@@ -142,7 +142,7 @@ func TestRolesModes(t *testing.T) {
 
 				switch role {
 				case "api":
-					eng, err := api.New(ctx, daoCfg, procCfg, nil)
+					eng, err := api.New(ctx, daoCfg, procCfg, nil, nil)
 					if err != nil {
 						t.Fatalf("api.New: %v", err)
 					}
@@ -158,7 +158,7 @@ func TestRolesModes(t *testing.T) {
 						t.Fatalf("cli RunUpload: %v", err)
 					}
 				case "gateway":
-					srv, err := gateway.New(ctx, daoCfg, procCfg, nil, gateway.Config{})
+					srv, err := gateway.New(ctx, daoCfg, procCfg, nil, nil, gateway.Config{})
 					if err != nil {
 						t.Fatalf("gateway.New: %v", err)
 					}
@@ -200,7 +200,7 @@ func TestDaemonContinuousReport(t *testing.T) {
 	srcCfg.ApplyDefaults()
 	procCfg := &process.Config{Pipeline: &pipeline.Config{BatchWorkers: 1, FlushInterval: 100 * time.Millisecond}}
 
-	svc, err := daemon.New(context.Background(), daoCfg, &parser.Config{}, srcCfg, procCfg)
+	svc, err := daemon.New(context.Background(), daoCfg, &parser.Config{}, srcCfg, procCfg, nil)
 	if err != nil {
 		t.Fatalf("daemon.New: %v", err)
 	}

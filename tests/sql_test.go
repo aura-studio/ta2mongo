@@ -25,7 +25,7 @@ func TestSQL_GatewayAndCLI(t *testing.T) {
 	ctx := context.Background()
 
 	// --- gateway end: real HTTP handler over httptest ---
-	srv, err := gateway.New(ctx, daoCfg, nil, nil, gateway.Config{})
+	srv, err := gateway.New(ctx, daoCfg, nil, nil, nil, gateway.Config{})
 	if err != nil {
 		t.Fatalf("gateway.New: %v", err)
 	}

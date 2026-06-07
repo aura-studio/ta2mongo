@@ -86,7 +86,7 @@ func TestHealthzContract(t *testing.T) {
 }
 
 func TestNew_ErrorsWhenURIEmpty(t *testing.T) {
-	_, err := New(context.Background(), nil, nil, nil, Config{})
+	_, err := New(context.Background(), nil, nil, nil, nil, Config{})
 	if err == nil {
 		t.Fatalf("expected error for empty URI")
 	}

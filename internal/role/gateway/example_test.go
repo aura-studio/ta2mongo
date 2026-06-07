@@ -14,7 +14,7 @@ func ExampleServer_Upload() {
 	defer cancel()
 
 	procCfg := &process.Config{Mode: string(process.ModeBatch)}
-	srv, err := New(ctx, &dao.Config{Mongo: &daomongo.Config{URI: "mongodb://localhost:27017/tango"}}, procCfg, nil, Config{})
+	srv, err := New(ctx, &dao.Config{Mongo: &daomongo.Config{URI: "mongodb://localhost:27017/tango"}}, procCfg, nil, nil, Config{})
 	if err != nil {
 		return
 	}
