@@ -4,10 +4,10 @@
 #
 # tango 是单一二进制、统一配置 schema：键路径 = internal/ 下的包路径。同一份 max
 # 配置对每个角色都完整可用，角色只取自己需要的段、忽略其余（例如 daemon 用
-# logging/dao/parser/source/process，忽略 role.gateway；gateway 用 logging/dao/
-# parser/process/role.gateway，忽略 source）。
+# logging/dao/parser/source/process/cfgsync，忽略 role.gateway；gateway 用 logging/dao/
+# parser/process/cfgsync/role.gateway，忽略 source）。
 #
-# 6 个段：logging · dao · parser · source · process · role。
+# 7 个段：logging · dao · parser · source · process · cfgsync · role。
 # 标注：[required] 必填；[required:daemon] 仅 daemon 必填；其余 [optional]（括号内默认值）。
 # 环境变量覆盖：键 . → _ 加 TANGO_ 前缀（dao.mongo.uri → TANGO_DAO_MONGO_URI）。
 
@@ -51,6 +51,14 @@ process:                          # internal/process（上传策略处理参数�
     flushInterval: 1s             # [optional]（默认 1s）未满批次刷新间隔
     channelBuffer: 0              # [optional]（默认 0 = 自动 batchSize*2）每 worker 通道缓冲
     deadLetterCap: 128            # [optional]（默认 128）每 worker 死信批容量
+
+cfgsync:                          # internal/cfgsync（运行时动态配置同步；daemon/gateway 内嵌，热替换上报 filter）
+  enabled: false                  # [optional]（默认 false）开启后启动 Watcher，运行中从中心文档热替换 filter
+  backend: poll                   # [optional]（默认 poll）poll / changestream（changestream 需副本集或 DocumentDB 开启 change stream）
+  documentID: filter              # [optional]（默认 filter）_tango_config 集合中被追踪文档的 _id
+  pollInterval: 5s                # [optional]（默认 5s）poll backend 轮询周期 = 最坏陈旧窗口
+  reconcileInterval: 60s          # [optional]（默认 60s）changestream backend 的兜底全量读周期（自愈补漏）
+  collection: _tango_config       # [optional]（默认 _tango_config）中心配置集合名，一般不改
 
 role:                             # internal/role
   mode: daemon                    # [optional]（默认 daemon）daemon / gateway / cli —— 选择运行角色，替代旧的子命令

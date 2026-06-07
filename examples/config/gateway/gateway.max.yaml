@@ -2,12 +2,13 @@
 #
 # 启动：tango --config gateway.max.yaml   （角色由 role.mode 决定）
 #
-# gateway = 常驻 HTTP 服务，暴露单个 /upload（请求体携带日志数组；上传策略由
-# process.mode 配置），底层把请求体包成 httpbody 源后复用 api 引擎。它读取
-# logging/dao/parser/process 共享段 + role.gateway 专属段，忽略 source（不追尾文件）。
+# gateway = 常驻 HTTP 服务，暴露 /upload（请求体携带日志数组；上传策略由
+# process.mode 配置）与 /config（发布运行时动态配置），底层把请求体包成 httpbody 源后
+# 复用 api 引擎。它读取 logging/dao/parser/process/cfgsync 共享段 + role.gateway 专属段，
+# 忽略 source（不追尾文件）。
 #
 # tango 配置是统一 schema：键路径 = internal/ 下的包路径，同一份 max 配置对每个角色
-# 都完整可用。6 个段：logging · dao · parser · source · process · role。
+# 都完整可用。7 个段：logging · dao · parser · source · process · cfgsync · role。
 # 标注：[required] 必填；[required:daemon] 仅 daemon 必填；其余 [optional]（括号内默认值）。
 # 环境变量覆盖：键 . → _ 加 TANGO_ 前缀（dao.mongo.uri → TANGO_DAO_MONGO_URI）。
 

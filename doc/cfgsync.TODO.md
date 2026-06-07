@@ -53,54 +53,54 @@
 
 ## Phase A — 领域骨架 + 配置
 
-- [ ] `internal/cfgsync/cfgsync.go`：包文档 + `Watcher`（持有 `*dao.Dao`、`*Config`、注入的 `onChange func(bson.M) error`）
+- [x] ~~`internal/cfgsync/cfgsync.go`：包文档 + `Watcher`（持有 `*dao.Dao`、`*Config`、注入的 `onChange func(bson.M) error`）
   + `New(d *dao.Dao, cfg *Config, onChange func(bson.M) error) *Watcher` + `(*Watcher).Run(ctx) error`
-  （选 backend → **启动拉取一次** → 进入 backend 循环；panic 由调用方 recover）。
-- [ ] `internal/cfgsync/backend.go`：`Backend` 接口（`Run(ctx, observe func(bson.M) error) error`）+ `selectBackend(cfg)`。
-- [ ] `internal/cfgsync/registry.go`：**applier 注册表** `map[subtree]func(bson.M) error`（默认只注册 `parser.filter`）。
+  （选 backend → **启动拉取一次** → 进入 backend 循环；panic 由调用方 recover）。~~
+- [x] ~~`internal/cfgsync/backend.go`：`Backend` 接口（`Run(ctx, observe func(bson.M) error) error`）+ `selectBackend(cfg)`。~~
+- [x] ~~`internal/cfgsync/registry.go`：**applier 注册表** `map[subtree]func(bson.M) error`（默认只注册 `parser.filter`）。
   Watcher 把变更文档按子树路由到对应 applier；**不在 allowlist 的子树 → 拒绝 + 记 warn**（见「覆盖范围」）。
-  这是 `onChange` 的泛化：单回调 → 有界、可审计的动态键集合。
-- [ ] `internal/cfgsync/config.go`：`cfgsync.Config` + `FromTree(t)`/`ApplyDefaults`/`Validate`/`RegisterDefaults`。
+  这是 `onChange` 的泛化：单回调 → 有界、可审计的动态键集合。~~
+- [x] ~~`internal/cfgsync/config.go`：`cfgsync.Config` + `FromTree(t)`/`ApplyDefaults`/`Validate`/`RegisterDefaults`。
   键：
   - `cfgsync.enabled`（bool，默认 `false`）
   - `cfgsync.backend`（`poll` | `changestream`，默认 `poll`）
   - `cfgsync.documentID`（`_tango_config` 文档 `_id`，默认 `"filter"`）
   - `cfgsync.pollInterval`（poll backend 轮询周期，默认 `5s`）
   - `cfgsync.reconcileInterval`（changestream backend 的兜底全量读周期，默认 `60s`）
-  - `cfgsync.collection`（默认常量 `_tango_config`，一般不改）
-- [ ] `config/` 注册 `cfgsync` 默认键（`RegisterDefaults`）；确认文件/env/flag 三途径同名可互换。
+  - `cfgsync.collection`（默认常量 `_tango_config`，一般不改）~~
+- [x] ~~`config/` 注册 `cfgsync` 默认键（`RegisterDefaults`）；确认文件/env/flag 三途径同名可互换。~~
 
 ## Phase B — poll backend（默认，最稳，先落地）
 
-- [ ] `internal/cfgsync/poll.go`：`pollBackend` 按 `pollInterval` 定时调
-  `dao.EJSON(findOne, collection, {_id: documentID})`（**复用现有读门面，零新增 dao surface**）→ `observe(doc)`。
-- [ ] `internal/cfgsync/fetch.go`：
+- [x] ~~`internal/cfgsync/poll.go`：`pollBackend` 按 `pollInterval` 定时调
+  `dao.EJSON(findOne, collection, {_id: documentID})`（**复用现有读门面，零新增 dao surface**）→ `observe(doc)`。~~
+- [x] ~~`internal/cfgsync/fetch.go`：
   - `parseDoc`：从 EJSON 响应取出文档（`bson.M`）；缺失文档（未配置）视为 no-op（保留当前 filter）。
   - **单调版本守卫**：记 `lastVersion`，`doc.version <= lastVersion` 直接丢弃；只有更高版本才放行。
-  - `changed`：仅当放行后才触发 `onChange`（避免无变更时重复 swap）。
-- [ ] 启动拉取：`Watcher.Run` 进入循环前先 `observe` 一次当前文档。
+  - `changed`：仅当放行后才触发 `onChange`（避免无变更时重复 swap）。~~
+- [x] ~~启动拉取：`Watcher.Run` 进入循环前先 `observe` 一次当前文档。~~
 
 ## Phase C — parser/dao 门面 + 接入 daemon/gateway
 
-- [ ] **parser 根包门面**：新增 `(*parser.Parser).SwapFilter(include, exclude []string) error`
+- [x] ~~**parser 根包门面**：新增 `(*parser.Parser).SwapFilter(include, exclude []string) error`
   （内部 `filter.Config{Include,Exclude}.Build()` → 成功才 `p.Filter().Store(newFilter)`；**编译失败返回 err、不替换**）。
-  使 cfgsync/角色不直接 import `parser/filter`。
-- [ ] `role/daemon`：`cfgsync.enabled` 时起 `cfgsync.Watcher` goroutine（panic recover，对齐 daemon 现有信号/统计 goroutine）；
-  `onChange` = 从 `doc.filter.{include,exclude}` 解析 → `parser.SwapFilter`（失败保留 last-good、记 warn + 计数）。
-- [ ] `role/gateway`：同上接入（gateway 也持有 live filter）。
-- [ ] daemon/gateway 的 `FromTree` 各自裁出 `cfgsync` 子树（与 `dao`/`process`/`parser` 同级按枝叶取）。
+  使 cfgsync/角色不直接 import `parser/filter`。~~
+- [x] ~~`role/daemon`：`cfgsync.enabled` 时起 `cfgsync.Watcher` goroutine（panic recover，对齐 daemon 现有信号/统计 goroutine）；
+  `onChange` = 从 `doc.filter.{include,exclude}` 解析 → `parser.SwapFilter`（失败保留 last-good、记 warn + 计数）。~~
+- [x] ~~`role/gateway`：同上接入（gateway 也持有 live filter）。~~
+- [x] ~~daemon/gateway 的 `FromTree` 各自裁出 `cfgsync` 子树（与 `dao`/`process`/`parser` 同级按枝叶取）。~~
 
 > 交付到此即可用：poll backend + 启动拉取 + 版本守卫 + 校验后再换，已满足「有界陈旧 + 自愈 + 不回退 + 不打挂」。
 
 ## Phase D — changestream backend（可选，真·实时）
 
-- [ ] **dao 根包门面**：新增 `(*Dao).Watch(ctx, collection string, pipeline mongo.Pipeline, opts...) (*mongo.ChangeStream, error)`
-  （封装 `collection.Watch`；driver 类型 `*mongo.ChangeStream` 按设计不隐藏，与写模型返回 `mongo.WriteModel` 一致）。
-- [ ] `internal/cfgsync/changestream.go`：`changeStreamBackend`
+- [x] ~~**dao 根包门面**：新增 `(*Dao).Watch(ctx, collection string, pipeline mongo.Pipeline, opts...) (*mongo.ChangeStream, error)`
+  （封装 `collection.Watch`；driver 类型 `*mongo.ChangeStream` 按设计不隐藏，与写模型返回 `mongo.WriteModel` 一致）。~~
+- [x] ~~`internal/cfgsync/changestream.go`：`changeStreamBackend`
   - **先订阅后快照**：先 `dao.Watch`（记 `startAtOperationTime`/resume token）→ 再 `dao.EJSON` 全量读一次 → 增量 apply。
   - 增量事件经**同一条**版本守卫（与 poll 复用 `fetch.go`）。
   - **断流 / resume token 失效**（停机 > change stream 保留窗口，DocumentDB 默认 3h、可调 7d）→ 重订阅 + 全量读 fallback，不硬崩。
-  - **兜底 reconcile**：即使在 changestream 模式，也按 `reconcileInterval` 跑一次低频全量读（补漏，自愈）。
+  - **兜底 reconcile**：即使在 changestream 模式，也按 `reconcileInterval` 跑一次低频全量读（补漏，自愈）。~~
 - [ ] 环境前置与降级：
   - DocumentDB：需先 `db.adminCommand({modifyChangeStreams, enable:true})`（文档写明）；**Elastic Cluster 不支持** change stream。
   - 普通 MongoDB：需副本集；**standalone mongod 无 change stream** → `backend=changestream` 时检测失败要**清晰报错并提示改用 `poll`**（不静默吞）。
@@ -112,18 +112,18 @@
 > 拥有 `_tango_config` 文档 schema 与**单调 version** 语义。发布时**先校验（按 allowlist + 编译 filter）再写**——
 > 坏配置在源头就挡掉（与 apply 端的 fail-to-last-good 形成两道闸）。
 
-- [ ] `internal/cfgsync/publish.go`：`Publish(ctx, d *dao.Dao, doc bson.M) (version int64, err error)`：
+- [x] ~~`internal/cfgsync/publish.go`：`Publish(ctx, d *dao.Dao, doc bson.M) (version int64, err error)`：
   按 allowlist 校验子树 + 编译 filter（失败拒绝）→ 经 `dao.EJSON`（updateOne upsert，`$set` 内容 + `$inc:{version:1}`，
-  DocumentDB 安全）原子写入 `_tango_config` → 返回新 version。
-- [ ] **gateway（HTTP）**：`POST /config`（body = 配置文档）→ `cfgsync.Publish` → 返回 `{version}`；确认 `/ingest` 仍不提供。
-- [ ] **cli（控制台）**：`role.cli.function=config`，stdin 读配置文档 → `cfgsync.Publish` → stdout 写 `{version}`；
-  cli config `Validate` 增加 `config`。
-- [ ] **api（库）**：`(*api.Engine).PublishConfig(ctx, doc) (int64, error)` → `cfgsync.Publish`。
-- [ ] 三面共用同一个 `cfgsync.Publish`（与 upload/ejson/sql 的"同核多面"一致）；发布即被 daemon/gateway 的 Watcher 取到生效。
+  DocumentDB 安全）原子写入 `_tango_config` → 返回新 version。~~
+- [x] ~~**gateway（HTTP）**：`POST /config`（body = 配置文档）→ `cfgsync.Publish` → 返回 `{version}`；确认 `/ingest` 仍不提供。~~
+- [x] ~~**cli（控制台）**：`role.cli.function=config`，stdin 读配置文档 → `cfgsync.Publish` → stdout 写 `{version}`；
+  cli config `Validate` 增加 `config`。~~
+- [x] ~~**api（库）**：`(*api.Engine).PublishConfig(ctx, doc) (int64, error)` → `cfgsync.Publish`。~~
+- [x] ~~三面共用同一个 `cfgsync.Publish`（与 upload/ejson/sql 的"同核多面"一致）；发布即被 daemon/gateway 的 Watcher 取到生效。~~
 
 ## 测试
 
-- [ ] 单元：版本守卫（旧/相等版本丢弃、重放不回退）；`fetch` 坏文档 → 保留 last-good；backend 选择；`parser.SwapFilter` 编译失败不替换。
+- [x] ~~单元：版本守卫（旧/相等版本丢弃、重放不回退）；`fetch` 坏文档 → 保留 last-good；backend 选择；`parser.SwapFilter` 编译失败不替换。~~
 - [ ] 集成（真实 DocumentDB，临时库隔离）：
   - poll：运行中改 `_tango_config` → ≤ `pollInterval` 内 filter 热替换生效；写坏 filter（不可编译/全量 exclude 触发校验失败）→ 上报不中断、保留旧 filter。
   - changestream：`modifyChangeStreams` 开启后改文档 → 亚秒级生效；杀掉 cursor 重连后仍收敛；模拟"停机超保留窗口"→ 启动拉取/ reconcile 兜回。
@@ -138,7 +138,7 @@
 
 - [ ] `doc/arch.md` 增补 cfgsync 章节（定位 + 上面「安全模型」表 + 依赖边 `cfgsync → dao + parser + cfgtree + logging`）。
 - [ ] `doc/usage.md` / `doc/config.md` 增加 `cfgsync.*` 键说明 + `_tango_config` 文档 schema（`{_id, version, filter:{include,exclude}}`）。
-- [ ] 示例：`examples/config/daemon/` 与 `examples/config/gateway/` 的 max 段加入 `cfgsync.*`（min 不含，保持最小）。
+- [x] ~~示例：`examples/config/daemon/` 与 `examples/config/gateway/` 的 max 段加入 `cfgsync.*`（min 不含，保持最小）。~~
 - [ ] 一张 cfgsync 热替换流程图（启动拉取 / change stream / 定时拉取 / 版本守卫 / 校验后再换）。
 
 ## 收尾
