@@ -235,6 +235,24 @@ config           -> cfgtree + 各模块（仅用其 RegisterDefaults 注册键�
 | `process/pipeline/dispatch.go` | `Dispatch`：按亲和键路由到各 worker channel |
 | `process/pipeline/routing.go` | `ExtractRoutingKey`/`RouteIndex`：用户亲和性 hash 路由 |
 
+#### 运行时动态配置同步 `internal/cfgsync`（顶层领域，非角色；被 daemon/gateway 内嵌）
+
+| 文件 | 职责 |
+|---|---|
+| `cfgsync/cfgsync.go` | 包文档 + `Watcher`（读侧）：持有 `*dao.Dao`/`*Config`/注入的 `onChange func(bson.M) error` + 单调 `lastVersion`；`New(d, cfg, onChange)` / `(*Watcher).Run(ctx)`（选 backend → 启动拉取 → backend 循环）；`observe` = nil 文档 no-op + 缺版本忽略 + **单调版本守卫**（`<= lastVersion` 丢弃）+ 调 `onChange`（失败记 warn 保留 last-good，不停循环） |
+| `cfgsync/backend.go` | `Backend` 接口（`Run(ctx, observe)`）+ `selectBackend(d,cfg)`（poll/changestream/未知报错） |
+| `cfgsync/config.go` | `cfgsync.Config`（`enabled`/`backend`/`documentID`/`pollInterval`/`reconcileInterval`/`collection`）+ `FromTree`/`ApplyDefaults`/`Validate`/`RegisterDefaults` + backend/默认常量 |
+| `cfgsync/poll.go` | `pollBackend`：启动拉取一次 → 每 `pollInterval` 经 `fetchDoc` 读 → `observe`；读错误记 warn 不中断（自愈），任意拓扑可用 |
+| `cfgsync/changestream.go` | `changeStreamBackend`：**先订阅后快照**（消除 read↔subscribe TOCTOU）→ stream 事件 + `reconcileInterval` 兜底全量读；断流→`resubscribe`（退避）+ 全量读 fallback，不硬崩；不支持拓扑→清晰报错指向 `backend=poll` |
+| `cfgsync/fetch.go` | `fetchDoc`（经 `dao.EJSON` findOne，缺文档=nil no-op）+ `docVersion`（int/int32/int64/float64 归一为 int64） |
+| `cfgsync/registry.go` | **applier 注册表 / allowlist**：`Registry`（`map[subtree]ApplyFunc`）+ `Register`/`Allows`/`Apply`（按子树路由；保留字 `_id`/`version` 跳过；不在 allowlist→拒绝记 warn；applier 失败保留 last-good）；是 `onChange` 的泛化 |
+| `cfgsync/filter.go` | `RegisterFilter(reg, *parser.Parser)`：把 `filter:{include,exclude}` 子树映射到 `parser.SwapFilter`（编译失败保留 last-good）；唯一默认 applier；`toStringSlice` 容错 |
+| `cfgsync/publish.go` | **写侧** `Publish(ctx, d, cfg, doc) (version, err)`：`validatePublishDoc`（剥 `_id`/`version` + 经同一 Registry 干跑校验 allowlist+编译 filter）→ `dao.EJSON` updateOne（`$set`+`$inc:{version:1}`，upsert，DocumentDB 安全）→ 读回新 version |
+
+读写同核：`Watcher`（读）与 `Publish`（写）同属 cfgsync 根包，共享 `_tango_config` 文档 schema 与单调 version；
+三面发布（gateway `POST /config`、cli `function=config`、`api.PublishConfig`）共用 `cfgsync.Publish`。
+详见 §5.4 与 [`cfgsync.TODO.md`](cfgsync.TODO.md)。
+
 #### 运行模式 `internal/role`
 
 | 文件 | 职责 |
@@ -326,6 +344,68 @@ SQL 经 **vitess sqlparser**（MySQL 方言）解析，translator 翻译为 `stm
 限制：未拷贝 DDL（CREATE/ALTER TABLE 在 mongosql 的 MySQL 层），故 schema 表为空时 AUTO_INCREMENT/DEFAULT/
 ON UPDATE 自动跳过；含表达式的 `UPDATE`（如 `SET n = n + 1`）翻译为 pipeline 形式，DocumentDB 不支持（常量 `SET n = 10` 正常）。
 
+## 5.4 cfgsync（运行时动态配置同步）
+
+`internal/cfgsync` 是 `cfgtree` 的**动态对偶**：`cfgtree` 启动时一次性加载静态配置，`cfgsync` 让其中
+**一小撮显式 allowlist 的子树**在运行中持续对齐中心文档（集合 `_tango_config`）。它**不是角色**，而是像
+`api.Engine` 一样的可嵌入 Watcher/Service，被**长驻且持有 live filter** 的角色内嵌：`daemon`（tailer→pipeline）
+与 `gateway`（/upload）；一次性的 `cli` 与库 `api` 不内嵌读侧，`worker`/taskqueue 与之无关。
+
+**读侧 Watcher**（embed 进 daemon/gateway）：选 backend → 启动拉取一次 → 运行中持续 `observe(doc)`；
+经单调版本守卫后调注入的 `onChange`（= `Registry.Apply`）把变更子树路由到 applier，金标准是
+`filter` → `parser.SwapFilter`（原子 Holder 热替换）。**写侧 Publish**（被 gateway/cli/api 调用）：先按
+allowlist 校验 + 编译 filter，再 `dao.EJSON` updateOne（`$set` + `$inc:{version}`，upsert）原子写入。
+
+**安全模型**——目标不是"瞬时全集群一致"（分布式物理做不到），而是**有界陈旧 + 自愈 + 不回退 + 坏配置打不挂**，
+由以下叠加保证：
+
+| 机制 | 作用 |
+|---|---|
+| 启动拉取 | 进程启动先全量读+应用 → 收敛停机期间错过的更新 |
+| change stream（可选 backend） | 运行中亚秒级推送 |
+| 定时拉取（poll / changestream 的 reconcile） | 兜底：断流/丢事件/超保留窗口 → 最终收敛，最坏陈旧 = 一个周期 |
+| 单调版本守卫 | 只接受 `version` 更大的文档，丢弃更旧/重放 → 防回退 |
+| 校验后再换 + 保留上一版 | 新 filter 编译失败→不替换、保留 last-good、记 warn → 坏配置打不挂 |
+| 先订阅后快照 | changestream 先订阅再全量读 → 消除 read↔subscribe 的 TOCTOU 缝 |
+| 消费者边界 | 仅 daemon/gateway 订阅（逐行过滤可中途换）；有界任务（backfill）不订阅，用一致快照 |
+
+**覆盖范围（动态面积故意压到最小）**：能否运行时生效取决于目标有没有「live-reconfigure applier」，判据是
+（a）经原子 indirection 在数据路径上被读；（b）不改资源身份/生命周期。据此默认 allowlist **只放
+`parser.filter`**（顶多再加 `logging.level`）；结构性/收益低的（`process.*`、`source.tailer.*`）默认不放；
+资源身份/生命周期的（`dao.mongo.*`、`role.mode`、`role.gateway.addr`、`cfgsync.*` 自身）绝不覆盖。
+**publish 与 apply 两端都按同一 allowlist 校验**——新增动态键 = 往注册表加一个「校验 + 原子 apply」函数。
+
+三面发布（同核 `cfgsync.Publish`，与 upload/ejson/sql 的"同核多面"一致）：
+
+- **gateway（HTTP）**：`POST /config`，body = 配置文档（如 `{"filter":{"include":[...],"exclude":[...]}}`）→ `engine.PublishConfig` → `{version}`；`/ingest` 仍不提供。
+- **cli（控制台）**：`role.cli.function=config`，stdin 读文档 → `cli.RunConfig` → stdout 写 `{version}`。
+- **api（库）**：`(*api.Engine).PublishConfig(ctx, doc) (int64, error)`。
+
+依赖边：`cfgsync → dao`（`EJSON`/`Watch` 门面）`+ parser`（`SwapFilter` 门面，由内嵌角色注入）`+ cfgtree`（`FromTree`）`+ logging`；
+**不碰** `dao/ejson`、`parser/filter` 子包。DocumentDB 安全：仅 findOne / watch / updateOne(`$set`+`$inc`) upsert，无 pipeline update。
+文档 schema：`{_id: <documentID>, version: <int 单调>, filter: {include: [...], exclude: [...]}}`。
+
+```text
+                 ┌──────────── 写侧（任一面）─────────────┐
+ gateway POST /config ┐                                    │
+ cli function=config  ├─→ cfgsync.Publish ──校验(allowlist+编译filter)──→ dao.EJSON updateOne($set+$inc) ─→ _tango_config
+ api.PublishConfig    ┘                                    │ (DocumentDB 安全)
+                                                           ▼
+ ┌──────────── 读侧 Watcher（embed daemon/gateway）───────────────────────────────────────┐
+ │  启动拉取 ─┐                                                                            │
+ │  poll tick ├─→ fetchDoc(findOne) ─┐                                                     │
+ │  reconcile ┘                      ├─→ observe(doc) ─→ [单调版本守卫: version>last?] ─否→ 丢弃(不回退) │
+ │  changestream 事件 ───────────────┘                          │是                        │
+ │                                                              ▼                         │
+ │                                  Registry.Apply ─按子树路由→ filter applier ─→ parser.SwapFilter │
+ │                                  (allowlist 外→拒绝记warn)     (编译失败→保留 last-good，不打挂)    │
+ └────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+环境前置与降级：`backend=changestream` 需副本集（普通 MongoDB）或 `modifyChangeStreams` 开启（DocumentDB，
+Elastic Cluster 不支持）；standalone mongod 无 change stream → 启动时**清晰报错并提示改用 `backend=poll`**（不静默吞）。
+`backend=poll` 任意拓扑可用，是默认。
+
 ## 6. 上报 filter
 
 上报 filter 作用于所有上报路径（daemon、gateway/cli/api upload），维度为
@@ -354,7 +434,11 @@ ON UPDATE 自动跳过；含表达式的 `UPDATE`（如 `SET n = n + 1`）翻译
 | `role/{gateway,cli}` | **dao** | `(*SQLResult).MarshalEJSON()` | HTTP / stdin 的 SQL 结果 EJSON 编码 |
 | `role/daemon` | **dao/parser/source/process** | `dao.New`；`(*parser.Config).Build`；`source.NewTailer(srcCfg.Tailer)`；`process.New(pipelineCfg, …).Run(ctx, tailerSrc)` | 编排长驻流水线 |
 | `client`（公共 SDK） | **role/api** | `api.New(o.ctx, &o.dao, &o.proc, &o.parser)`；`(*Engine).Upload`/`EnsureIndexes`/`Close` | redis-go 风格门面，复用真实 config 结构体 |
-| `config` | **dao/parser/source/process/role/logging** | 各 `(*Config).RegisterDefaults(set, prefix)`；各模块 `FromTree(t)` | 注册全键 + 按子树解码 |
+| `cfgsync` | **dao** | `(*Dao).EJSON(ctx, *EJSONRequest)`（findOne 读 / updateOne `$set`+`$inc` upsert 写）；`(*Dao).Watch(ctx, coll, pipeline, opts) → *mongo.ChangeStream` | 读中心文档 + 订阅 change stream + 原子发布（实现在 dao/ejson + dao/mongo，经 dao 门面） |
+| `cfgsync` | **parser** | `(*Parser).SwapFilter(include, exclude)` | 编译后再原子热替换 live filter（实现在 parser/filter，经 parser 门面；由内嵌角色注入回调调用） |
+| `role/{daemon,gateway}` | **cfgsync** | `cfgsync.FromTree(t)`；`cfgsync.New(d, cfg, reg.Apply)`；`(*Watcher).Run(ctx)`；`cfgsync.NewRegistry`/`RegisterFilter` | 内嵌读侧 Watcher（goroutine，panic recover），热替换自身 live filter |
+| `role/{api,gateway,cli}` | **cfgsync** | `cfgsync.Publish(ctx, d, cfg, doc) → version` | 三面配置发布（同核），`api.PublishConfig` 中转，gateway/cli 经 api |
+| `config` | **dao/parser/source/process/role/cfgsync/logging** | 各 `(*Config).RegisterDefaults(set, prefix)`；各模块 `FromTree(t)` | 注册全键 + 按子树解码 |
 
 ### 7.2 单行上报的函数调用链（运行时数据流）
 

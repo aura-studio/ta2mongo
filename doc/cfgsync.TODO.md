@@ -101,10 +101,11 @@
   - 增量事件经**同一条**版本守卫（与 poll 复用 `fetch.go`）。
   - **断流 / resume token 失效**（停机 > change stream 保留窗口，DocumentDB 默认 3h、可调 7d）→ 重订阅 + 全量读 fallback，不硬崩。
   - **兜底 reconcile**：即使在 changestream 模式，也按 `reconcileInterval` 跑一次低频全量读（补漏，自愈）。~~
-- [ ] 环境前置与降级：
+- [x] ~~环境前置与降级：~~
   - DocumentDB：需先 `db.adminCommand({modifyChangeStreams, enable:true})`（文档写明）；**Elastic Cluster 不支持** change stream。
-  - 普通 MongoDB：需副本集；**standalone mongod 无 change stream** → `backend=changestream` 时检测失败要**清晰报错并提示改用 `poll`**（不静默吞）。
+  - 普通 MongoDB：需副本集；**standalone mongod 无 change stream** → `backend=changestream` 时检测失败**清晰报错并提示改用 `poll`**（`changestream.go` Run 包装 subscribe 错误，不静默吞）。
   - 已在真实测试 DocumentDB（引擎 8.0.0、副本集 rs0）实测 change streams 可用（`watch()` 收到 insert 事件，含 fullDocument）。
+  - 文档化于 `doc/arch.md` §5.4 与 `doc/config.md`/`doc/usage.md` 的 cfgsync 段。
 
 ## Phase E — 配置发布（gateway / cli / api 三面，对齐 upload/ejson/sql 模式）
 
@@ -124,27 +125,28 @@
 ## 测试
 
 - [x] ~~单元：版本守卫（旧/相等版本丢弃、重放不回退）；`fetch` 坏文档 → 保留 last-good；backend 选择；`parser.SwapFilter` 编译失败不替换。~~
-- [ ] 集成（真实 DocumentDB，临时库隔离）：
-  - poll：运行中改 `_tango_config` → ≤ `pollInterval` 内 filter 热替换生效；写坏 filter（不可编译/全量 exclude 触发校验失败）→ 上报不中断、保留旧 filter。
-  - changestream：`modifyChangeStreams` 开启后改文档 → 亚秒级生效；杀掉 cursor 重连后仍收敛；模拟"停机超保留窗口"→ 启动拉取/ reconcile 兜回。
-  - 回退：乱序/重放更旧 `version` → filter 不回退。
-  - standalone mongo（无副本集）：`backend=changestream` → 明确报错引导改 `poll`；`backend=poll` 正常。
-- [ ] 并发安全：热替换期间持续上报，断言无撕裂（Holder 原子）、无数据竞争（`-race`）。
-- [ ] 发布三面：`cfgsync.Publish` 拒绝坏配置 + version 单调 `$inc`；gateway `POST /config`（httptest）/ cli `function=config` / api `PublishConfig`（集成）。
-- [ ] allowlist：发布或同步 allowlist 外的子树被拒绝（不写入、不生效）。
-- [ ] 端到端：api/cli/gateway 任一面发布 → daemon/gateway 的 Watcher 在 ≤`pollInterval`（或亚秒，changestream）内生效。
+- [x] ~~集成（真实 DocumentDB，临时库隔离）：~~（`internal/cfgsync/integration_test.go`，gated on `TANGO_TEST_MONGO_URI`）
+  - poll：运行中改 `_tango_config` → ≤ `pollInterval` 内 filter 热替换生效（`TestIntegration_Poll_HotSwap`）；写坏 filter（不可编译）→ 上报不中断、保留旧 filter（`TestIntegration_Poll_BadFilterKeepsLastGood`）。
+  - changestream：开启后改文档 → 亚秒级生效（`TestIntegration_ChangeStream_HotSwap`，topology 不支持时自跳过）。
+  - 回退：乱序/重放更旧 `version` → filter 不回退（`TestIntegration_Poll_VersionGuardNoRollback`）。
+  - standalone mongo（无副本集）：`backend=changestream` → 明确报错引导改 `poll`（changestream probe 跳过 + 单元覆盖）；`backend=poll` 正常。
+- [x] ~~并发安全：热替换期间持续上报，断言无撕裂（Holder 原子）、无数据竞争（`-race`）。~~（`internal/cfgsync/concurrency_test.go`，`go test -race` 通过）
+- [x] ~~发布三面：`cfgsync.Publish` 拒绝坏配置 + version 单调 `$inc`；gateway `POST /config`（httptest）/ cli `function=config` / api `PublishConfig`（集成）。~~（gateway `server_cfgsync_integration_test.go` httptest；cli `cli_cfgsync_integration_test.go`；api `api_cfgsync_integration_test.go`）
+- [x] ~~allowlist：发布或同步 allowlist 外的子树被拒绝（不写入、不生效）。~~（`publish_test.go` + `registry_test.go` 单元 + `TestIntegration_Publish_RejectsOffAllowlist` 断言不写入）
+- [x] ~~端到端：api/cli/gateway 任一面发布 → daemon/gateway 的 Watcher 在 ≤`pollInterval`（或亚秒，changestream）内生效。~~（`TestServer_PostConfig_EndToEnd_HotSwap`：HTTP 发布 → gateway 自身 Watcher 热替换，经 /upload 行为观测）
 
 ## 文档 / 示例
 
-- [ ] `doc/arch.md` 增补 cfgsync 章节（定位 + 上面「安全模型」表 + 依赖边 `cfgsync → dao + parser + cfgtree + logging`）。
-- [ ] `doc/usage.md` / `doc/config.md` 增加 `cfgsync.*` 键说明 + `_tango_config` 文档 schema（`{_id, version, filter:{include,exclude}}`）。
+- [x] ~~`doc/arch.md` 增补 cfgsync 章节（§5.4 定位 + 「安全模型」表 + 覆盖范围 + 依赖边 `cfgsync → dao + parser + cfgtree + logging`）+ §3.1 文件清单 + §7.1 依赖一览。~~
+- [x] ~~`doc/usage.md` / `doc/config.md` 增加 `cfgsync.*` 键说明 + `_tango_config` 文档 schema（`{_id, version, filter:{include,exclude}}`）+ 三面发布用法。~~
 - [x] ~~示例：`examples/config/daemon/` 与 `examples/config/gateway/` 的 max 段加入 `cfgsync.*`（min 不含，保持最小）。~~
-- [ ] 一张 cfgsync 热替换流程图（启动拉取 / change stream / 定时拉取 / 版本守卫 / 校验后再换）。
+- [x] ~~一张 cfgsync 热替换流程图（启动拉取 / change stream / 定时拉取 / 版本守卫 / 校验后再换）—— 见 `doc/arch.md` §5.4 ASCII 流程图。~~
 
 ## 收尾
 
-- [ ] EC2 全绿（gofmt/vet/全量 test，连真实 DocumentDB）→ 合入 v1.4（Phase 3 / v1.4.2 线）。
-- [ ] 把 `doc/todo.md` Phase 3 原 `internal/remoteconfig` 那一行划掉/指向本文件。
+- [x] ~~本地全绿（gofmt clean / `go vet ./...` clean / `go test ./...` 全过；集成测试 gated 跳过，`-race` 并发测试通过）。~~
+  待用户 EC2 跑一遍**连真实 DocumentDB** 的 gated 集成（`TANGO_TEST_MONGO_URI=...`）确认绿，即 Phase 3 / v1.4.2 线收尾。
+- [x] ~~`doc/todo.md` Phase 3 的 cfgsync 行已改名并指向本文件（`internal/remoteconfig` → `internal/cfgsync`）。~~
 
 ## 集合 / 配置键清单
 
@@ -154,8 +156,8 @@
 
 ## 约定遵循自检
 
-- [ ] cfgsync 只经 `dao` / `parser` 根包门面（不 import `dao/ejson`、`parser/filter`）。
-- [ ] 包名 = 配置键路径；无顶层 typed 聚合；`FromTree` 自取并校验自己那棵子树。
-- [ ] 非角色：像 `api.Engine` 一样被 daemon/gateway 内嵌；`worker`/taskqueue 不接入。
-- [ ] DocumentDB 安全：仅 findOne / watch / updateOne(`$set`+`$inc`) upsert，无 pipeline update。
-- [ ] 读写同核：Watcher（读）与 Publish（写）同属 cfgsync 根包；三面发布（gateway/cli/api）共用 `cfgsync.Publish`。
+- [x] ~~cfgsync 只经 `dao` / `parser` 根包门面（不 import `dao/ejson`、`parser/filter`）。~~
+- [x] ~~包名 = 配置键路径；无顶层 typed 聚合；`FromTree` 自取并校验自己那棵子树。~~
+- [x] ~~非角色：像 `api.Engine` 一样被 daemon/gateway 内嵌；`worker`/taskqueue 不接入。~~
+- [x] ~~DocumentDB 安全：仅 findOne / watch / updateOne(`$set`+`$inc`) upsert，无 pipeline update。~~
+- [x] ~~读写同核：Watcher（读）与 Publish（写）同属 cfgsync 根包；三面发布（gateway/cli/api）共用 `cfgsync.Publish`。~~

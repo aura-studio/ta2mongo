@@ -153,7 +153,35 @@ cat events.ndjson | tango --role.mode cli --process.mode batch --dao.mongo.uri m
 
 cli 角色由 `role.cli.function` 选功能：`upload`（默认，上面这种日志上报）、`ejson`（Mongo Data API，
 读一个 EJSON 请求、输出 EJSON 响应，等价 `POST /ejson`）或 `sql`（SQL Data API，读一条 SQL、输出 EJSON 结果，
-等价 `POST /sql`；见上面各节）。
+等价 `POST /sql`）或 `config`（cfgsync 配置发布，读一个配置文档、输出 `{version}`，等价 `POST /config`；见下节）。
+
+## cfgsync 配置发布与运行时热替换（`/config` · cli `config` · `api.PublishConfig`）
+
+cfgsync 把上报 filter 等**显式 allowlist 的配置**在运行中对齐中心文档 `_tango_config`：daemon / gateway
+（`cfgsync.enabled=true`）内嵌 Watcher 持续读取并**原子热替换** live filter；发布侧三面同核
+（`cfgsync.Publish`），先按 allowlist 校验 + 编译 filter 再写，坏配置在源头就挡掉。文档 schema：
+`{_id, version(单调), filter:{include,exclude}}`，`_id`/`version` 由 cfgsync 拥有（发布自动 `$inc`）。
+
+```bash
+# gateway：POST /config，body = 配置文档，返回 {"version": N}
+curl -X POST localhost:8080/config -H 'Content-Type: application/json' \
+  -d '{"filter":{"include":["#type == \"track\""],"exclude":[]}}'
+
+# cli：从 stdin 读配置文档，stdout 写 {"version": N}
+echo '{"filter":{"include":["#type == \"track\""]}}' \
+  | tango --role.mode cli --role.cli.function config --dao.mongo.uri mongodb://localhost:27017/tango
+```
+
+读侧由 daemon / gateway 开启（默认关闭）：
+
+```bash
+tango --role.mode gateway --dao.mongo.uri mongodb://localhost:27017/tango \
+  --cfgsync.enabled true --cfgsync.backend poll --cfgsync.pollInterval 5s
+```
+
+`backend=poll`（默认）任意拓扑可用，最坏陈旧 = 一个 `pollInterval`；`backend=changestream` 亚秒级，
+需副本集（普通 MongoDB）或 DocumentDB 开启 `modifyChangeStreams`，standalone mongod 会清晰报错提示改用 `poll`。
+单调版本守卫保证不回退（旧/重放版本丢弃）；新 filter 编译失败保留 last-good（坏配置打不挂）。
 
 ## 作为库使用（api 角色）
 
@@ -167,7 +195,7 @@ import (
     "github.com/aura-studio/tango/internal/role/api"
 )
 
-eng, _ := api.New(ctx, &dao.Config{Mongo: &daomongo.Config{URI: "mongodb://localhost:27017/tango"}}, &process.Config{Mode: string(process.ModeBatch)}, nil)
+eng, _ := api.New(ctx, &dao.Config{Mongo: &daomongo.Config{URI: "mongodb://localhost:27017/tango"}}, &process.Config{Mode: string(process.ModeBatch)}, nil, nil)
 defer eng.Close()
 eng.EnsureIndexes(ctx)
 
@@ -191,4 +219,15 @@ resp, _ := eng.EJSON(ctx, &dao.EJSONRequest{
 ```go
 res, _ := eng.SQL(ctx, "SELECT * FROM event LIMIT 5")
 // res.Kind == "select"; res.Rows ...
+```
+
+以及 cfgsync 配置发布（同核 `cfgsync.Publish`；校验+编译 filter 后原子写中心文档，返回新单调 version）：
+
+```go
+import "go.mongodb.org/mongo-driver/v2/bson"
+
+version, _ := eng.PublishConfig(ctx, bson.M{
+    "filter": bson.M{"include": []string{`#type == "track"`}},
+})
+// version 单调递增；daemon/gateway 的 Watcher 会在 ≤pollInterval（或亚秒，changestream）内热替换生效
 ```

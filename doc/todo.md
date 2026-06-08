@@ -53,7 +53,7 @@
 
 ## Phase 3 — cfgsync（动态配置同步）+ 文件断点续传 + operator/控制面接口
 
-- [ ] `internal/cfgsync`（原 `remoteconfig` 改名；与 `cfgtree` 一静一动成对）：盯 `_tango_config` 热替换 `parser.Filter()` holder，poll/changestream 可插拔 backend，接入 daemon+gateway，并经 gateway/cli/api 三面发布配置（同核 `cfgsync.Publish`）；`cfgsync.*`（enabled/backend/documentID/pollInterval/reconcileInterval）。**详见 [`doc/cfgsync.TODO.md`](cfgsync.TODO.md)**。
+- [x] ~~`internal/cfgsync`（原 `remoteconfig` 改名；与 `cfgtree` 一静一动成对）：盯 `_tango_config` 热替换 `parser.Filter()` holder，poll/changestream 可插拔 backend，接入 daemon+gateway，并经 gateway/cli/api 三面发布配置（同核 `cfgsync.Publish`）；`cfgsync.*`（enabled/backend/documentID/pollInterval/reconcileInterval/collection）。~~ 实现 + 单元/集成/`-race`/三面/端到端测试 + 文档全部完成（本地全绿，gated 集成待 EC2 连真实 DocumentDB 验证）。**详见 [`doc/cfgsync.TODO.md`](cfgsync.TODO.md)**。
 - [ ] `internal/source/filebatch`（新 `source.Source`）：glob 文件 + `_tango_fileupload` 断点续传 → 喂 process 流水线；入口 cli `function=fileupload`（和/或 gateway 文件模式）；`source.filebatch.*`。
 - [ ] 补齐 operator cli functions（upload|ejson|sql|backfill|publish|fileupload）与 gateway 控制面路由（`/publish/*`、`/backfill`）；确认 `/ingest` 仍不提供。
 - [ ] 测试：remoteconfig 运行中热替换 filter；filebatch 中断后续传；控制面接口 httptest —— 全连真实 DocumentDB。

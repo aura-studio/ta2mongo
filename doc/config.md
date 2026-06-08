@@ -94,6 +94,30 @@
 | `process.pipeline.channelBuffer` | optional | `0`(自动 = batchSize*2) | 每 worker 通道缓冲 |
 | `process.pipeline.deadLetterCap` | optional | `128` | 每 worker 死信批容量 |
 
+### cfgsync（daemon / gateway） → `internal/cfgsync`
+
+运行时动态配置同步（盯中心文档 `_tango_config`，运行中热替换上报 filter）。默认**关闭**——
+打开远程运行时重配是显式 opt-in。仅 daemon / gateway 读侧内嵌；发布面（写）由 gateway / cli / api 提供。
+
+| 键 | required/optional | 默认 | 说明 |
+|----|----|----|----|
+| `cfgsync.enabled` | optional | `false` | 是否启动 Watcher（读侧热替换） |
+| `cfgsync.backend` | optional | `poll` | 同步 backend：`poll`（任意拓扑可用，最稳）/ `changestream`（亚秒级，需副本集 / DocumentDB 开 `modifyChangeStreams`） |
+| `cfgsync.documentID` | optional | `filter` | `_tango_config` 中被跟踪文档的 `_id` |
+| `cfgsync.pollInterval` | optional | `5s` | poll backend 轮询周期 = 最坏陈旧窗口 |
+| `cfgsync.reconcileInterval` | optional | `60s` | changestream backend 的兜底全量读周期（补漏自愈） |
+| `cfgsync.collection` | optional | `_tango_config` | 中心配置集合名，一般不改（与发布侧同一集合） |
+
+**`_tango_config` 文档 schema**（`_id` 与单调 `version` 由 cfgsync 拥有，发布时自动 `$inc`）：
+
+```json
+{ "_id": "filter", "version": 7, "filter": { "include": ["#type == \"track\""], "exclude": [] } }
+```
+
+**配置发布三面**（同核 `cfgsync.Publish`，先按 allowlist 校验 + 编译 filter 再写）：gateway `POST /config`、
+cli `role.cli.function=config`、api `(*Engine).PublishConfig`。默认动态 allowlist 只放 `parser.filter`
+（`dao.mongo.*` / `role.mode` / `role.gateway.addr` / `cfgsync.*` 自身绝不可远程覆盖）。用法见 [usage.md](usage.md)。
+
 ### role.mode → `internal/role`
 
 | 键 | required/optional | 默认 | 说明 |
@@ -113,14 +137,15 @@
 |----|----|----|----|
 | `role.gateway.addr` | optional | `:8080` | HTTP 监听地址 |
 
-gateway 同时暴露两个独立 Data API 路径（与 `/upload` 互不影响，无额外配置项）：`POST /ejson`（Mongo Data API,
-完全放开）与 `POST /sql`（SQL Data API，SQL→MongoDB）。用法见 [usage.md](usage.md)。
+gateway 同时暴露三个独立路径（与 `/upload` 互不影响，无额外配置项）：`POST /ejson`（Mongo Data API,
+完全放开）、`POST /sql`（SQL Data API，SQL→MongoDB）、`POST /config`（cfgsync 配置发布，body = 配置文档，
+返回 `{version}`）。用法见 [usage.md](usage.md)。
 
 ### role.cli（cli） → `internal/role/cli`
 
 | 键 | required/optional | 默认 | 说明 |
 |----|----|----|----|
-| `role.cli.function` | optional | `upload` | cli 角色功能：`upload`（stdin 日志数组上报）/ `ejson`（stdin 一个 EJSON Mongo Data API 请求，等价 `POST /ejson`）/ `sql`（stdin 一条 SQL，等价 `POST /sql`），输出均为 EJSON |
+| `role.cli.function` | optional | `upload` | cli 角色功能：`upload`（stdin 日志数组上报）/ `ejson`（stdin 一个 EJSON Mongo Data API 请求，等价 `POST /ejson`）/ `sql`（stdin 一条 SQL，等价 `POST /sql`）/ `config`（stdin 一个 cfgsync 配置文档，等价 `POST /config`，输出 `{version}`），输出均为 EJSON/JSON |
 
 完整样例：[daemon](../examples/config/daemon/daemon.max.yaml)、
 [gateway](../examples/config/gateway/gateway.max.yaml)、
