@@ -188,7 +188,12 @@ func TestIntegration_Poll_BadFilterKeepsLastGood(t *testing.T) {
 
 	p, stop := startWatcher(t, d, cfg)
 	defer stop()
-	waitFor(t, "good filter applied", 5*time.Second, func() bool { return keeps(t, p, "track") })
+	// Discriminating wait: the default (empty) filter keeps everything, so a bare
+	// keeps(track) would pass before the include=track filter is actually live.
+	// Requiring !keeps(user_set) too forces the real filter to be applied first.
+	waitFor(t, "good filter applied", 5*time.Second, func() bool {
+		return keeps(t, p, "track") && !keeps(t, p, "user_set")
+	})
 
 	// Write an uncompilable filter at a higher version directly (Publish would
 	// reject it). The watcher must reject it on apply and keep the last-good.
@@ -211,7 +216,11 @@ func TestIntegration_Poll_VersionGuardNoRollback(t *testing.T) {
 
 	p, stop := startWatcher(t, d, cfg)
 	defer stop()
-	waitFor(t, "v5 applied", 5*time.Second, func() bool { return keeps(t, p, "user_set") })
+	// Discriminating wait (see BadFilterKeepsLastGood): require !keeps(track) so
+	// the empty startup filter does not satisfy the condition before v5 is live.
+	waitFor(t, "v5 applied", 5*time.Second, func() bool {
+		return keeps(t, p, "user_set") && !keeps(t, p, "track")
+	})
 
 	// Replay an older version with a different (also valid) filter → must be
 	// dropped by the monotonic guard (no rollback).
