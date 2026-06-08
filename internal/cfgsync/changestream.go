@@ -18,6 +18,25 @@ import (
 // bounded by ctx, so shutdown is still prompt.
 const resubscribeBackoff = 2 * time.Second
 
+// Change streams are not universally available. Before selecting
+// backend=changestream the deployment must satisfy one of:
+//
+//   - Plain MongoDB: a replica set (or sharded cluster). A standalone mongod has
+//     no oplog and cannot open a change stream.
+//   - DocumentDB: change streams enabled on the collection/db, e.g.
+//     db.adminCommand({modifyChangeStreams: 1, database: "...", collection: "",
+//     enable: true}). DocumentDB Elastic Clusters do not support change streams
+//     at all.
+//
+// When the topology does not support it, the initial subscribe fails and
+// unsupportedTopologyError turns the driver error into a clear, actionable one
+// that points at backend=poll instead of silently degrading.
+func unsupportedTopologyError(err error) error {
+	return fmt.Errorf("cfgsync: change stream unavailable on this topology "+
+		"(needs a replica set / DocumentDB modifyChangeStreams; use backend=%s otherwise): %w",
+		BackendPoll, err)
+}
+
 // changeStreamBackend subscribes to a change stream on the config collection for
 // low-latency pushes, with two safety nets layered on top: a subscribe-then-read
 // startup (closing the read↔subscribe TOCTOU gap), and a periodic full reconcile
@@ -46,9 +65,7 @@ type streamEvent struct {
 func (b *changeStreamBackend) Run(ctx context.Context, observe func(bson.M) error) error {
 	cs, err := b.subscribe(ctx)
 	if err != nil {
-		return fmt.Errorf("cfgsync: change stream unavailable on this topology "+
-			"(needs a replica set / DocumentDB modifyChangeStreams; use backend=%s otherwise): %w",
-			BackendPoll, err)
+		return unsupportedTopologyError(err)
 	}
 
 	// Subscribe-then-snapshot: now that the stream is live, the full read cannot

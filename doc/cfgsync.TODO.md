@@ -101,11 +101,11 @@
   - 增量事件经**同一条**版本守卫（与 poll 复用 `fetch.go`）。
   - **断流 / resume token 失效**（停机 > change stream 保留窗口，DocumentDB 默认 3h、可调 7d）→ 重订阅 + 全量读 fallback，不硬崩。
   - **兜底 reconcile**：即使在 changestream 模式，也按 `reconcileInterval` 跑一次低频全量读（补漏，自愈）。~~
-- [x] ~~环境前置与降级：~~
+- [x] ~~环境前置与降级：
   - DocumentDB：需先 `db.adminCommand({modifyChangeStreams, enable:true})`（文档写明）；**Elastic Cluster 不支持** change stream。
-  - 普通 MongoDB：需副本集；**standalone mongod 无 change stream** → `backend=changestream` 时检测失败**清晰报错并提示改用 `poll`**（`changestream.go` Run 包装 subscribe 错误，不静默吞）。
-  - 已在真实测试 DocumentDB（引擎 8.0.0、副本集 rs0）实测 change streams 可用（`watch()` 收到 insert 事件，含 fullDocument）。
-  - 文档化于 `doc/arch.md` §5.4 与 `doc/config.md`/`doc/usage.md` 的 cfgsync 段。
+  - 普通 MongoDB：需副本集；**standalone mongod 无 change stream** → `backend=changestream` 时检测失败要**清晰报错并提示改用 `poll`**（不静默吞）。
+  - 已在真实测试 DocumentDB（引擎 8.0.0、副本集 rs0）实测 change streams 可用（`watch()` 收到 insert 事件，含 fullDocument）。~~
+  - 落地：`unsupportedTopologyError`（`changestream.go`）把 subscribe 失败包成指向 `backend=poll` 的清晰错误（不静默降级），前置条件写进代码文档注释；`changestream_test.go` 覆盖；文档化于 `doc/arch.md` §5.4 与 `doc/config.md`/`doc/usage.md` 的 cfgsync 段。
 
 ## Phase E — 配置发布（gateway / cli / api 三面，对齐 upload/ejson/sql 模式）
 
