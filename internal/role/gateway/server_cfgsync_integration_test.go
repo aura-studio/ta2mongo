@@ -38,7 +38,7 @@ func cfgSetup(t *testing.T) (*cfgHarness, func()) {
 
 	ctx := context.Background()
 	dbName := fmt.Sprintf("tango_gw_cfg_%d_%d", time.Now().UnixNano(), rand.Intn(10000))
-	uri := testMongoURI + "/" + dbName
+	uri := spliceDB(testMongoURI, dbName)
 
 	cfgsyncCfg := &cfgsync.Config{Enabled: true, PollInterval: 200 * time.Millisecond}
 	srv, err := New(ctx, &dao.Config{Mongo: &daomongo.Config{URI: uri}},

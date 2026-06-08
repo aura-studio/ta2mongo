@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,7 +19,38 @@ import (
 	"github.com/aura-studio/tango/internal/role/api"
 )
 
-const testMongoURI = "mongodb://localhost:27017"
+// testMongoURI is the base server URI for integration tests. It honors
+// TANGO_TEST_MONGO_URI (e.g. Amazon DocumentDB, with its tls/retryWrites query
+// params) and falls back to a local mongod, so the same suite runs both locally
+// and against the real cluster on EC2.
+var testMongoURI = mongoBaseURI()
+
+func mongoBaseURI() string {
+	if u := os.Getenv("TANGO_TEST_MONGO_URI"); u != "" {
+		return u
+	}
+	return "mongodb://localhost:27017"
+}
+
+// spliceDB inserts /dbName before the query string of a mongo URI, replacing any
+// existing path. Plain concatenation would corrupt a DocumentDB URI (which
+// carries a ?tls=...&retryWrites=false query string); this preserves it.
+func spliceDB(uri, dbName string) string {
+	scheme := "mongodb://"
+	if strings.HasPrefix(uri, "mongodb+srv://") {
+		scheme = "mongodb+srv://"
+	}
+	rest := strings.TrimPrefix(uri, scheme)
+	query := ""
+	if i := strings.IndexByte(rest, '?'); i >= 0 {
+		query = rest[i:]
+		rest = rest[:i]
+	}
+	if i := strings.IndexByte(rest, '/'); i >= 0 {
+		rest = rest[:i]
+	}
+	return scheme + rest + "/" + dbName + query
+}
 
 // pingMongo checks if MongoDB is available with a short timeout.
 func pingMongo(t *testing.T) {
@@ -68,7 +101,7 @@ func testServerSetup(t *testing.T, mode process.Mode) (*harness, func()) {
 
 	ctx := context.Background()
 	dbName := fmt.Sprintf("tango_gw_test_%d_%d", time.Now().UnixNano(), rand.Intn(10000))
-	uri := testMongoURI + "/" + dbName
+	uri := spliceDB(testMongoURI, dbName)
 
 	srv, err := New(ctx, &dao.Config{Mongo: &daomongo.Config{URI: uri}}, &process.Config{Mode: string(mode)}, nil, nil, Config{})
 	if err != nil {

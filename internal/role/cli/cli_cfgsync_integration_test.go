@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -18,7 +19,37 @@ import (
 	daomongo "github.com/aura-studio/tango/internal/dao/mongo"
 )
 
-const testMongoURI = "mongodb://localhost:27017"
+// testMongoURI honors TANGO_TEST_MONGO_URI (e.g. Amazon DocumentDB) and falls
+// back to a local mongod, so the cfgsync cli-face suite runs against the real
+// cluster on EC2 as well as locally.
+var testMongoURI = mongoBaseURI()
+
+func mongoBaseURI() string {
+	if u := os.Getenv("TANGO_TEST_MONGO_URI"); u != "" {
+		return u
+	}
+	return "mongodb://localhost:27017"
+}
+
+// spliceDB inserts /dbName before the query string of a mongo URI, preserving
+// the tls/retryWrites params a DocumentDB URI carries (plain concatenation would
+// corrupt them).
+func spliceDB(uri, dbName string) string {
+	scheme := "mongodb://"
+	if strings.HasPrefix(uri, "mongodb+srv://") {
+		scheme = "mongodb+srv://"
+	}
+	rest := strings.TrimPrefix(uri, scheme)
+	query := ""
+	if i := strings.IndexByte(rest, '?'); i >= 0 {
+		query = rest[i:]
+		rest = rest[:i]
+	}
+	if i := strings.IndexByte(rest, '/'); i >= 0 {
+		rest = rest[:i]
+	}
+	return scheme + rest + "/" + dbName + query
+}
 
 // pingMongo skips the test when no MongoDB is reachable.
 func pingMongo(t *testing.T) {
@@ -41,7 +72,7 @@ func cliDaoCfg(t *testing.T) (*dao.Config, func()) {
 	t.Helper()
 	pingMongo(t)
 	dbName := fmt.Sprintf("tango_cli_cfg_%d_%d", time.Now().UnixNano(), rand.Intn(10000))
-	uri := testMongoURI + "/" + dbName
+	uri := spliceDB(testMongoURI, dbName)
 	cleanup := func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
