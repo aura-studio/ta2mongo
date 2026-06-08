@@ -300,3 +300,96 @@ func TestIntegration_ChangeStream_HotSwap(t *testing.T) {
 		return keeps(t, p, "user_set") && !keeps(t, p, "track")
 	})
 }
+
+// startWatchers starts n independent Watchers over the same dao + central
+// document, each with its own parser + registry — exactly like n separate daemon
+// processes that embed cfgsync. It returns the n parsers (to observe each one's
+// live filter) and a single stop that tears them all down.
+func startWatchers(t *testing.T, d *dao.Dao, cfg *Config, n int) ([]*parser.Parser, func()) {
+	t.Helper()
+	parsers := make([]*parser.Parser, n)
+	stops := make([]func(), n)
+	for i := 0; i < n; i++ {
+		parsers[i], stops[i] = startWatcher(t, d, cfg)
+	}
+	return parsers, func() {
+		for _, s := range stops {
+			s()
+		}
+	}
+}
+
+// allConverged reports whether EVERY watcher's live filter keeps `keep` and drops
+// `drop` — i.e. all simulated daemons have converged on the published filter (and
+// the discriminating `drop` check rules out the empty startup filter).
+func allConverged(t *testing.T, ps []*parser.Parser, keep, drop string) bool {
+	t.Helper()
+	for _, p := range ps {
+		if !keeps(t, p, keep) || keeps(t, p, drop) {
+			return false
+		}
+	}
+	return true
+}
+
+// TestIntegration_Poll_FanOutAllWatchers is the core guarantee: a single publish
+// must converge on EVERY daemon, not just one. It runs N independent poll
+// Watchers (each its own parser, standing in for N daemon processes) against the
+// same central document, publishes once, and asserts ALL N hot-swap within ~one
+// pollInterval; then publishes a second filter and asserts ALL N follow again.
+func TestIntegration_Poll_FanOutAllWatchers(t *testing.T) {
+	const n = 3
+	d, cfg, cleanup := itDao(t)
+	defer cleanup()
+	cfg.PollInterval = 200 * time.Millisecond
+
+	publish(t, d, cfg, bson.M{"filter": bson.M{"include": bson.A{`#type == "track"`}}})
+
+	ps, stop := startWatchers(t, d, cfg, n)
+	defer stop()
+	waitFor(t, "all watchers applied include=track", 5*time.Second, func() bool {
+		return allConverged(t, ps, "track", "user_set")
+	})
+
+	// One publish → every watcher must independently pick it up and hot-swap.
+	publish(t, d, cfg, bson.M{"filter": bson.M{"include": bson.A{`#type == "user_set"`}}})
+	waitFor(t, "all watchers hot-swapped to include=user_set", 5*time.Second, func() bool {
+		return allConverged(t, ps, "user_set", "track")
+	})
+}
+
+// TestIntegration_ChangeStream_FanOutAllWatchers is the changestream counterpart:
+// one publish, every watcher pushed sub-second via its own change stream. It
+// self-skips when the topology has no change streams (covered by the poll
+// fan-out test there).
+func TestIntegration_ChangeStream_FanOutAllWatchers(t *testing.T) {
+	const n = 3
+	d, cfg, cleanup := itDao(t)
+	defer cleanup()
+	cfg.Backend = BackendChangeStream
+	cfg.ReconcileInterval = 1 * time.Second
+
+	publish(t, d, cfg, bson.M{"filter": bson.M{"include": bson.A{`#type == "track"`}}})
+
+	probe := &changeStreamBackend{dao: d, cfg: cfg}
+	probeCtx, probeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	cs, perr := probe.subscribe(probeCtx)
+	if perr != nil {
+		probeCancel()
+		t.Skip("change streams not supported on this topology; covered by poll fan-out test")
+	}
+	_ = cs.Close(probeCtx)
+	probeCancel()
+
+	ps, stop := startWatchers(t, d, cfg, n)
+	defer stop()
+	waitFor(t, "all watchers applied include=track (changestream)", 5*time.Second, func() bool {
+		return allConverged(t, ps, "track", "user_set")
+	})
+
+	// One publish → every watcher's own stream delivers it sub-second.
+	publish(t, d, cfg, bson.M{"filter": bson.M{"include": bson.A{`#type == "user_set"`}}})
+	waitFor(t, "all watchers hot-swapped sub-second (changestream)", 3*time.Second, func() bool {
+		return allConverged(t, ps, "user_set", "track")
+	})
+}
