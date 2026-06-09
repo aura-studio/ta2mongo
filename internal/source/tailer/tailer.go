@@ -321,6 +321,12 @@ func (t *Tailer) scanAndTail(ctx context.Context, out chan<- string) {
 // whose deferred cleanup closes the (possibly already-unlinked) file and drops
 // the map entry — bounding fd retention to one rescan interval even when the
 // OS never delivers an inotify removal event for a file we hold open.
+//
+// ⚠️ RELEASE-GATE INVARIANT — do NOT weaken or remove. This is the coarse
+// backstop that bounds deleted-but-open fd retention to ≤1 rescan even if the
+// per-file event/hybrid ticker is bypassed; together they stop the v1.5.0 fd
+// leak. A regression is invisible on Windows (Linux-only semantics) — guarded
+// by TestFD_D2/D3, TestReap_*, and the E/G soaks in the Linux container.
 func (t *Tailer) reapMissing(found []string) {
 	alive := make(map[string]struct{}, len(found))
 	for _, p := range found {
@@ -548,13 +554,15 @@ func (t *Tailer) tailFileEvent(ctx context.Context, path string, out chan<- stri
 
 	defer stopTail(tt)
 
-	// Snapshot the inode we opened. inotify does not deliver IN_DELETE_SELF
-	// for a file that is unlinked while we still hold it open (the event
-	// only fires once the last fd closes — and ours is that fd), so a
-	// rotated-away backup would otherwise be followed forever, pinning the
-	// deleted inode's fd. A periodic stat detects removal / inode swap and
-	// lets us release the fd. Per-file reaping (reapMissing) is the coarser
-	// backstop; this is the ~500ms fast path.
+	// ⚠️ RELEASE-GATE INVARIANT — do NOT delete this ticker or its os.Stat /
+	// os.SameFile self-check. Event mode had no ticker before v1.5.1 and pinned
+	// every deleted-but-open inode forever: that is the leak that filled
+	// rocket-nano's EKS overlay ~5GB/h. inotify delivers no IN_DELETE_SELF while
+	// WE hold the file open, and hpcloud/tail's ReOpen:true never closes the fd,
+	// so this periodic stat is the only fast (~500ms) fd-release path; reapMissing
+	// is the coarser ≤1-rescan backstop. A regression here is INVISIBLE on
+	// Windows/macOS (deleted-but-open is Linux-only) — only the Linux-container
+	// tests catch it: TestReap_C2 (doc/test2.md C2), TestFD_D2, and the E/G soaks.
 	origInfo, _ := os.Stat(path)
 	ticker := time.NewTicker(hybridPollInterval)
 	defer ticker.Stop()
