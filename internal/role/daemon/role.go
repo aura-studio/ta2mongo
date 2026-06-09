@@ -23,45 +23,14 @@ import (
 // interrupted.
 type Role struct{}
 
-// Run slices the dao / parser / source / process branches it needs from cfg,
-// builds the report service, installs signal handling, and runs the pipeline
-// until SIGINT/SIGTERM.
+// Run builds the report service from cfg, installs signal handling, and runs the
+// pipeline until SIGINT/SIGTERM. The per-module config slicing lives in
+// NewFromTree.
 func (Role) Run(ctx context.Context, cfg cfgtree.Tree) error {
-	daoCfg, err := dao.FromTree(cfg)
-	if err != nil {
-		return err
-	}
-	parserCfg, err := parser.FromTree(cfg)
-	if err != nil {
-		return err
-	}
-	srcCfg, err := source.FromTree(cfg)
-	if err != nil {
-		return err
-	}
-	procCfg, err := process.FromTree(cfg)
-	if err != nil {
-		return err
-	}
-	cfgsyncCfg, err := cfgsync.FromTree(cfg)
-	if err != nil {
-		return err
-	}
-	if len(srcCfg.Tailer.LogPattern) == 0 {
-		return fmt.Errorf("config: source.tailer.logPattern is required (at least one regex)")
-	}
-
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	logging.WithFields(logging.Fields{
-		"pid":       os.Getpid(),
-		"go_procs":  runtime.GOMAXPROCS(0),
-		"mongo_uri": maskURI(daoCfg.Mongo.URI),
-		"role":      "daemon",
-	}).Info("tango daemon: starting")
-
-	svc, err := New(ctx, daoCfg, parserCfg, srcCfg, procCfg, cfgsyncCfg)
+	svc, err := NewFromTree(ctx, cfg)
 	if err != nil {
 		logging.WithError(err).Error("tango daemon: init failed")
 		return err
@@ -78,6 +47,49 @@ func (Role) Run(ctx context.Context, cfg cfgtree.Tree) error {
 	}
 
 	return svc.Run(ctx)
+}
+
+// NewFromTree builds the daemon Service from the resolved top-level config tree:
+// it slices the dao / parser / source / process / cfgsync branches (each module
+// owns its own FromTree decode + defaults + validation), enforces the
+// daemon-only requirement that a log pattern is configured, logs the startup
+// banner, and delegates to New. It is the wiring-layer counterpart to New —
+// roles build the service from the whole config with one call, while tests and
+// programmatic callers keep using New with typed module configs directly.
+func NewFromTree(ctx context.Context, cfg cfgtree.Tree) (*Service, error) {
+	daoCfg, err := dao.FromTree(cfg)
+	if err != nil {
+		return nil, err
+	}
+	parserCfg, err := parser.FromTree(cfg)
+	if err != nil {
+		return nil, err
+	}
+	srcCfg, err := source.FromTree(cfg)
+	if err != nil {
+		return nil, err
+	}
+	procCfg, err := process.FromTree(cfg)
+	if err != nil {
+		return nil, err
+	}
+	cfgsyncCfg, err := cfgsync.FromTree(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	if srcCfg.Tailer == nil || len(srcCfg.Tailer.LogPattern) == 0 {
+		return nil, fmt.Errorf("config: source.tailer.logPattern is required (at least one regex)")
+	}
+
+	logging.WithFields(logging.Fields{
+		"pid":       os.Getpid(),
+		"go_procs":  runtime.GOMAXPROCS(0),
+		"mongo_uri": maskURI(daoCfg.Mongo.URI),
+		"role":      "daemon",
+	}).Info("tango daemon: starting")
+
+	return New(ctx, daoCfg, parserCfg, srcCfg, procCfg, cfgsyncCfg)
 }
 
 // maskURI masks the credentials portion of a MongoDB URI for safe logging.

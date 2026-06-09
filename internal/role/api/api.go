@@ -24,6 +24,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 
 	"github.com/aura-studio/tango/internal/cfgsync"
+	"github.com/aura-studio/tango/internal/cfgtree"
 	"github.com/aura-studio/tango/internal/dao"
 	"github.com/aura-studio/tango/internal/logging"
 	"github.com/aura-studio/tango/internal/parser"
@@ -84,6 +85,33 @@ func New(ctx context.Context, daoCfg *dao.Config, procCfg *process.Config, parse
 	cfgsyncCfg.ApplyDefaults()
 
 	return &Engine{dao: da, parser: p, procCfg: procCfg, cfgsyncCfg: cfgsyncCfg}, nil
+}
+
+// NewFromTree builds an Engine from the resolved top-level config tree, slicing
+// the dao / process / parser / cfgsync branches it needs (each module owns its
+// own FromTree decode + defaults + validation) and delegating to New. It is the
+// wiring-layer counterpart to New: the gateway/role layers construct the engine
+// from the whole config with one call, while library/SDK callers keep using New
+// with typed module configs directly. The source is supplied per run (Upload),
+// so no source branch is sliced here.
+func NewFromTree(ctx context.Context, cfg cfgtree.Tree) (*Engine, error) {
+	daoCfg, err := dao.FromTree(cfg)
+	if err != nil {
+		return nil, err
+	}
+	procCfg, err := process.FromTree(cfg)
+	if err != nil {
+		return nil, err
+	}
+	parserCfg, err := parser.FromTree(cfg)
+	if err != nil {
+		return nil, err
+	}
+	cfgsyncCfg, err := cfgsync.FromTree(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return New(ctx, daoCfg, procCfg, parserCfg, cfgsyncCfg)
 }
 
 // Close disconnects from MongoDB and releases all resources.

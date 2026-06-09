@@ -11,6 +11,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 
 	"github.com/aura-studio/tango/internal/cfgsync"
+	"github.com/aura-studio/tango/internal/cfgtree"
 	"github.com/aura-studio/tango/internal/dao"
 	"github.com/aura-studio/tango/internal/logging"
 	"github.com/aura-studio/tango/internal/parser"
@@ -36,6 +37,28 @@ func New(ctx context.Context, daoCfg *dao.Config, procCfg *process.Config, parse
 		return nil, err
 	}
 	return &Server{engine: eng}, nil
+}
+
+// NewFromTree builds a Server from the resolved top-level config tree: it slices
+// and validates the gateway's own role.gateway.* section and delegates engine
+// construction to api.NewFromTree (dao / process / parser / cfgsync). It returns
+// the resolved gateway Config alongside the Server so the caller can read the
+// listen address. The typed New remains for tests and programmatic construction.
+func NewFromTree(ctx context.Context, cfg cfgtree.Tree) (*Server, Config, error) {
+	var gwCfg Config
+	if err := cfg.Sub("role").Sub("gateway").Into(&gwCfg); err != nil {
+		return nil, Config{}, err
+	}
+	gwCfg.ApplyDefaults()
+	if err := gwCfg.Validate(); err != nil {
+		return nil, Config{}, err
+	}
+
+	eng, err := api.NewFromTree(ctx, cfg)
+	if err != nil {
+		return nil, Config{}, err
+	}
+	return &Server{engine: eng}, gwCfg, nil
 }
 
 // Close disconnects from MongoDB and releases all resources.
