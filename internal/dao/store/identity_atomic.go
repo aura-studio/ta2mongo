@@ -10,6 +10,16 @@ import (
 )
 
 // nextUserID atomically increments and returns the next #user_id.
+//
+// FindOneAndUpdate(upsert) is atomic once the counter document exists, but its
+// FIRST creation races: when several workers call this concurrently before the
+// {_id:"user_id"} doc exists, each attempts the upsert-insert and all but one
+// get E11000 (duplicate key on id_counter._id_). That is expected, not fatal —
+// the loser simply retries, and the retry finds the now-existing doc and $inc's
+// it. Without this retry the resolve failed and the line was dead-lettered: seen
+// in production on DocumentDB under concurrent first-seen-user load (its upsert
+// concurrency makes the collision far more likely than on stock MongoDB), where
+// it silently sent events to dead_letter instead of writing them.
 func (ir *IdentityResolver) nextUserID(ctx context.Context) (int64, error) {
 	filter := bson.M{"_id": "user_id"}
 	update := bson.M{"$inc": bson.M{"seq": int64(1)}}
@@ -20,11 +30,23 @@ func (ir *IdentityResolver) nextUserID(ctx context.Context) (int64, error) {
 	var result struct {
 		Seq int64 `bson:"seq"`
 	}
-	err := ir.counter.FindOneAndUpdate(ctx, filter, update, opts).Decode(&result)
-	if err != nil {
-		return 0, err
+	const maxAttempts = 8
+	var err error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		err = ir.counter.FindOneAndUpdate(ctx, filter, update, opts).Decode(&result)
+		if err == nil {
+			return result.Seq, nil
+		}
+		// Only the cold-start upsert-insert race is retryable; anything else
+		// (network, auth, ctx cancel) is returned immediately.
+		if !mongo.IsDuplicateKeyError(err) {
+			return 0, err
+		}
+		if ctx.Err() != nil {
+			return 0, ctx.Err()
+		}
 	}
-	return result.Seq, nil
+	return 0, fmt.Errorf("nextUserID: counter upsert kept losing the create race after %d attempts: %w", maxAttempts, err)
 }
 
 // atomicCreateForAccountID creates a new mapping for a new account_id.
