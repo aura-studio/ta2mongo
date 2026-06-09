@@ -18,8 +18,19 @@ import (
 	"github.com/aura-studio/tango/internal/source"
 )
 
-// statsReportInterval is how often the report service logs processing statistics.
-const statsReportInterval = 60 * time.Second
+// statsReportInterval is how often the report service logs processing statistics
+// and runs the fd watchdog check. It is a var (not a const) solely so tests can
+// shrink it to avoid a 60s wait; production never overrides it.
+var statsReportInterval = 60 * time.Second
+
+// fdWatchdogTriggered reports whether the open-fd watchdog should fire: only when
+// a positive threshold is configured AND the current open-fd count strictly
+// exceeds it. A non-positive threshold (default/disabled) never fires, and an
+// unknown count (openFDs == -1 off Linux) never fires because -1 is not > any
+// threshold >= 1.
+func fdWatchdogTriggered(openFDs, threshold int) bool {
+	return threshold > 0 && openFDs > threshold
+}
 
 // Service is the main runtime that connects all components together. It is built
 // from the module configs the daemon needs (dao + parser + source + process),
@@ -230,7 +241,7 @@ func (d *Service) reportStats(ctx context.Context, tailerSrc source.Source, stat
 			}).Info("report: runtime stats")
 
 			// fd watchdog: graceful self-restart when fds exceed the threshold.
-			if threshold := d.srcCfg.Tailer.MaxOpenFDs; threshold > 0 && openFDs > threshold {
+			if threshold := d.srcCfg.Tailer.MaxOpenFDs; fdWatchdogTriggered(openFDs, threshold) {
 				logging.WithFields(logging.Fields{
 					"open_fds":     openFDs,
 					"threshold":    threshold,
