@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"time"
 
 	"github.com/aura-studio/tango/internal/cfgsync"
@@ -96,6 +97,14 @@ func (d *Service) Run(ctx context.Context) error {
 		"tail_mode":      tcfg.TailMode,
 	}).Info("report: starting pipeline")
 
+	// Derive a cancellable child context so the fd watchdog (in reportStats) can
+	// trigger a graceful self-restart: cancelling runCtx drains and flushes the
+	// pipeline, Run returns cleanly, the process exits, and the orchestrator's
+	// restart policy recreates the container with a fresh fd table. A SIGTERM on
+	// the parent ctx cancels runCtx too, so the normal shutdown path is unchanged.
+	runCtx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
+
 	// Build the tailer source via the source facade; the pipeline uploader runs it.
 	t := source.NewTailer(tcfg)
 
@@ -103,25 +112,25 @@ func (d *Service) Run(ctx context.Context) error {
 	stats := &process.Counters{}
 	startTime := time.Now()
 
-	// Launch periodic stats reporter.
+	// Launch periodic stats reporter (also hosts the fd watchdog).
 	reportDone := make(chan struct{})
-	go d.reportStats(ctx, stats, startTime, reportDone)
+	go d.reportStats(runCtx, t, stats, startTime, cancelRun, reportDone)
 
 	// Launch the runtime config-sync watcher (opt-in): it hot-swaps the live
-	// reporting filter from the central config document. It shares this ctx, so
+	// reporting filter from the central config document. It shares runCtx, so
 	// it stops when the daemon does, and runs under its own panic recover like
 	// the stats reporter above.
-	d.startCfgsync(ctx)
+	d.startCfgsync(runCtx)
 
-	// Drive the async pipeline strategy; it blocks until ctx is cancelled, then
-	// the workers flush and exit.
+	// Drive the async pipeline strategy; it blocks until runCtx is cancelled,
+	// then the workers flush and exit.
 	procCfg := *d.procCfg
 	procCfg.Mode = string(process.ModePipeline)
 	up, err := process.New(&procCfg, d.dao, d.parser, stats)
 	if err != nil {
 		return err
 	}
-	if err := up.Run(ctx, t); err != nil && !errors.Is(err, context.Canceled) {
+	if err := up.Run(runCtx, t); err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}
 
@@ -156,7 +165,11 @@ func (d *Service) startCfgsync(ctx context.Context) {
 }
 
 // reportStats periodically logs processing statistics every statsReportInterval.
-func (d *Service) reportStats(ctx context.Context, stats *process.Counters, startTime time.Time, done chan<- struct{}) {
+// It also hosts the fd watchdog: when source.tailer.maxOpenFDs is set and the
+// process's open fd count exceeds it, triggerRestart cancels the run context to
+// perform a graceful self-restart (see Run). tailerSrc is the live tailer,
+// queried for its tailed-file count (a direct proxy for open log fds).
+func (d *Service) reportStats(ctx context.Context, tailerSrc source.Source, stats *process.Counters, startTime time.Time, triggerRestart context.CancelFunc, done chan<- struct{}) {
 	defer close(done)
 	defer logging.Recover("daemon stats reporter")
 
@@ -200,6 +213,33 @@ func (d *Service) reportStats(ctx context.Context, stats *process.Counters, star
 				"total_filtered":     cur.Filtered,
 				"total_filter_err":   cur.FilterErrors,
 			}).Info("report: cumulative stats")
+
+			// Runtime / resource stats. open_fds is -1 on non-Linux (and the
+			// watchdog is inert there). tailed_files tracks live tail
+			// goroutines, the most direct signal of an fd leak.
+			goroutines := runtime.NumGoroutine()
+			openFDs := openFDCount()
+			tailedFiles := -1
+			if tc, ok := tailerSrc.(interface{ TailedCount() int }); ok {
+				tailedFiles = tc.TailedCount()
+			}
+			logging.WithFields(logging.Fields{
+				"goroutines":   goroutines,
+				"open_fds":     openFDs,
+				"tailed_files": tailedFiles,
+			}).Info("report: runtime stats")
+
+			// fd watchdog: graceful self-restart when fds exceed the threshold.
+			if threshold := d.srcCfg.Tailer.MaxOpenFDs; threshold > 0 && openFDs > threshold {
+				logging.WithFields(logging.Fields{
+					"open_fds":     openFDs,
+					"threshold":    threshold,
+					"goroutines":   goroutines,
+					"tailed_files": tailedFiles,
+				}).Error("report: open fd count exceeded threshold — triggering graceful restart (drain, flush, exit for orchestrator to recreate the container)")
+				triggerRestart()
+				return
+			}
 
 			prev = cur
 		}

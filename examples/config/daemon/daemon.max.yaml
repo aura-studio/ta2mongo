@@ -39,6 +39,7 @@ source:                           # internal/source
     rescanInterval: 30s           # [optional]（默认 30s）重新扫描新文件的间隔
     pollInterval: 200ms           # [optional]（默认 200ms）poll/hybrid 轮询节奏
     maxLineBytes: 10485760        # [optional]（默认 10485760 = 10MB）单行最大字节
+    maxOpenFDs: 0                 # [optional]（默认 0 = 关闭）fd 看门狗：进程打开 fd 数超此值则优雅重启（drain+flush 后退出，交编排器重建）。仅 Linux 生效；设在 ulimit -n 之下、正常用量之上
 
 process:                          # internal/process（上传策略处理参数；daemon 常驻追尾固定 pipeline 语义）
   mode: batch                     # [optional]（默认 batch）gateway/cli/api 使用；daemon 忽略并固定 pipeline

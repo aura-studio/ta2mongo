@@ -38,6 +38,16 @@ type Config struct {
 	PollInterval time.Duration `mapstructure:"pollInterval"`
 	// MaxLineBytes caps a single log line's length. Default 10485760 (10 MB).
 	MaxLineBytes int `mapstructure:"maxLineBytes"`
+	// MaxOpenFDs is a process-wide safety valve. When the daemon's open file
+	// descriptor count exceeds this value, it triggers a graceful restart
+	// (drain + flush in-flight batches, then exit so the orchestrator's restart
+	// policy recreates the container with a fresh fd table). 0 (default)
+	// disables the watchdog. Only effective on Linux, where the fd count is
+	// observable via /proc/self/fd; elsewhere it is inert. Set it comfortably
+	// below the container's `ulimit -n` and above normal usage (≈ number of
+	// tailed files plus a handful of Mongo/connection fds). The root-cause fd
+	// leak is fixed by tailer reaping — this is a defense-in-depth backstop.
+	MaxOpenFDs int `mapstructure:"maxOpenFDs"`
 }
 
 // Validate checks the tail mode is recognised (empty = use default). The log
@@ -61,6 +71,7 @@ func (c *Config) RegisterDefaults(set func(key string, value any), prefix string
 	set(prefix+".rescanInterval", "0s")
 	set(prefix+".pollInterval", "0s")
 	set(prefix+".maxLineBytes", 0)
+	set(prefix+".maxOpenFDs", 0)
 }
 
 // ApplyDefaults fills unset tailer options.
@@ -76,5 +87,8 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.MaxLineBytes <= 0 {
 		c.MaxLineBytes = defaultMaxLineSize
+	}
+	if c.MaxOpenFDs < 0 {
+		c.MaxOpenFDs = 0 // negative is meaningless; treat as disabled
 	}
 }

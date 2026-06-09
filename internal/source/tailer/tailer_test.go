@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -701,5 +702,89 @@ func TestRescan_StreamsNewLinesFromNewFile(t *testing.T) {
 
 	cancel()
 	for range out {
+	}
+}
+
+// ---------------------------------------------------------------------------
+// fd / goroutine reaping on delete (v1.5 fd-leak regression)
+// ---------------------------------------------------------------------------
+
+// waitTailedCount polls the tailed map until len == want or the deadline
+// elapses, returning the last observed count.
+func waitTailedCount(tl *Tailer, want int, timeout time.Duration) int {
+	deadline := time.Now().Add(timeout)
+	var n int
+	for {
+		tl.mu.Lock()
+		n = len(tl.tailed)
+		tl.mu.Unlock()
+		if n == want || time.Now().After(deadline) {
+			return n
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// TestReap_DeletedFileReleasesTail is the v1.5 fd-leak regression. When a file
+// being tailed is deleted (e.g. lumberjack removing a rotated backup), the
+// per-file tail goroutine must be reaped and its fd released. Before the fix,
+// in hybrid/event modes the goroutine followed the deleted-but-open inode
+// forever — inotify never delivers IN_DELETE_SELF for a file we hold open — so
+// the fd (and the tailed-map entry) leaked until daemon shutdown. We assert the
+// tailed-map drains to zero after deletion + a rescan, which only happens once
+// the goroutine exits and releases its fd. Covers all three tail modes.
+func TestReap_DeletedFileReleasesTail(t *testing.T) {
+	for _, mode := range []string{TailModePoll, TailModeHybrid, TailModeEvent} {
+		mode := mode
+		t.Run(mode, func(t *testing.T) {
+			if mode == TailModePoll && runtime.GOOS == "windows" {
+				// Poll mode holds the file via plain os.Open, which on
+				// Windows omits FILE_SHARE_DELETE, so the OS blocks deleting
+				// the still-open file — we can't even set up the scenario.
+				// The leak this guards against is a Linux/inotify phenomenon;
+				// on Linux deleting an open file always succeeds.
+				t.Skip("poll-mode delete test is not representable on Windows")
+			}
+
+			dir := t.TempDir()
+			logFile := filepath.Join(dir, "app.log")
+			if err := os.WriteFile(logFile, []byte("line1\n"), 0644); err != nil {
+				t.Fatal(err)
+			}
+
+			pattern := dir + "/*.log"
+			// Short rescan so reapMissing runs promptly after deletion.
+			tl := New([]string{pattern}, 100*time.Millisecond, mode)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			out := tl.Run(ctx)
+			drained := make(chan struct{})
+			go func() {
+				defer close(drained)
+				for range out {
+				}
+			}()
+
+			if got := waitTailedCount(tl, 1, 2*time.Second); got != 1 {
+				t.Fatalf("%s: expected 1 tailed file before delete, got %d", mode, got)
+			}
+
+			// Delete the file (lumberjack removing a rotated backup).
+			if err := os.Remove(logFile); err != nil {
+				t.Fatalf("%s: remove failed: %v", mode, err)
+			}
+
+			// The tail goroutine must be reaped and drop its map entry; this
+			// only occurs once it stops following the deleted inode and frees
+			// the fd. Allow several rescan cycles.
+			if got := waitTailedCount(tl, 0, 5*time.Second); got != 0 {
+				t.Fatalf("%s: tail not reaped after delete; tailed=%d (fd leak)", mode, got)
+			}
+
+			cancel()
+			<-drained
+		})
 	}
 }

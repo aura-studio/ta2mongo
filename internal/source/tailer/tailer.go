@@ -217,8 +217,11 @@ type Tailer struct {
 	pollInterval time.Duration // EOF re-read cadence (poll/hybrid modes)
 	maxLineSize  int           // scanner buffer cap per line
 
-	mu     sync.Mutex
-	tailed map[string]struct{} // tracks which files are already being tailed
+	mu sync.Mutex
+	// tailed maps a path to the cancel func of its per-file tail goroutine.
+	// Presence means the file is currently being tailed; calling the cancel
+	// func stops that goroutine (which then deletes its own entry on exit).
+	tailed map[string]context.CancelFunc
 }
 
 // New creates a Tailer that watches the given glob patterns.
@@ -235,8 +238,17 @@ func New(patterns []string, rescanInterval time.Duration, tailMode string) *Tail
 		tailMode:       tailMode,
 		pollInterval:   defaultPollInterval,
 		maxLineSize:    defaultMaxLineSize,
-		tailed:         make(map[string]struct{}),
+		tailed:         make(map[string]context.CancelFunc),
 	}
+}
+
+// TailedCount returns the number of files currently being tailed (i.e. live
+// per-file tail goroutines). With the reaping logic in scanAndTail this tracks
+// open log fds closely, so a steadily climbing value signals an fd leak.
+func (t *Tailer) TailedCount() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.tailed)
 }
 
 // WithTuning overrides the poll interval and max line size. Non-positive
@@ -283,21 +295,58 @@ func (t *Tailer) run(ctx context.Context, out chan<- string) {
 	}
 }
 
-// scanAndTail discovers files matching patterns and starts tailing new ones.
+// scanAndTail discovers files matching patterns, reaps tails whose file has
+// disappeared, and starts tailing newly-discovered files.
 func (t *Tailer) scanAndTail(ctx context.Context, out chan<- string) {
-	for _, path := range discoverFiles(t.patterns) {
+	found := discoverFiles(t.patterns)
+	t.reapMissing(found)
+	for _, path := range found {
 		t.startFile(ctx, path, out)
 	}
 }
 
-// startFile begins tailing a single file if not already tailed.
+// reapMissing cancels the tail goroutine of every currently-tailed path that
+// is no longer present in the freshly-discovered set. discoverFiles only
+// returns paths that still exist, so anything tracked but absent has been
+// deleted or rotated away. Cancelling its context unblocks the goroutine,
+// whose deferred cleanup closes the (possibly already-unlinked) file and drops
+// the map entry — bounding fd retention to one rescan interval even when the
+// OS never delivers an inotify removal event for a file we hold open.
+func (t *Tailer) reapMissing(found []string) {
+	alive := make(map[string]struct{}, len(found))
+	for _, p := range found {
+		alive[p] = struct{}{}
+	}
+
+	t.mu.Lock()
+	var stale []string
+	var cancels []context.CancelFunc
+	for path, cancel := range t.tailed {
+		if _, ok := alive[path]; !ok {
+			stale = append(stale, path)
+			cancels = append(cancels, cancel)
+		}
+	}
+	t.mu.Unlock()
+
+	for i, cancel := range cancels {
+		logging.WithField("path", stale[i]).Info("tailer: file gone, stopping tail and releasing fd")
+		cancel()
+	}
+}
+
+// startFile begins tailing a single file if not already tailed. Each file runs
+// under its own cancellable sub-context so it can be reaped individually; the
+// goroutine removes its own map entry on exit so the file can be re-tailed if
+// it later reappears at the same path.
 func (t *Tailer) startFile(ctx context.Context, path string, out chan<- string) {
 	t.mu.Lock()
 	if _, ok := t.tailed[path]; ok {
 		t.mu.Unlock()
 		return
 	}
-	t.tailed[path] = struct{}{}
+	fileCtx, cancel := context.WithCancel(ctx)
+	t.tailed[path] = cancel
 	t.mu.Unlock()
 
 	logging.WithFields(logging.Fields{
@@ -305,14 +354,26 @@ func (t *Tailer) startFile(ctx context.Context, path string, out chan<- string) 
 		"tail_mode": t.tailMode,
 	}).Info("tailer: discovered and tailing new file")
 
+	var tailFn func(context.Context, string, chan<- string)
 	switch t.tailMode {
 	case TailModeEvent:
-		go func() { defer logging.Recover("tailer event:" + path); t.tailFileEvent(ctx, path, out) }()
+		tailFn = t.tailFileEvent
 	case TailModePoll:
-		go func() { defer logging.Recover("tailer poll:" + path); t.tailFile(ctx, path, out) }()
+		tailFn = t.tailFile
 	default: // hybrid
-		go func() { defer logging.Recover("tailer hybrid:" + path); t.tailFileHybrid(ctx, path, out) }()
+		tailFn = t.tailFileHybrid
 	}
+
+	go func() {
+		defer logging.Recover("tailer " + t.tailMode + ":" + path)
+		defer func() {
+			t.mu.Lock()
+			delete(t.tailed, path)
+			t.mu.Unlock()
+			cancel() // release sub-context resources (idempotent if reaped)
+		}()
+		tailFn(fileCtx, path, out)
+	}()
 }
 
 // tailFile reads a file from the beginning and follows new lines.
@@ -450,13 +511,21 @@ func (t *Tailer) tailFileEvent(ctx context.Context, path string, out chan<- stri
 	})
 	if err != nil {
 		logging.WithError(err).WithField("path", path).Warn("tailer: failed to start event-mode tailing")
-		t.mu.Lock()
-		delete(t.tailed, path)
-		t.mu.Unlock()
 		return
 	}
 
 	defer func() { _ = tt.Stop() }()
+
+	// Snapshot the inode we opened. inotify does not deliver IN_DELETE_SELF
+	// for a file that is unlinked while we still hold it open (the event
+	// only fires once the last fd closes — and ours is that fd), so a
+	// rotated-away backup would otherwise be followed forever, pinning the
+	// deleted inode's fd. A periodic stat detects removal / inode swap and
+	// lets us release the fd. Per-file reaping (reapMissing) is the coarser
+	// backstop; this is the ~500ms fast path.
+	origInfo, _ := os.Stat(path)
+	ticker := time.NewTicker(hybridPollInterval)
+	defer ticker.Stop()
 
 	for {
 		select {
@@ -473,6 +542,14 @@ func (t *Tailer) tailFileEvent(ctx context.Context, path string, out chan<- stri
 			case out <- line.Text:
 			case <-ctx.Done():
 				return
+			}
+		case <-ticker.C:
+			fi, err := os.Stat(path)
+			if err != nil {
+				return // deleted / renamed away — release the fd
+			}
+			if origInfo != nil && !os.SameFile(origInfo, fi) {
+				return // replaced by a new inode at this path — reopen via rescan
 			}
 		}
 	}
@@ -558,6 +635,11 @@ func (t *Tailer) tailFileHybridEvent(ctx context.Context, path string, out chan<
 	}
 	defer func() { _ = tt.Stop() }()
 
+	// Snapshot the opened inode so the fallback ticker can detect deletion or
+	// an in-place inode swap that inotify will not report while we hold the
+	// file open (no IN_DELETE_SELF until the last fd closes).
+	origInfo, _ := os.Stat(path)
+
 	ticker := time.NewTicker(hybridPollInterval)
 	defer ticker.Stop()
 
@@ -584,12 +666,22 @@ func (t *Tailer) tailFileHybridEvent(ctx context.Context, path string, out chan<
 			}
 
 		case <-ticker.C:
-			// Fallback check: did the file grow beyond what the event
-			// watcher has delivered?
+			// Fallback check. First stat the file: detect deletion or an
+			// inode swap that inotify won't report for a file we hold open,
+			// then detect a stalled watcher (file grew but no event arrived).
 			fi, err := os.Stat(path)
 			if err != nil {
-				// File removed — let the event watcher handle it.
-				continue
+				// File deleted / renamed away. Reset the position and return
+				// so the outer loop reopens a fresh inode; the deferred
+				// tt.Stop() releases the (possibly unlinked) fd.
+				*lastSize = 0
+				return false
+			}
+			if origInfo != nil && !os.SameFile(origInfo, fi) {
+				// Replaced by a new inode at the same path (in-place
+				// rotation). Reopen from the start of the new file.
+				*lastSize = 0
+				return false
 			}
 			if fi.Size() > *lastSize {
 				// Data was written but no event arrived — stalled.

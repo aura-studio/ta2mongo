@@ -20,7 +20,8 @@
       "tailMode": "hybrid",
       "rescanInterval": "30s",
       "pollInterval": "200ms",
-      "maxLineBytes": 10485760
+      "maxLineBytes": 10485760,
+      "maxOpenFDs": 0
     }
   },
   "process": {
