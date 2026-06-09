@@ -19,8 +19,8 @@
 
 ## B. 静态与单元
 - [x] ~~B1 容器内 `go vet ./...` 无告警。~~
-- [ ] B2 容器内 `go test -race ./...` 全绿（无 mongo 的纯单元）。
-- [ ] B3 容器内 `go test -race ./internal/source/tailer/...` 全绿。
+- [x] ~~B2 容器内 `go test -race ./...` 全绿（无 mongo 的纯单元）。~~
+- [x] ~~B3 容器内 `go test -race ./internal/source/tailer/...` 全绿。~~
 
 ## C. tailer 文件生命周期（每条都对 **poll / event / hybrid** 三种模式各跑一遍）
 - [ ] C1 持续 append：tail 输出行数 == 写入行数，无丢行、无重复。
