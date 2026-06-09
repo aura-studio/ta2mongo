@@ -1,0 +1,46 @@
+# Ubuntu 24.04 test stack: tango-test (ubuntu + Go 1.26.2) + mongo:6.
+# Usage:
+#   docker compose -f test/docker-compose.ubuntu.yml run --rm tango-test go build ./...
+services:
+  tango-test:
+    platform: linux/amd64
+    build:
+      context: ..
+      dockerfile: test/Dockerfile.ubuntu
+    working_dir: /workspace
+    volumes:
+      - ..:/workspace
+      - go-build-cache:/root/.cache/go-build
+      - go-mod-cache:/root/go/pkg/mod
+    # Dedicated tmpfs for soak logs so statfs() reports a clean "volume used"
+    # signal for our files alone, isolated from the shared overlay's noise. A
+    # deleted-but-open fd leak shows here as used blocks that never free.
+    tmpfs:
+      - /soak:size=4g
+    # For the optional DocumentDB real-engine cross-check: resolve the cluster
+    # endpoint to the Docker host, where an SSH tunnel (via the EC2 bastion)
+    # listens on 27017. Routing by the real hostname keeps full TLS validation
+    # (the server cert's CN matches). Harmless when the tunnel is not running.
+    extra_hosts:
+      - "docdb-2026-04-28-08-15-08.cluster-c6j2g24aqau5.us-east-1.docdb.amazonaws.com:host-gateway"
+    environment:
+      GOTOOLCHAIN: auto
+      CGO_ENABLED: "1"
+      TANGO_TEST_MONGO_URI: mongodb://mongo:27017
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  mongo:
+    image: mongo:6
+    platform: linux/amd64
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand({ ping: 1 })"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  go-build-cache:
+  go-mod-cache:

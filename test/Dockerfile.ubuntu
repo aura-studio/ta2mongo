@@ -1,0 +1,23 @@
+# Ubuntu 24.04 test image — Linux semantics (deleted-but-open / /proc/<pid>/fd
+# / inode reuse) cannot be reproduced on the Windows host, so all fd / tailer
+# reaping tests must run here. gcc is required for `go test -race` (cgo).
+FROM ubuntu:24.04
+
+ARG GO_VERSION=1.26.2
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates curl build-essential procps lsof git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Official Go toolchain (apt ships an old Go; go.mod needs 1.26.2).
+RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" \
+        -o /tmp/go.tar.gz \
+    && tar -C /usr/local -xzf /tmp/go.tar.gz \
+    && rm /tmp/go.tar.gz
+
+ENV PATH=/usr/local/go/bin:/root/go/bin:$PATH \
+    GOTOOLCHAIN=auto \
+    CGO_ENABLED=1
+
+WORKDIR /workspace

@@ -10,6 +10,11 @@
 *.test
 *.out
 coverage.*
+
+# Local test artifacts: the DocumentDB CA bundle downloaded for the cross-check,
+# and a stray binary if `go build ./test/soak` is run from the repo root.
+/global-bundle.pem
+/soak
 profile.cov
 
 # Go workspace files (local-only)

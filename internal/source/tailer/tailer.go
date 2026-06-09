@@ -222,6 +222,11 @@ type Tailer struct {
 	// Presence means the file is currently being tailed; calling the cancel
 	// func stops that goroutine (which then deletes its own entry on exit).
 	tailed map[string]context.CancelFunc
+
+	// wg tracks every live per-file tail goroutine. Run waits on it before
+	// closing the output channel so a tail goroutine can never execute
+	// `out <- line` after `close(out)` (send-on-closed-channel race).
+	wg sync.WaitGroup
 }
 
 // New creates a Tailer that watches the given glob patterns.
@@ -271,6 +276,10 @@ func (t *Tailer) Run(ctx context.Context) <-chan string {
 
 	go func() {
 		defer close(out)
+		// Wait for every per-file tail goroutine to finish before closing out,
+		// so none can send on the closed channel. Runs after the recover below
+		// (deferred LIFO) so a panic in t.run still reaps children first.
+		defer t.wg.Wait()
 		defer logging.Recover("tailer run")
 		t.run(ctx, out)
 	}()
@@ -364,7 +373,9 @@ func (t *Tailer) startFile(ctx context.Context, path string, out chan<- string) 
 		tailFn = t.tailFileHybrid
 	}
 
+	t.wg.Add(1)
 	go func() {
+		defer t.wg.Done() // registered first → runs last, after cleanup below
 		defer logging.Recover("tailer " + t.tailMode + ":" + path)
 		defer func() {
 			t.mu.Lock()
@@ -495,6 +506,27 @@ func (t *Tailer) readFollowFile(ctx context.Context, path string, out chan<- str
 // Event-driven tail (hpcloud/tail with kqueue/inotify)
 // ---------------------------------------------------------------------------
 
+// stopTail stops an hpcloud/tail handle without deadlocking under backpressure.
+// The library's internal tailFileSync goroutine produces lines into tt.Lines;
+// when our consumer is blocked on a full out channel it stops draining tt.Lines,
+// so that goroutine parks on `tt.Lines <- line`. A plain tt.Stop() (Kill+Wait)
+// would then block forever waiting for a goroutine that is itself blocked on a
+// send nobody is receiving — and the file's fd (possibly already unlinked) would
+// never be released. Draining tt.Lines concurrently lets that goroutine observe
+// the kill and exit, so Stop returns and the fd is closed. Lines drained here
+// are intentionally discarded: callers stop only on ctx cancellation / rotation,
+// where the hybrid path re-reads any gap from the file via drainByPoll.
+func stopTail(tt *tail.Tail) {
+	drained := make(chan struct{})
+	go func() {
+		for range tt.Lines {
+		}
+		close(drained)
+	}()
+	_ = tt.Stop()
+	<-drained
+}
+
 // tailFileEvent uses hpcloud/tail's kqueue/inotify watcher to follow a file.
 // It offers lower latency than polling but may stall under sustained
 // concurrent writes due to the sendOnlyIfEmpty notification-drop race
@@ -514,7 +546,7 @@ func (t *Tailer) tailFileEvent(ctx context.Context, path string, out chan<- stri
 		return
 	}
 
-	defer func() { _ = tt.Stop() }()
+	defer stopTail(tt)
 
 	// Snapshot the inode we opened. inotify does not deliver IN_DELETE_SELF
 	// for a file that is unlinked while we still hold it open (the event
@@ -633,7 +665,7 @@ func (t *Tailer) tailFileHybridEvent(ctx context.Context, path string, out chan<
 	if err != nil {
 		return false
 	}
-	defer func() { _ = tt.Stop() }()
+	defer stopTail(tt)
 
 	// Snapshot the opened inode so the fallback ticker can detect deletion or
 	// an in-place inode swap that inotify will not report while we hold the
@@ -652,17 +684,31 @@ func (t *Tailer) tailFileHybridEvent(ctx context.Context, path string, out chan<
 			if !ok {
 				return false
 			}
-			if line == nil || len(line.Text) == 0 {
+			if line == nil {
+				continue
+			}
+			// Track the consumed offset by byte counting instead of tt.Tell():
+			// hpcloud/tail's Tell does an unlocked tail.file.Seek and reads
+			// tail.reader, which data-races with the library's own reopen
+			// (openReader, fired on delete-with-ReOpen and always on truncate).
+			// Byte counting matches Tell's offset for newline-terminated records,
+			// and any drift (e.g. CRLF) self-corrects when drainByPoll reseeks.
+			//
+			// Crucially, advance lastSize only AFTER the line is safely forwarded
+			// (or for a skipped blank line). If we are preempted on a full out
+			// channel and ctx is cancelled, the in-hand line was NOT delivered,
+			// so leaving lastSize put lets the poll fallback / reopen re-read it
+			// rather than skipping it (a lost line under backpressure).
+			advance := int64(len(line.Text)) + 1
+			if len(line.Text) == 0 {
+				*lastSize += advance // consumed a blank line; nothing to forward
 				continue
 			}
 			select {
 			case out <- line.Text:
+				*lastSize += advance
 			case <-ctx.Done():
 				return false
-			}
-			// Update tracking position from the tail handle.
-			if pos, err := tt.Tell(); err == nil {
-				*lastSize = pos
 			}
 
 		case <-ticker.C:

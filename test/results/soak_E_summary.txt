@@ -1,0 +1,11 @@
+=== soak[E] summary ===
+duration=11m0s mode=hybrid size=10MB backups=10 rate=2560MB/h
+samples=23 steady=16 (steady starts @186s, window-fill ~155s) lines_out=2133859 mb_written=469.3
+  [PASS] deleted_fd_bounded       max steady deleted_fd=0 (bound 19)
+  [PASS] tailed_bounded           max steady tailed=11 (bound 15)
+  [PASS] goroutines_bounded       max steady goroutines=40 (bound 87, base 5)
+  [PASS] goroutines_not_growing   goroutines end-start trend=0 (bound 30)
+  [PASS] rss_bounded              max steady rss=252MB (bound 273MB, base 5MB)
+  [PASS] fs_used_spread_bounded   fs_used spread=9.3MB [min 100.0, max 109.3] (bound 30.0MB)
+  [PASS] fs_used_not_monotonic    fs_used end-start trend=0.0MB (bound 30.0MB)
+VERDICT: PASS
