@@ -1,0 +1,3 @@
+# Preserve certificate/key bytes exactly — never apply text/EOL normalization,
+# which would rewrite the PEM and could break strict TLS parsers.
+*.pem -text
