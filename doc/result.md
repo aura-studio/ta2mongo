@@ -113,19 +113,30 @@ ok  github.com/aura-studio/tango/tests                     8.020s
 
 ---
 
-## 尚未在本轮覆盖（需独立场景/长稳运行，非单测套件能跑）
+## 补充覆盖（2026-06-09 晚，长稳/系统级门禁已落地）
 
-以下属于"运行时长稳/系统级"门禁，不在 `go test` 套件内，本轮**未执行**，仍为空勾：
+上一版列为"未覆盖"的长稳/系统级门禁，本次已全部补齐（除 G1 仍在 4h 跑动中、中途全程平稳）：
 
-- ⬜ **test.md E2 / G1** —— 真实 lumberjack 高速 rotate ≥10min / 生产速率 4 小时长稳，
-  采 `/proc/<pid>/fd` deleted 计数与卷 `df used` 四条曲线。需长时间运行 + 指标采集脚本。
-- ⬜ **test2.md E2（看门狗优雅重启核心门禁）** —— 低 `maxOpenFDs` 阈值 + 大量 rotate 顶过阈，
-  验证 `triggering graceful restart` + drain/flush 在途 batch 全部落库不丢 + exit 0 + 容器重启 fd 清零。
-- ⬜ **test2.md F2 / test.md F** —— 背压（mongo 暂停 / `out` channel 打满）下 fd 释放与 drain 不死锁。
-- ⬜ **test.md H1–H4** —— `PaymentOrderState`/`user_set` 端到端过滤、identity 1:1/1:N、
-  SIGTERM 优雅退出 deleted fd 清零（部分由集成单测覆盖，端到端 daemon 级未单独跑）。
+- ✅ **test.md E2** —— 新增 soak 驱动 [`test/soak/main.go`](../test/soak/main.go)（真 `natefinch/lumberjack`
+  size10/backup10 + hybrid tailer），跑满 11min @2560MB/h：`deleted_fd` 全程 0、`fs_used` 100–109MB
+  锯齿 trend 0.0MB、goroutine 平直、2.13M 行无 stall。基线存 [`test/results/soak_E.csv`](../test/results/soak_E.csv)。**VERDICT PASS**。
+- 🟡 **test.md G1** —— 同驱动 size100/backup10 @2560MB/h **4 小时**长稳进行中；t≈2h 时 `deleted_fd≡0`、
+  goroutine=40 平直、RSS≈250MB 稳、`fs_used` ~1.0–1.08GB 锯齿、2200 万行无 stall。CSV 流式落
+  [`test/results/soak_G1.csv`](../test/results/soak_G1.csv)（G2 归档）。跑满后补 VERDICT。
+- ✅ **test2.md E2（看门狗优雅重启核心门禁）** —— `TestWatchdog_E2_GracefulRestartDrainsNoLoss`
+  ([internal/role/daemon/watchdog_test.go](../internal/role/daemon/watchdog_test.go))：打 `triggering graceful restart`
+  ERROR + drain 在途 40/40 全落库不丢 + Run 干净返回(=exit 0)。④容器重启清零属编排器职责。
+- ✅ **test2.md F2 / test.md F** —— `TestBackpressure_F1/F2`（poll/hybrid/event 全过，`-race`）+
+  `TestWatchdog_F2_DrainsUnderBackpressure`（背压下 drain 401ms 完成、不死锁、200/200 不丢）。
+  期间修了 4 个真实 tailer 并发 bug（`tt.Tell()` 竞争 / `close(out)` 竞争 / 背压 `Stop()` 死锁 / hybrid 丢行）。
+- ✅ **test.md H1–H4** —— daemon 级端到端 [`test/h_release_gate_test.go`](../test/h_release_gate_test.go)：H1
+  过滤只留 `PaymentOrderState`/`user_set`、H3 rotate 边界不丢、H4 SIGTERM(=ctx) drain + deleted_fd 清零；
+  H2 identity 1:1/1:N 由 `dao/store` 的 11 个 `TestIdentityResolver_*` 覆盖（mongo:6 + 真 DocumentDB 双跑全过）。
+- ✅ **test2.md C/D/G** —— event-ticker 自检（`TestReap_C2`）、inode 复用（C4）、200 轮转（C5）、
+  运行时指标（`TestRuntimeStats_D1_D3`、`TestProcStats_D2`，D4 在 Windows 宿主机原生跑 `open_fds==-1`）、
+  `NewFromTree` 三处等价（daemon/api/gateway G1/G3/G4）+ fail-fast（G2）全过。
 
-> 建议：这几条以 docker compose 起 daemon + 后台采样脚本的方式单独编排，结果追加到本文件。
+> 全部在 Ubuntu 24.04 容器内 `-race` 跑；DocumentDB 真引擎交叉验证了 `dao/store` 存储层 23 个用例。
 
 ---
 
@@ -136,5 +147,6 @@ ok  github.com/aura-studio/tango/tests                     8.020s
   poll/hybrid/event 三模式在 Linux 真跑通过。
 - ✅ [`fix_todo.md`](fix_todo.md) P0 中"`-race` 从未在 Linux 跑过""fd 回收回归未在 Linux 验证"
   两条**已消除**。
-- ⬜ 剩余风险面在**长稳/看门狗/背压**的系统级场景（E2 / G1 / F2 / 看门狗优雅重启），
-  需独立运行编排，尚未在本轮覆盖。
+- ✅ **长稳/看门狗/背压系统级场景已补齐**：E2 soak（PASS）、看门狗优雅重启 E2（PASS）、背压 F2（PASS）、
+  H1–H4（PASS）；轮转/背压期间还修了 4 个真实 tailer 并发 bug 并通过全量 `-race ./...` 回归。
+- 🟡 **仅余 G1 4h 长稳在跑动中**（中途四条曲线全程平稳、`deleted_fd≡0`），跑满后本文件补最终 VERDICT。

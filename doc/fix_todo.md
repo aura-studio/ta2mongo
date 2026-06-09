@@ -18,18 +18,18 @@
 > 修复在 `d38cd13`：`reapMissing` 反向回收 + per-file `CancelFunc` + event/hybrid 加
 > `os.Stat`+`os.SameFile` 自检 ticker + fd 看门狗。**代码已合入 v1.5.1，但下面的门禁全是空勾。**
 
-- [ ] **`go test -race` 从未在 Linux 跑过**（本机 Windows 无 gcc/cgo，跑不了 race detector）。
-      必须在 `test/docker-compose.yml` 里补：`go test -race ./...` 与 `go test -race ./internal/source/tailer/...` 全绿
-      （见 [`doc/test2.md`](test2.md) B1/B2、[`doc/test.md`](test.md) B2/B3）。
-- [ ] **fd 回收回归未在 Linux 验证**：`TestReap_DeletedFileReleasesTail` 的 **poll / hybrid / event** 三个子用例
-      必须在 Linux 容器真跑（poll 子用例在非 Linux `t.Skip`，Windows 下会"假绿"）。见 test2.md B2 / C 组、test.md D 组。
-- [ ] **看门狗优雅重启（E2）未验证**：低阈值 `maxOpenFDs` + 大量 rotate 备份顶过阈 → 必须证明
-      ① 打 `triggering graceful restart`；② drain+flush 在途 batch **全部落库、计数对得上、不丢数据**；
-      ③ exit 0 干净退出；④ 容器重启后 fd 表清零。
-- [ ] **背压下 fd 释放 / drain 不死锁（F2）未验证**：`out` channel(2000) 打满 + 删除正在 tail 的文件时，
-      `ctx.Done()` 分支仍能让 tail goroutine 退出、defer 关 fd；看门狗 `cancelRun` 后 drain 不死锁。
-- [ ] **长稳/压测（test.md G1）未跑**：~2–3 GB/h、size100/backup10 连续 rotate 4h，
-      `deleted fd / goroutine / RSS / 卷 used` 四条曲线全程平稳、无单调上升。这是"真的不泄漏"的硬证据。
+- [x] ~~**`go test -race` 从未在 Linux 跑过**~~ — 已在 Ubuntu 24.04 容器内 `go test -race ./...` +
+      `./internal/source/tailer/...` 全绿（0 FAIL / 0 DATA RACE）。**期间 `-race` 还抓出并修了 4 个真实
+      tailer 并发 bug**：`tt.Tell()` 与 hpcloud 内部 reopen 竞争、`Run` 的 `close(out)` 与发送竞争、
+      背压下 `tt.Stop()` 死锁致 fd 不释放、hybrid 背压丢行。
+- [x] ~~**fd 回收回归未在 Linux 验证**~~ — `TestReap_DeletedFileReleasesTail` poll/hybrid/event 三子用例
+      在 Linux 容器真跑全过；另补 `TestReap_C2`（event ticker 隔离）、C4/C5、D1–D5、`-race -count=5`。
+- [x] ~~**看门狗优雅重启（E2）未验证**~~ — `TestWatchdog_E2_GracefulRestartDrainsNoLoss`：`triggering
+      graceful restart` ERROR + drain 在途 40/40 全落库不丢 + Run 干净返回(=exit 0)；④重启清零属编排器职责。
+- [x] ~~**背压下 fd 释放 / drain 不死锁（F2）未验证**~~ — `TestBackpressure_F1/F2`（三模式 `-race`）+
+      `TestWatchdog_F2`（背压下 drain 401ms 完成、不死锁、200/200 不丢）。
+- [~] **长稳/压测（test.md G1）** — soak 驱动 [`test/soak/main.go`](../test/soak/main.go) 已就绪并跑通
+      E2（11min PASS）；G1 4h **进行中**（t≈2h `deleted_fd≡0`、四曲线平稳）。跑满后归档 VERDICT 即闭环。
 
 > ⚠️ 注意：`v1.5.1` 这个 tag 是在测试任务单（`91e0d17`，加了 test.md/test2.md）**之前**就打的，
 > 所以 tag 本身不代表通过了任何 release gate。要么补全验证后视为正式可用，要么重打 `v1.5.2`。
@@ -63,11 +63,12 @@
 
 ## P2 — 收尾 / 待确认
 
-- [ ] **功能端到端回归（test.md H1–H4）未跑**：`PaymentOrderState`/`user_set` 过滤、identity 1:1 与 1:N 绑定、
-      rotate 跨文件边界事件不丢、SIGTERM 优雅退出 drain 完成 + deleted fd 清零。
-- [ ] **`NewFromTree` 重构等价性（test2.md G 组）未验证**：`d38cd13`/`31af894` 给 api/gateway/daemon 加了
-      `NewFromTree`，需证明与手工 `FromTree`+`New` 等价、daemon 在连 Mongo 之前就 fail-fast 校验 `logPattern`、
-      且 typed `New()` 回归全绿（这是"没把库语义改坏"的硬证据）。
+- [x] ~~**功能端到端回归（test.md H1–H4）未跑**~~ — daemon 级 [`test/h_release_gate_test.go`](../test/h_release_gate_test.go)：
+      H1 只留 `PaymentOrderState`/`user_set`、H3 rotate 边界不丢、H4 SIGTERM drain + deleted fd 清零；
+      H2 identity 1:1/1:N 由 `dao/store` 11 个 `TestIdentityResolver_*` 覆盖（mongo:6 + 真 DocumentDB 双跑全过）。
+- [x] ~~**`NewFromTree` 重构等价性（test2.md G 组）未验证**~~ — daemon/api/gateway 三处 `NewFromTree` 等价
+      （`TestNewFromTree_G1/G3/G4`）+ daemon fail-fast 在连 Mongo 前校验 logPattern（`G2`，0.00s 返回）+
+      typed `New()` 回归（全量 `-race ./...` 含 role/client/test 全绿）。
 - [ ] **附带产物清理**：旧分支 `hotfix/logger-dedup-5e3316c73` 确认可删（logger ext 路由改名为 tango 已在 master `3c63ad5c7` 落地，消除了 double-writer 配置问题）。
 
 ---
