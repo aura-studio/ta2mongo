@@ -69,6 +69,56 @@ database/collection 前缀并在结束清理**，互不串库。
 
 ---
 
+## 0.5 覆盖进度（2026-06-09 实测更新，Ubuntu 24.04 容器 `-race`）
+
+> 下表是对各 ID 现状列的**权威实测覆盖说明**（行内现状列可能滞后，以此为准）。
+> 全量 `go vet ./...` + `go test -race ./...` 0 FAIL / 0 DATA RACE。
+
+### Release Gate 实测结论
+
+| 门禁 | 结果 | 证据 |
+|---|---|---|
+| G-A build + vet | ✅ | 容器内 `go build ./...` / `go vet ./...` 无告警 |
+| G-B `go test -race ./...` | ✅ | 19 个含测试包全绿；`-race` 期间还抓出并修了 4 个真实 tailer 并发 bug |
+| G-C tailer 三模式 + fd/goroutine 不泄漏 | ✅(G1 跑动中) | C1–C4/D1–D5（`lifecycle_test.go`）、event ticker C2/inode C4/200 轮转 C5（`reaping_test.go`）；E2 soak PASS；G1 4h 进行中曲线全平 |
+| G-D fd 看门狗超阈优雅重启 | ✅ | `TestWatchdog_E2/E5/E1E3E4`、`TestProcStats_D2`、`TestRuntimeStats_D1_D3`（`watchdog_test.go`） |
+| G-E 上报三策略/Data API/cfgsync | 🟡 | H1/H3/H4（`test/h_release_gate_test.go`）、identity（`dao/store`）、roles×modes（`tests`）已绿；EJ-*/SQL/cfgsync changestream 细分仍部分 |
+| G-F `NewFromTree` 等价 + typed 回归 | ✅ | `TestNewFromTree_G1/G2/G3/G4`、全量 role/client/test `-race` 绿 |
+
+### 本轮新增测试 → 覆盖的 ID
+
+| 测试文件 | 覆盖 ID | 结果 |
+|---|---|---|
+| `internal/source/tailer/lifecycle_test.go` | TAIL C1–C4 / D1–D5、TAIL-15/16 | ✅ `-race -count=5` |
+| `internal/source/tailer/reaping_test.go` | TAIL-10（event ticker）、in-place inode、200 轮转 | ✅ |
+| `internal/source/tailer/backpressure_test.go` | TAIL-17/18（背压 fd 释放、不死锁、不丢） | ✅ 三模式 |
+| `internal/role/daemon/watchdog_test.go` | DMN-2/4/5/6/7/8/9/11、E2/E5、D1–D4 | ✅ |
+| `internal/role/daemon/newfromtree_test.go` | G1/G2（daemon 等价 + fail-fast 连库前） | ✅ |
+| `internal/role/{api,gateway}/newfromtree_test.go` | G3/G4 | ✅ |
+| `test/h_release_gate_test.go` | E2E-1/3（H1/H3）、X-1（H4 优雅退出 fd=0） | ✅ |
+| `config/ultra_config_test.go` | CFG-2/4/5/7/11/13 | ✅ 14 用例 |
+| `internal/logging/ultra_logging_test.go` | LOG-1/2/4/5 | ✅ 11 用例 |
+| `internal/parser/talog/ultra_talog_test.go` | PARSE-10/11 | ✅ |
+| `internal/parser/filter/ultra_filter_test.go` | FILT-7 | ✅ |
+| `internal/process/core/ultra_core_test.go` | CORE-6、STAT-3 | ✅ |
+| `internal/process/ultra_process_test.go` | PROC-1、BATCH-4 | ✅ |
+| `internal/source/ultra_source_test.go` | SRC-1/2/3/4 | ✅ 11 用例 |
+| `main_test.go` | MAIN-1/4 | ✅ |
+| `internal/role/daemon/ultra_maskuri_test.go` | DMN-13 / X-6（maskURI 脱敏） | ✅ |
+
+> 备注：以上单元用例**未发现生产 bug**——代码与契约一致（如 talog `toString` 丢弃非字符串字段为 `""`、
+> `maskURI` 把 `user:pass`→`***:***`、`Process` 把逐行 panic 收成 dead_letter、`BatchSize<=0`→默认 1000）。
+
+### 仍未覆盖（需 Mongo 集成 / DocumentDB / 长跑，留作后续）
+
+- §5.6 Data API 各 action 细分断言（EJ-2~7/9/10）、§5.7 SQL（SQL-2/4/5/6/7）——需 Mongo，多为 `🟡`。
+- §7 cfgsync changestream（CS-14~18/35）——需带 `--replSet` 的 Mongo 才跑。
+- §10.2 X-4（DocumentDB 兼容矩阵）——`dao/store` 存储层已在真 DocumentDB 跑过 23 用例，其余 Data API 面未单独跑。
+- G1 4h 长稳——进行中，跑满归档 VERDICT 后 G-C 完全闭环。
+- DocumentDB daemon 上报能力压测——见 `doc/` 下单独报告（计划中）。
+
+---
+
 ## 1. 配置层：`config` + `internal/cfgtree`
 
 > 设计：`config` 拥有 viper（文件 < `TANGO_*` env < flag），物化成依赖中立的 `cfgtree.Tree`；
