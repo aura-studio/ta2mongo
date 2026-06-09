@@ -231,3 +231,211 @@ version, _ := eng.PublishConfig(ctx, bson.M{
 })
 // version 单调递增；daemon/gateway 的 Watcher 会在 ≤pollInterval（或亚秒，changestream）内热替换生效
 ```
+
+## 部署与运维（daemon）
+
+daemon 是常驻进程，部署在容器（生产为 EKS/Fargate）里长时间追尾日志、批量写 MongoDB。本节讲清楚二进制
+**怎么找配置**、**怎么用纯环境变量驱动多环境**，以及 **fd 看门狗**这一兜底机制的运维语义。
+
+### 二进制怎么找配置（`resolveConfigPath`）
+
+配置文件路径的解析逻辑全部在 `main.go` 的 `resolveConfigPath(flagVal, "tango.yaml", "tango.yml", "tango.json")`，
+优先级三步：
+
+1. **`--config <path>` 显式指定**：非空时原样返回（`.yaml`/`.yml`/`.json` 由扩展名决定 YAML/JSON 解析器，见
+   `config/loader.go` 的 `readConfigFile`）。
+2. **二进制同级目录自动探测**：`--config` 留空时，用 `os.Executable()` 取二进制自身所在目录（**不是当前工作目录**），
+   依次探测 `tango.yaml` → `tango.yml` → `tango.json`，返回第一个存在且非目录的文件。这样无论从哪个 cwd 启动，
+   只要把 `tango.yaml` 和二进制放一起即可被自动加载。
+3. **纯环境变量 / flag**：以上都没有时返回 `""`，`config.Load` 静默跳过文件（`readConfigFile` 对空路径和
+   `os.ErrNotExist` 都返回 nil），配置完全来自 **默认值 + `TANGO_*` 环境变量 + `--<键>` flag**。
+
+```bash
+# (1) 显式指定配置文件
+tango --config /etc/tango/daemon.yaml
+
+# (2) 把 tango.yaml 放在二进制同级目录，直接裸跑即自动加载（cwd 无关）
+/opt/tango/tango          # 自动读 /opt/tango/tango.yaml（若存在）
+
+# (3) 完全无配置文件，纯环境变量驱动（容器里最常用，见下）
+tango                     # role.mode 默认 daemon
+```
+
+### 纯 `TANGO_*` 环境变量驱动多环境（一份镜像多集群）
+
+配置分层是 **默认值 < 文件 < `TANGO_*` 环境变量 < flag**（`config/loader.go` 的 viper：`SetEnvPrefix("TANGO")` +
+`SetEnvKeyReplacer(".".→."_")` + `AutomaticEnv`；`registerAll` 预注册所有键的默认值，使 `AllSettings()` 能
+**物化出仅由环境变量提供的叶子值**）。因此**同一个二进制 / 同一份基础配置**，靠每集群不同的环境变量即可服务多个
+集群，**无需改代码、无需改配置文件**。最常改的两个键：
+
+| 配置键 | 环境变量 | 说明 |
+|---|---|---|
+| `dao.mongo.uri` | `TANGO_DAO_MONGO_URI` | 每集群指向各自的 MongoDB / DocumentDB |
+| `source.tailer.logPattern` | `TANGO_SOURCE_TAILER_LOGPATTERN` | 追尾文件 glob；**逗号分隔**可配多个 glob（`cfgtree.Into` 装了 `StringToSliceHookFunc(",")`，把 `a,b` 解成 `[]string{"a","b"}`） |
+| `source.tailer.maxOpenFDs` | `TANGO_SOURCE_TAILER_MAXOPENFDS` | fd 看门狗阈值（见下，生产务必设非 0） |
+| `logging.level` | `TANGO_LOGGING_LEVEL` | 日志级别 |
+
+```bash
+# 同一镜像，A 集群
+export TANGO_DAO_MONGO_URI='mongodb://.../tango_a'
+export TANGO_SOURCE_TAILER_LOGPATTERN='/var/log/app/*.log,/var/log/app/**/*.ta.log'
+export TANGO_SOURCE_TAILER_MAXOPENFDS=4096
+tango                                 # role.mode 默认 daemon
+
+# 同一镜像，B 集群——只换环境变量
+export TANGO_DAO_MONGO_URI='mongodb://.../tango_b'
+export TANGO_SOURCE_TAILER_LOGPATTERN='/data/logs/*.log'
+tango
+```
+
+> `time.Duration` 类型的键（如 `source.tailer.rescanInterval`、`process.pipeline.flushInterval`）支持
+> `"5s"`/`"200ms"` 字符串（`cfgtree.Into` 的 `StringToTimeDurationHookFunc`），所以环境变量里直接写
+> `TANGO_SOURCE_TAILER_RESCANINTERVAL=10s` 即可。
+
+### fd 看门狗（生产必开）
+
+源码：`internal/role/daemon/report.go` 的 `reportStats` / `fdWatchdogTriggered`，阈值键
+`source.tailer.maxOpenFDs`（`internal/source/tailer/config.go`，**默认 0 = 关闭**）。
+
+- **判定**：`fdWatchdogTriggered(openFDs, threshold) = (threshold > 0 && openFDs > threshold)`——**严格大于**，
+  且非正阈值永不触发。fd 计数来自 `openFDCount()`（`internal/role/daemon/procstats.go`），**仅 Linux** 读
+  `/proc/self/fd`，其它平台返回 `-1`（`-1` 永远不 `>` 任何阈值，故看门狗在非 Linux 上**天然惰性、不会误触**）。
+- **触发动作**：`reportStats` 每 `statsReportInterval`（60s）跑一次检查，越线时打 ERROR 日志
+  `report: open fd count exceeded threshold — triggering graceful restart ...`，随后调用 `triggerRestart()`
+  取消 `runCtx`——这会让 pipeline **优雅排空 + flush 在途批次到 Mongo**，`Run` 干净返回、进程退出。
+  这是**主动自杀式重启**：进程带着干净的退出码退出，交给编排器用新容器（**全新的 fd 表**）把它拉起来。
+- **生产配置**：务必把 `maxOpenFDs` 设成**非 0**，否则这道安全网是关的。取值经验：设在容器 `ulimit -n`
+  之下、正常用量之上（正常用量 ≈ 追尾文件数 + 少量 Mongo / 连接 fd）。fd 泄漏的**根因已由 tailer reaping 修复**
+  （见 `doc/test.md` D/E/G 组），看门狗只是 defense-in-depth 兜底。
+- **编排器侧**：把容器的 `restartPolicy` 设为 `Always`（K8s Deployment 默认即是），看门狗退出后由 kubelet
+  自动重建，配合 graceful drain 实现「零丢数据的自愈」。
+
+```yaml
+# K8s 片段：看门狗 + 自动重启 + fd 上限
+spec:
+  template:
+    spec:
+      containers:
+        - name: tango
+          env:
+            - name: TANGO_SOURCE_TAILER_MAXOPENFDS
+              value: "4096"          # 务必非 0，否则安全网关闭
+          # restartPolicy: Always 是 Deployment Pod 的默认值，看门狗退出后自动重建
+```
+
+## 可观测性
+
+daemon 每 60s（`statsReportInterval`，`internal/role/daemon/report.go`，是 `var` 故测试可缩短）打三类统计日志，
+退出时打一份 shutdown summary。运维关注的是 **runtime stats** 这一行，它是 fd 泄漏的早期信号。
+
+### 每 60s 的 `report: runtime stats`
+
+`reportStats` 每个周期输出（除 `report: periodic stats (last 60s)` 增量 + `report: cumulative stats` 累计外）：
+
+```text
+report: runtime stats   goroutines=42  open_fds=137  tailed_files=12
+```
+
+三个字段含义与读法：
+
+| 字段 | 来源 | 含义 / 读法 |
+|---|---|---|
+| `goroutines` | `runtime.NumGoroutine()` | 进程内 goroutine 数；稳态应平稳，**持续单调上升**= goroutine 泄漏 |
+| `open_fds` | `openFDCount()` 读 `/proc/self/fd` | 进程打开的 fd 总数（Linux）；**非 Linux 恒为 `-1`（"unknown"）**。**持续上升**= fd 泄漏 |
+| `tailed_files` | `Tailer.TailedCount()`（`internal/source/tailer/tailer.go`，即 `len(t.tailed)` 活跃 per-file tail goroutine 数） | **当前正在追尾的文件数，是打开的日志 fd 最直接的代理**。reaping 正常时它随真实文件数涨落；**只增不减、远超磁盘上实际文件数**= deleted-but-open 泄漏复现 |
+
+判断 fd 泄漏的最快办法：盯 `open_fds` 和 `tailed_files`，**两者随时间稳步攀升而日志文件实际数量没变**，
+就是泄漏。修复后这两个值应跟随 `reapMissing` / event 模式 ticker（`hybridPollInterval` ~500ms）在
+≤1 个 `rescanInterval`（默认 30s）内回落到真实文件数。
+
+### shutdown summary（`logFinalStats`）
+
+优雅退出（SIGTERM 或看门狗触发）时 `Run` 调 `logFinalStats` 打印一份总账：
+
+```text
+report: ========== shutdown summary ==========
+report: final stats   total_lines=... total_event_writes=... total_dead_letters=... total_retries=... uptime=...
+report: average throughput   lines_per_second=...
+report: ========== SHUTDOWN COMPLETE ==========      # 若有 parse/identity/write 错误则为 SHUTDOWN WITH ERRORS
+```
+
+其中 `total_retries` 取自 `dao.Store.Stats().TotalRetries()`（含 identity id_counter 的 dup-key 重试次数，
+见 §吞吐压测里的修复），`total_dead_letters > 0` 说明有事件被丢进 `dead_letter` 而非 `event`，需排查。
+
+### Linux 上的 ground-truth 检查：`/proc/<pid>/fd`
+
+日志里的 `open_fds` 来自同一来源，但要**实锤** deleted-but-open（已删除但仍被持有的 fd），直接看 `/proc`：
+
+```bash
+# 该进程打开的 fd 总数（对应日志的 open_fds）
+ls /proc/<pid>/fd | wc -l
+
+# 实锤 deleted-but-open：仍被持有的已删除文件（泄漏时这里会有一长串日志文件）
+ls -l /proc/<pid>/fd | grep '(deleted)'
+
+# 按打开文件聚合（需要 lsof）
+lsof -p <pid> | grep deleted
+```
+
+修复后 `grep '(deleted)'` 应为空或仅短暂出现（下一个 ticker / rescan 即释放）。
+
+## 吞吐压测
+
+压测器：[`test/perf/main.go`](../../test/perf/main.go)。它预填一个含 `-n` 条 TA track 事件的日志文件，
+跑**真实的 daemon `Service`**（强制 pipeline 策略）打到 `TANGO_TEST_MONGO_URI`，统计落库速率；用一份扔后即弃的
+`tango_perf_<unixsec>` 库、结束即 drop。完整报告见 [`doc/v1.5/perf-daemon-throughput.md`](./perf-daemon-throughput.md)。
+
+一行复现（在 in-VPC 的 EC2 上、直连 DocumentDB）：
+
+```bash
+export TANGO_TEST_MONGO_URI='mongodb://USER:PASS@<docdb>:27017/?tls=true&tlsCAFile=./global-bundle.pem&replicaSet=rs0&readPreference=primary&retryWrites=false'
+go run ./test/perf -n 20000 -workers 4 -batch 1000     # 或交叉编译 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 后 scp 上去跑
+```
+
+压测器 flag（`flag.Int`）：`-n`（事件数，默认 50000）、`-workers`（pipeline batch workers，默认 4）、
+`-batch`（batch size，默认 1000）、`-users`（不同 `#account_id` 数，默认 500，给 identity 缓存施压）。
+
+实测数字（测试环境单个 DocumentDB 实例，in-VPC）：
+
+| 配置 | 落库 | 耗时 | 吞吐 |
+|---|---|---|---|
+| n=20000，workers=4，batch=1000 | 20000 / 20000 | 17.0 s | ≈1175 events/s |
+| n=20000，workers=8，batch=1000 | 20000 / 20000 | 13.7 s | ≈1456 events/s |
+
+- 全部 20000 条**完整落库、零 dead-letter**（这次压测顺带抓出并修复了 identity `id_counter` 的 `E11000`
+  dup-key 竞争——`internal/dao/store/identity_atomic.go` 的 `nextUserID` 现对 dup-key 重试 ≤8 次；该竞争在
+  原生 MongoDB 潜伏、在 DocumentDB 的 upsert 并发语义下高概率触发，详见 perf 报告）。
+- **吞吐杠杆**：`process.pipeline.batchWorkers`（4→8 吞吐 +24%，已验证）与 `process.pipeline.batchSize`
+  （增大摊薄往返）。workers 提升非线性收敛说明**瓶颈在 DocumentDB 写延迟**，不是 daemon 单线程。
+  identity 缓存（`internal/dao/store/identity_cache.go`）让 500 个用户里只有首现的 500 次走库、其余命中缓存，
+  所以瓶颈是**写**不是 identity 查。
+
+## fd 泄漏排查
+
+历史背景：v1.5.0 在 rocket-nano 把 EKS overlay 以 ~5GB/h 撑满，根因是 hpcloud/tail 的 `ReOpen:true` 持有
+已删除/已轮转的日志 fd 不释放（inotify 在**我们仍持有文件**时不投递 `IN_DELETE_SELF`），形成 deleted-but-open
+累积。v1.5 已修复（tailer reaping + 每文件 ticker 自检），本节是出现疑似症状时的快速排查路径。
+
+**症状识别**：
+
+- 容器 **overlay / 磁盘占用持续增长**，但 `du -sh <日志目录>` 算出来的实际占用**基本不变**——这个「磁盘在涨、
+  du 却平」的背离，就是 deleted-but-open（fd 还按着已删除文件，空间不被回收）的典型特征。
+- 日志里 `report: runtime stats` 的 `open_fds` / `tailed_files` **只增不减**，且 `tailed_files` 远超磁盘上
+  实际日志文件数。
+
+**排查步骤**（Linux）：
+
+```bash
+# 1) 拿到 daemon 进程 pid
+pidof tango
+
+# 2) 实锤 deleted-but-open：仍被持有的已删除文件
+ls -l /proc/<pid>/fd | grep '(deleted)'        # 泄漏时是一长串日志文件；修复后应为空/瞬时
+
+# 3) 对照日志的 open_fds（应与 fd 目录条数一致）
+ls /proc/<pid>/fd | wc -l
+```
+
+**兜底**：即便出现泄漏，只要生产设了 `source.tailer.maxOpenFDs`（非 0），fd 看门狗会在 `open_fds` 越线时打
+ERROR `triggering graceful restart` 并优雅 drain + flush + 退出，由编排器（`restartPolicy: Always`）用全新
+fd 表的新容器自愈——是泄漏的最后一道 backstop（见 §部署与运维 的 fd 看门狗）。

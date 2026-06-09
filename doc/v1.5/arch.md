@@ -497,6 +497,38 @@ Elastic Cluster 不支持）；standalone mongod 无 change stream → 启动时
 pipeline 模式额外用 `parser.EnvelopeKeys` + `ExtractRoutingKey`/`RouteIndex` 做用户亲和性分发，
 保证同一用户的写操作落到同一 worker 顺序执行。
 
+#### 7.2.1 daemon 上报路径的并发模型（dispatcher 亲和 / pipeline workers / final flush）
+
+daemon 是唯一长驻的 pipeline 角色，其上报路径的并发结构（`internal/process/pipeline`，由
+`daemon.Service.Run` 驱动）如下。每个环节都是独立 goroutine，靠 channel 串起，靠 `runCtx` 取消收敛：
+
+```text
+ source.Tailer.Run(runCtx) ──lineCh(cap 2000)──┐                       [internal/source/tailer]
+                                                ▼
+ pipeline.RunWorkers(runCtx, cfg, store, parser, lineCh, stats):       [process/pipeline/worker.go]
+   ├─ N 个 worker goroutine（cfg.BatchWorkers，默认 2），各持一条 workerChs[i]（cap=ChannelSize()=BatchSize*2，默认 2000）
+   │     worker_i: core.NewProcessor(parser, store, stats).Process(ctx,line) → 按 Kind 累积到
+   │               userBatch / eventBatch / deadBatch（各 NewBatch；user/event 容量 MaxBatchSize()=BatchSize*2，dead=DeadLetterCap 默认 128）
+   │               flush 触发条件：动态阈值 ComputeFlushThreshold(min,target,max,backlog,chSize) || FlushInterval(默认 1s) 到期 || flushTicker
+   │               flush 用 store.BulkWrite（unordered；user 写模型自带 _ts 守卫，乱序不影响终态）
+   └─ 1 个 dispatcher goroutine：Dispatch(runCtx, lineCh, workerChs)     [process/pipeline/dispatch.go]
+         ExtractRoutingKey(line)（#account_id > #distinct_id > 信封内嵌 JSON；缺失→""→worker 0）
+         RouteIndex(key, N)=FNV-1a%N → 亲和 worker
+         背压避让：先对亲和 worker 非阻塞 send；满则轮询其它 worker 非阻塞 send；全满才对亲和 worker 阻塞 send（或 ctx 取消退出）
+```
+
+**亲和性是 best-effort，正确性不依赖它**（见 `Service.Run` 注释）：背压下 dispatcher 会把行溢出到别的 worker
+以避免 head-of-line blocking，故跨 worker 的严格顺序不保证；但写模型用 `_ts` 条件更新（`dao/store/writemodel.go`），
+旧记录永远盖不掉新记录，无论被哪个 worker 落库。**identity 解析在 worker 内**（`core.Processor.Process` →
+`store.Identity().Resolve`，命中进程内缓存零 IO，详见 §8.3），**写模型构造也在 worker 内**（按 `Record.Category()`
+出 `UserWriteModel`/`EventWriteModel(SkipExisting)`/`DeadLetterModel`），dispatcher 只看路由键、不解析整行。
+
+**final flush 用 `context.Background()` 而非 `ctx`**（`worker.go`：`lineCh` 关闭分支与 `ctx.Done()` 分支都
+`flush(context.Background())`）：`runCtx` 取消后在途批次仍要落库，用派生 ctx 会让 BulkWrite 立刻被取消、丢数据。
+这正是 fd 看门狗"优雅自重启"和 SIGTERM 优雅退出都不丢数据的根据——取消 `runCtx` 只停"读新行"，已 drain 进
+worker 的批次走 background ctx 写完。`RunWorkers` 内 `wg.Wait()` 等所有 worker 退出后才返回，`Service.Run`
+再 `<-reportDone` 等 stats reporter 退出、`logFinalStats` 打收尾摘要。
+
 ### 7.3 配置装配的函数链
 
 ```text
@@ -516,3 +548,84 @@ main → config.Load(文件 < TANGO_* env < flag) → viper.AllSettings 物化 �
 `client.New` 把三者地址原样交给 `api.New(..., nil)`（cfgsync 传 nil——SDK 不内嵌运行时配置同步；与上面角色侧
 最终调用的 `api.New` 同一入口）。`WithConfigFile`/`WithConfigBytes` 可从 gateway 兼容配置导入 dao/parser.filter/
 process 三段（忽略 logging/source/role），再被个别 `With*` 覆盖。
+
+---
+
+## 8. v1.5 可靠性架构（fd 泄漏防护 / 看门狗 / 并发正确性）
+
+> 本节是 v1.5/v1.5.1 相对 v1.4 的可靠性增量，集中在 tailer 的 fd 生命周期、daemon 的 fd 看门狗与运行时指标、
+> 以及上报链路在并发/背压下的正确性。对应任务单 [`doc/test.md`](../test.md) C/D/E/F/G 组、
+> [`doc/test2.md`](../test2.md)，实测见 [`doc/result.md`](../result.md)。
+
+### 8.1 fd 泄漏防护：tailer 的删除回收（`internal/source/tailer/tailer.go`）
+
+**根因**：tailer 用 `hpcloud/tail`（`Config{ReOpen:true, Follow:true}`）。被 tail 的日志被 lumberjack
+rotate/删除时，inotify 对"本进程仍持有打开 fd 的文件被 unlink"**不发 `IN_DELETE_SELF`**（自锁：该事件只在
+最后一个 fd 关闭时触发，而那个 fd 就是我们自己的）→ `ReOpen:true` 永远跟着已删除的 inode，fd 永不释放 →
+deleted-but-open 文件堆积撑满 overlay（rocket-nano EKS 实测 ~5GB/h）。
+
+**修复 = 两条独立回收路径 + 一个防死锁收尾**：
+
+| 机制 | 位置 | 时延 | 作用 |
+|---|---|---|---|
+| `reapMissing`（粗兜底） | `scanAndTail` 每 `rescanInterval` 反向比对 | ≤1×rescan（默认 30s） | `discoverFiles` 已不返回的 path → cancel 其 per-file `CancelFunc` → goroutine 退出、defer 关 fd、`delete(t.tailed,path)` |
+| event/hybrid `os.Stat`+`os.SameFile` ticker（快路径） | `tailFileEvent`/`tailFileHybridEvent` 每 `hybridPollInterval`（500ms） | ~500ms | stat 失败（删除）或 inode 变（原地 rotate）→ `return` → defer `stopTail` 立即释放 fd |
+| poll 自带 | `readFollowFile` 每 `pollInterval`（200ms）`os.Stat` 比 inode | ~200ms | 删除即 `defer f.Close()` |
+
+`startFile` 为每个文件起独立子 ctx（`context.WithCancel(ctx)`）存进 `t.tailed[path]`，goroutine 退出时
+`delete(t.tailed,path)`——所以 `Tailer.TailedCount()`（live tail goroutine 数）= "当前打开的日志 fd 数"的直接
+代理，单调上涨即泄漏。三种 tailMode：`poll`（自己 `os.Open`+scanner 循环，免疫 inotify 丢通知）、`event`（hpcloud
+纯事件，v1.5.1 起加了上面那个 ticker）、`hybrid`（默认；event 为主 + poll 兜底，`out` channel cap 2000）。
+
+> ⚠️ event ticker 与 `reapMissing` 在代码里都标了 **RELEASE-GATE INVARIANT — 不要删**：删任一个都立刻复发
+> 泄漏，且 Windows 测不出（deleted-but-open 是 Linux 语义），只有 Linux 容器的 `TestReap_C2`/`TestFD_D2/D3`
+> 与 E/G soak 能抓到。
+
+### 8.2 `-race` 与背压抓出的四个并发 bug（均已修）
+
+release gate 的 `-race` + 背压用例抓出并修了四个真实并发缺陷（同在 `tailer.go`）：
+
+1. **`tt.Tell()` 数据竞争**（hybrid）：原用 `hpcloud/tail.Tell()` 跟踪偏移，它无锁读 `tail.file`/`tail.reader`
+   与库内部 reopen 竞争 → 改为**按字节自计** `lastSize`（每消费一行 +len+1），不再碰库内部状态。
+2. **`close(out)` 发送竞争**（所有模式）：`Run` 在 per-file tail goroutine 还在 `out<-line` 时就 `close(out)`
+   → 加 `sync.WaitGroup`，`Run` 在 `wg.Wait()` 后才 `close(out)`。
+3. **背压下 `Stop()` 死锁**（event/hybrid）：`out` 满时消费者停读 `tt.Lines`，库内部 goroutine 阻塞在
+   `tt.Lines<-`，`tt.Stop()` 的 `Wait()` 死等 → fd 永不释放 → `stopTail()` 在 Stop 时并发 drain `tt.Lines`，
+   让库 goroutine 观察到 kill 后退出。
+4. **hybrid 背压丢行**：`lastSize` 在"从库取到行"时就前移，stall→poll 切换会跳过手里那条未转发的行 →
+   改为**只在 `out<-line` 成功后**前移 `lastSize`，ctx 取消时不前移，让 poll 兜底重读。
+
+回归：`backpressure_test.go`（F1/F2 三模式）、`lifecycle_test.go`（C/D），`-race -count=5` 全绿。
+
+### 8.3 identity 解析与 `id_counter` 冷启动竞争修复（`internal/dao/store`）
+
+identity 把 `#account_id`/`#distinct_id` 解析为稳定 `#user_id`：`IdentityResolver`（`identity.go`）持
+`mapping`（`id_mapping`，`#account_id` 唯一索引）+ `counter`（`id_counter` 单文档自增）+ 进程内
+`accountCache`/`distinctCache`（`sync.Map`）——重复账号零 IO 命中缓存。新账号走 `atomicCreateFor*`：先
+`nextUserID` 取号、再 `InsertOne` 映射（撞唯一索引 → `IsDuplicateKeyError` → 回读对方的，幂等）。
+
+**v1.5.1 修复的竞争**：`nextUserID`（`identity_atomic.go`）用 `FindOneAndUpdate(upsert)` 自增。计数文档
+**首次创建**时若多 worker 并发 upsert-insert 同一 `{_id:"user_id"}`，除一个外全拿 `E11000`；原代码不重试 →
+Resolve 失败 → 事件被丢进 `dead_letter`。原生 MongoDB 潜伏、DocumentDB upsert 并发下**高概率触发**（EC2 压测
+实锤）。**修复**：`nextUserID` 对 duplicate-key 重试 ≤8 次（输家重试看到已存在计数文档、直接 `$inc`，每个不同
+账号仍唯一号）；非 dup 错误与 ctx 取消立即返回。回归 `TestIdentityResolver_ConcurrentColdCounter`。
+
+### 8.4 fd 看门狗 + 运行时指标（`internal/role/daemon/report.go`、`procstats.go`）
+
+`reportStats` 每 `statsReportInterval`（60s；测试里是 var 可调小）：
+- 打 `report: runtime stats`：`goroutines`（`runtime.NumGoroutine`）/ `open_fds`（`openFDCount`）/
+  `tailed_files`（`Tailer.TailedCount`）。**升高的 open_fds/tailed_files = fd 泄漏早期信号。**
+- **fd 看门狗**：`fdWatchdogTriggered(openFDs, threshold) = threshold>0 && openFDs>threshold`（严格大于）。
+  超阈 → 打 ERROR `triggering graceful restart` → `triggerRestart()`（即 `cancelRun`）取消 `runCtx` →
+  pipeline drain+flush 在途批次（§7.2.1 的 background-ctx final flush）→ `Run` 干净返回 → exit 0 →
+  编排器（`restartPolicy: Always`）拉起新容器、fd 表清零。这是"修复退化时自愈"的兜底。
+
+`openFDCount()`（`procstats.go`）读 `/proc/self/fd`（减 1 去 ReadDir 自身 fd），**非 Linux 返回 -1**——
+此时 `-1 > threshold` 永不成立，看门狗自动 inert。**默认 `maxOpenFDs=0` = 关闭**，生产必须显式设非 0 阈值。
+
+### 8.5 上报吞吐特征
+
+EC2（us-east-1）VPC 内对真 DocumentDB 实测 daemon 上报链路：n=20000 / 500 账号，4 worker ≈1175 events/s
+（17.0s）、8 worker ≈1456 events/s（13.7s），`20000/20000` 全落库 0 dead-letter。吞吐随
+`pipeline.batchWorkers` 扩展 ⇒ **瓶颈在 DocumentDB 写延迟**；identity 缓存让只有首现用户走库。详见
+[`doc/v1.5/perf-daemon-throughput.md`](perf-daemon-throughput.md)、压测器 [`test/perf/main.go`](../../test/perf/main.go)。
