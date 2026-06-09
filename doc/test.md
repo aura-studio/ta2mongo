@@ -13,12 +13,12 @@
 ---
 
 ## A. 测试环境（Docker，Linux/amd64）
-- [ ] A1 新建 `test/Dockerfile`：`FROM golang:1.23`，`apt-get install -y procps lsof`（要 `ls /proc`、`lsof`）。
-- [ ] A2 新建 `test/docker-compose.yml`：服务 `tango-test`（挂载源码）+ `mongo:6`；给 `tango-test` 注入 `TANGO_TEST_MONGO_URI=mongodb://mongo:27017`。
-- [ ] A3 `docker compose -f test/docker-compose.yml run --rm tango-test go build ./...` 通过。
+- [x] ~~A1 新建 `test/Dockerfile`：`FROM golang:1.23`，`apt-get install -y procps lsof`（要 `ls /proc`、`lsof`）。~~
+- [x] ~~A2 新建 `test/docker-compose.yml`：服务 `tango-test`（挂载源码）+ `mongo:6`；给 `tango-test` 注入 `TANGO_TEST_MONGO_URI=mongodb://mongo:27017`。~~
+- [x] ~~A3 `docker compose -f test/docker-compose.yml run --rm tango-test go build ./...` 通过。~~
 
 ## B. 静态与单元
-- [ ] B1 容器内 `go vet ./...` 无告警。
+- [x] ~~B1 容器内 `go vet ./...` 无告警。~~
 - [ ] B2 容器内 `go test -race ./...` 全绿（无 mongo 的纯单元）。
 - [ ] B3 容器内 `go test -race ./internal/source/tailer/...` 全绿。
 

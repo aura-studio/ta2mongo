@@ -1,0 +1,25 @@
+services:
+  tango-test:
+    platform: linux/amd64
+    build:
+      context: ..
+      dockerfile: test/Dockerfile
+    working_dir: /workspace
+    volumes:
+      - ..:/workspace
+    environment:
+      GOTOOLCHAIN: auto
+      TANGO_TEST_MONGO_URI: mongodb://mongo:27017
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  mongo:
+    image: mongo:6
+    platform: linux/amd64
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand({ ping: 1 })"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
