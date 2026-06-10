@@ -28,8 +28,9 @@
       graceful restart` ERROR + drain 在途 40/40 全落库不丢 + Run 干净返回(=exit 0)；④重启清零属编排器职责。
 - [x] ~~**背压下 fd 释放 / drain 不死锁（F2）未验证**~~ — `TestBackpressure_F1/F2`（三模式 `-race`）+
       `TestWatchdog_F2`（背压下 drain 401ms 完成、不死锁、200/200 不丢）。
-- [~] **长稳/压测（test.md G1）** — soak 驱动 [`test/soak/main.go`](../test/soak/main.go) 已就绪并跑通
-      E2（11min PASS）；G1 4h **进行中**（t≈2h `deleted_fd≡0`、四曲线平稳）。跑满后归档 VERDICT 即闭环。
+- [x] ~~**长稳/压测（test.md G1）**~~ — **4h 跑满 VERDICT: PASS**（4536 万行/10.24GB @2.56GB/h，
+      `deleted_fd` 全程 0、goroutine 趋势 0、RSS 峰值 259MB、fs_used 有界锯齿）。基线归档
+      `test/results/soak_G1.csv` + `soak_G1_summary.txt`。**"真的不泄漏"的硬证据已落地——P0 验证面闭环。**
 
 > ⚠️ 注意：`v1.5.1` 这个 tag 是在测试任务单（`91e0d17`，加了 test.md/test2.md）**之前**就打的，
 > 所以 tag 本身不代表通过了任何 release gate。要么补全验证后视为正式可用，要么重打 `v1.5.2`。

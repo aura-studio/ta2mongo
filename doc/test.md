@@ -44,8 +44,8 @@
 - [x] ~~F2 背压期间删除正在 tail 的文件：fd 仍在 ≤ N 秒内释放（验证 `out<-line` 阻塞不会卡住 fd 释放路径）。~~
 
 ## G. 长稳 / 压测
-- [ ] G1 模拟生产速率（~2–3 GB/h，size100/backup10）连续 rotate **4 小时**：`deleted fd / goroutine / RSS / 卷 used` 四条曲线全程平稳（无单调上升）。
-- [ ] G2 把 G1 的四条曲线数据归档到 `test/results/`（作为基线，留待回归对比）。
+- [x] ~~G1 模拟生产速率（~2–3 GB/h，size100/backup10）连续 rotate **4 小时**：`deleted fd / goroutine / RSS / 卷 used` 四条曲线全程平稳（无单调上升）。~~（**VERDICT: PASS**：4h 整、4536 万行/10.24GB @2.56GB/h；`deleted_fd` 全程 **0**、goroutine 趋势 **0**、RSS 峰值 259MB、fs_used 1001–1100MB 锯齿 trend +17.3MB，7 项不变量全过）
+- [x] ~~G2 把 G1 的四条曲线数据归档到 `test/results/`（作为基线，留待回归对比）。~~（[`soak_G1.csv`](../test/results/soak_G1.csv) 481 个采样点 + [`soak_G1_summary.txt`](../test/results/soak_G1_summary.txt)）
 
 ## H. 功能端到端（集成，需 mongo）
 - [x] ~~H1 投喂含 `PaymentOrderState` / `user_set` 的样本日志：只过滤这两类、写 mongo 字段正确。~~
@@ -56,12 +56,16 @@
 ## I. 修复验收（改完 tailer 再回归）
 - [x] ~~I1 代码核查：`tailFileHybridEvent` / `tailFileEvent` 在文件删除后 `return` + `Stop()`（不再 `continue` 空等）；对"删除不重现"的备份用 `ReOpen:false` 或走 poll/inode 路径。~~（删除时 `return false`→`defer stopTail()`；inode 漂移由 stat-ticker `os.SameFile` 兜底）
 - [x] ~~I2 代码核查：tail goroutine 退出处有 `delete(t.tailed, path)`。~~（`startFile` 的 defer 中）
-- [ ] I3 D 组 + E2 + G1 全部重跑通过。（D ✓ green -race；E2 ✓；G1 进行中）
+- [x] ~~I3 D 组 + E2 + G1 全部重跑通过。~~（D ✓ `-race -count=5`；E2 ✓ PASS；G1 ✓ PASS）
 
 ---
 
 ## Release Gate（全勾才发 v1.5）
-- [ ] D 组全过（fd/goroutine 不泄漏）
-- [ ] E2 与 G1：deleted fd 与卷 used 全程平稳
-- [ ] H1–H4 功能正确
-- [ ] I1–I3 修复落地并回归通过
+- [x] ~~D 组全过（fd/goroutine 不泄漏）~~
+- [x] ~~E2 与 G1：deleted fd 与卷 used 全程平稳~~（E2 11min PASS；G1 4h PASS，deleted_fd 全程 0）
+- [x] ~~H1–H4 功能正确~~
+- [x] ~~I1–I3 修复落地并回归通过~~
+
+> **🎉 Release Gate 全过（2026-06-10）**。全程 Linux Docker（Ubuntu 24.04 + Go 1.26.2，`-race`）；
+> 期间顺带修了 4 个 tailer 并发 bug + 1 个 identity `id_counter` 竞争（DocumentDB 压测抓出）。
+> 详见 [`result.md`](result.md)、[`v1.5/perf-daemon-throughput.md`](v1.5/perf-daemon-throughput.md)。

@@ -120,9 +120,11 @@ ok  github.com/aura-studio/tango/tests                     8.020s
 - ✅ **test.md E2** —— 新增 soak 驱动 [`test/soak/main.go`](../test/soak/main.go)（真 `natefinch/lumberjack`
   size10/backup10 + hybrid tailer），跑满 11min @2560MB/h：`deleted_fd` 全程 0、`fs_used` 100–109MB
   锯齿 trend 0.0MB、goroutine 平直、2.13M 行无 stall。基线存 [`test/results/soak_E.csv`](../test/results/soak_E.csv)。**VERDICT PASS**。
-- 🟡 **test.md G1** —— 同驱动 size100/backup10 @2560MB/h **4 小时**长稳进行中；t≈2h 时 `deleted_fd≡0`、
-  goroutine=40 平直、RSS≈250MB 稳、`fs_used` ~1.0–1.08GB 锯齿、2200 万行无 stall。CSV 流式落
-  [`test/results/soak_G1.csv`](../test/results/soak_G1.csv)（G2 归档）。跑满后补 VERDICT。
+- ✅ **test.md G1** —— 同驱动 size100/backup10 @2560MB/h **4 小时跑满，VERDICT: PASS**：
+  4536 万行 / 10.24GB 无 stall；481 个采样点上 `deleted_fd` 全程 **0**、goroutine 趋势 **0**（峰值 42）、
+  RSS 峰值 259MB、`fs_used` 1001–1100MB 有界锯齿（end-start trend +17.3MB），7 项不变量全过。
+  基线归档 [`test/results/soak_G1.csv`](../test/results/soak_G1.csv) +
+  [`soak_G1_summary.txt`](../test/results/soak_G1_summary.txt)（G2 ✓）。
 - ✅ **test2.md E2（看门狗优雅重启核心门禁）** —— `TestWatchdog_E2_GracefulRestartDrainsNoLoss`
   ([internal/role/daemon/watchdog_test.go](../internal/role/daemon/watchdog_test.go))：打 `triggering graceful restart`
   ERROR + drain 在途 40/40 全落库不丢 + Run 干净返回(=exit 0)。④容器重启清零属编排器职责。
@@ -149,4 +151,8 @@ ok  github.com/aura-studio/tango/tests                     8.020s
   两条**已消除**。
 - ✅ **长稳/看门狗/背压系统级场景已补齐**：E2 soak（PASS）、看门狗优雅重启 E2（PASS）、背压 F2（PASS）、
   H1–H4（PASS）；轮转/背压期间还修了 4 个真实 tailer 并发 bug 并通过全量 `-race ./...` 回归。
-- 🟡 **仅余 G1 4h 长稳在跑动中**（中途四条曲线全程平稳、`deleted_fd≡0`），跑满后本文件补最终 VERDICT。
+- ✅ **G1 4h 长稳跑满 PASS**（deleted_fd 全程 0、四条曲线全平、4536 万行无 stall）——
+  **test.md Release Gate 至此全过（2026-06-10）**。
+- ✅ **附加**：EC2+真 DocumentDB 的 daemon 上报压测（[`v1.5/perf-daemon-throughput.md`](v1.5/perf-daemon-throughput.md)）
+  抓出并修复了 identity `id_counter` 冷启动 E11000 竞争（修复前事件被静默 dead-letter）；
+  修复后 20000/20000 落库、约 1175–1456 events/s。
