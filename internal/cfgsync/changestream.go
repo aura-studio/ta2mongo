@@ -79,13 +79,29 @@ func (b *changeStreamBackend) Run(ctx context.Context, observe func(bson.M) erro
 		docCh := make(chan bson.M)
 		errCh := make(chan error, 1)
 		pumpCtx, cancelPump := context.WithCancel(ctx)
-		go b.pump(pumpCtx, cs, docCh, errCh)
+		pumpDone := make(chan struct{})
+		go func() {
+			defer close(pumpDone)
+			b.pump(pumpCtx, cs, docCh, errCh)
+		}()
+
+		// stopPump cancels the pump and WAITS for it to fully exit before the
+		// caller touches cs again. mongo.ChangeStream is not safe for concurrent
+		// use: closing it while the pump is still inside cs.Next is a data race
+		// in the driver's BatchCursor (Close/KillCursor vs Next/loopNext) — the
+		// -race change-stream integration tests catch it on a replica set. The
+		// wait cannot hang: cancellation interrupts Next, the docCh send has a
+		// ctx.Done arm, and errCh is buffered so the pump's final send never blocks.
+		stopPump := func() {
+			cancelPump()
+			<-pumpDone
+		}
 
 		broken := false
 		for !broken {
 			select {
 			case <-ctx.Done():
-				cancelPump()
+				stopPump()
 				_ = cs.Close(context.Background())
 				return ctx.Err()
 			case <-reconcile.C:
@@ -95,7 +111,7 @@ func (b *changeStreamBackend) Run(ctx context.Context, observe func(bson.M) erro
 				_ = observe(doc)
 			case err := <-errCh:
 				logging.WithError(err).Warn("cfgsync: change stream broke, re-subscribing")
-				cancelPump()
+				stopPump()
 				_ = cs.Close(context.Background())
 				cs, err = b.resubscribe(ctx)
 				if err != nil {
@@ -106,7 +122,6 @@ func (b *changeStreamBackend) Run(ctx context.Context, observe func(bson.M) erro
 				broken = true
 			}
 		}
-		cancelPump()
 	}
 }
 
