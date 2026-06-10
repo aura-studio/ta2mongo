@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/aura-studio/tango/config"
+	"github.com/aura-studio/tango/internal/cfgsync"
 	"github.com/aura-studio/tango/internal/cfgtree"
 	"github.com/aura-studio/tango/internal/dao"
 	"github.com/aura-studio/tango/internal/parser"
@@ -19,21 +20,25 @@ import (
 // engine's own default.
 //
 // Only the config subtrees the ingestion engine actually consumes are exposed:
-// dao.*, parser.filter.* and process.*. The logging.*, source.* and role.*
+// dao.*, parser.filter.*, process.* and cfgsync.* (the central-config
+// collection/document the PublishConfig/FetchConfig faces address; the client
+// never starts the cfgsync watcher). The logging.*, source.* and role.*
 // subtrees belong to the binary roles, not to an embedded client.
 type Option func(*options)
 
 // options holds the actual tango module config structs the ingestion engine
 // consumes, so each With* sets a field of the real config structure rather than
 // a parallel re-declaration: dao.Config (dao.mongo.* + dao.store.*),
-// parser.Config (parser.filter.*) and process.Config (process.* +
-// process.pipeline.*). New hands &dao / &proc / &parser straight to api.New.
+// parser.Config (parser.filter.*), process.Config (process.* +
+// process.pipeline.*) and cfgsync.Config (cfgsync.*). New hands &dao / &proc /
+// &parser / &cfgsync straight to api.New.
 type options struct {
 	ctx context.Context
 
-	dao    dao.Config
-	parser parser.Config
-	proc   process.Config
+	dao     dao.Config
+	parser  parser.Config
+	proc    process.Config
+	cfgsync cfgsync.Config
 
 	// err records the first failure from a config-loading option
 	// (WithConfigFile / WithConfigBytes); New surfaces it instead of building a
@@ -49,6 +54,7 @@ func defaultOptions() *options {
 	o.dao.ApplyDefaults()
 	o.parser.ApplyDefaults()
 	o.proc.ApplyDefaults()
+	o.cfgsync.ApplyDefaults()
 	return o
 }
 
@@ -69,8 +75,8 @@ func WithContext(ctx context.Context) Option {
 // WithConfigFile imports settings from a gateway-compatible unified config file
 // (YAML or JSON, by extension) — the same schema the tango binary's --config
 // accepts. Only the subtrees the embedded engine consumes are applied: dao.*,
-// parser.filter.* and process.*; the logging.*, source.* and role.* sections
-// (which belong to the binary roles) are ignored. TANGO_* env vars layer on top,
+// parser.filter.*, process.* and cfgsync.*; the logging.*, source.* and role.*
+// sections (which belong to the binary roles) are ignored. TANGO_* env vars layer on top,
 // matching the binary's precedence, and a non-existent path yields defaults only.
 //
 // It establishes a base configuration from the file, so place it before any
@@ -91,9 +97,9 @@ func WithConfigFile(path string) Option {
 
 // WithConfigBytes is the in-memory analogue of WithConfigFile: it imports a
 // gateway-compatible unified config from raw bytes (YAML or JSON, detected from
-// the content), applying dao.*, parser.filter.* and process.* and ignoring the
-// role-only sections. Useful for embedded configs. Same base-then-override
-// semantics as WithConfigFile.
+// the content), applying dao.*, parser.filter.*, process.* and cfgsync.* and
+// ignoring the role-only sections. Useful for embedded configs. Same
+// base-then-override semantics as WithConfigFile.
 func WithConfigBytes(data []byte) Option {
 	return func(o *options) {
 		if o.err != nil {
@@ -108,11 +114,12 @@ func WithConfigBytes(data []byte) Option {
 	}
 }
 
-// applyTree decodes the dao / parser / process branches of a gateway-compatible
-// config tree onto the options, then re-applies each module's defaults so any
-// leaf the config omitted keeps the engine's default rather than a zero value.
-// The other unified-schema sections (logging / source / role) are intentionally
-// ignored: they configure the binary roles, not an embedded client.
+// applyTree decodes the dao / parser / process / cfgsync branches of a
+// gateway-compatible config tree onto the options, then re-applies each
+// module's defaults so any leaf the config omitted keeps the engine's default
+// rather than a zero value. The other unified-schema sections (logging /
+// source / role) are intentionally ignored: they configure the binary roles,
+// not an embedded client.
 func (o *options) applyTree(tree cfgtree.Tree) {
 	if err := tree.Sub("dao").Into(&o.dao); err != nil {
 		o.err = fmt.Errorf("client: config dao: %w", err)
@@ -126,9 +133,14 @@ func (o *options) applyTree(tree cfgtree.Tree) {
 		o.err = fmt.Errorf("client: config process: %w", err)
 		return
 	}
+	if err := tree.Sub("cfgsync").Into(&o.cfgsync); err != nil {
+		o.err = fmt.Errorf("client: config cfgsync: %w", err)
+		return
+	}
 	o.dao.ApplyDefaults()
 	o.parser.ApplyDefaults()
 	o.proc.ApplyDefaults()
+	o.cfgsync.ApplyDefaults()
 }
 
 // -------------------------------------------------------------------- dao.mongo

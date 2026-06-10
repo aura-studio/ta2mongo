@@ -26,10 +26,16 @@
 // of which only dao.*, parser.filter.* and process.* are consumed:
 //
 //	c, err := client.New(client.WithConfigBytes(embeddedConfigYAML))
+//
+// Beyond log ingestion the client also exposes the cfgsync central-config faces
+// (the same cores behind gateway POST/GET /config): PublishConfig/AppendConfig
+// validate and write the runtime config document, FetchConfig reads it back.
 package client
 
 import (
 	"context"
+
+	"go.mongodb.org/mongo-driver/v2/bson"
 
 	"github.com/aura-studio/tango/internal/role/api"
 )
@@ -53,6 +59,24 @@ type Client interface {
 	Upload(ctx context.Context, lines ...string) (Result, error)
 	// EnsureIndexes creates all required MongoDB indexes (idempotent).
 	EnsureIndexes(ctx context.Context) error
+	// PublishConfig validates and publishes a runtime config document to the
+	// central cfgsync collection, returning the new monotonic version. doc
+	// carries the config content (e.g. {"filter": {"include": [...],
+	// "exclude": [...]}}); cfgsync owns _id and version. A document carrying a
+	// subtree off the allowlist, or a filter that does not compile, is rejected
+	// before any write. The daemon/gateway watchers pick the new version up.
+	PublishConfig(ctx context.Context, doc map[string]any) (int64, error)
+	// AppendConfig is the merge flavour of PublishConfig: the published filter
+	// rules are unioned into the stored ones (an omitted include/exclude side
+	// keeps its stored value) under an optimistic version guard, so concurrent
+	// appends never lose each other's rules. Same validation gates as
+	// PublishConfig, run on the merged document.
+	AppendConfig(ctx context.Context, doc map[string]any) (int64, error)
+	// FetchConfig returns the current central config document (including its
+	// monotonic version), or (nil, nil) when nothing has been published yet.
+	// The document carries only plain Go values — map[string]any, []any and
+	// scalars — never driver types, so callers stay decoupled from BSON.
+	FetchConfig(ctx context.Context) (map[string]any, error)
 	// Close disconnects from MongoDB and releases all resources.
 	Close() error
 }
@@ -78,7 +102,7 @@ func New(opts ...Option) (Client, error) {
 		return nil, o.err
 	}
 
-	engine, err := api.New(o.ctx, &o.dao, &o.proc, &o.parser, nil)
+	engine, err := api.New(o.ctx, &o.dao, &o.proc, &o.parser, &o.cfgsync)
 	if err != nil {
 		return nil, err
 	}
@@ -100,5 +124,66 @@ func (c *client) Upload(ctx context.Context, lines ...string) (Result, error) {
 }
 
 func (c *client) EnsureIndexes(ctx context.Context) error { return c.engine.EnsureIndexes(ctx) }
+
+func (c *client) PublishConfig(ctx context.Context, doc map[string]any) (int64, error) {
+	return c.engine.PublishConfig(ctx, bson.M(doc))
+}
+
+func (c *client) AppendConfig(ctx context.Context, doc map[string]any) (int64, error) {
+	return c.engine.AppendConfig(ctx, bson.M(doc))
+}
+
+func (c *client) FetchConfig(ctx context.Context) (map[string]any, error) {
+	doc, err := c.engine.FetchConfig(ctx)
+	if err != nil || doc == nil {
+		return nil, err
+	}
+	norm := make(map[string]any, len(doc))
+	for k, v := range doc {
+		norm[k] = normalizeValue(v)
+	}
+	return norm, nil
+}
+
+// normalizeValue recursively converts the BSON container types the driver
+// decodes into (bson.D / bson.M / bson.A) to plain Go containers, so
+// FetchConfig's contract — no driver types in the returned document — holds at
+// every nesting level.
+func normalizeValue(v any) any {
+	switch t := v.(type) {
+	case bson.D:
+		m := make(map[string]any, len(t))
+		for _, e := range t {
+			m[e.Key] = normalizeValue(e.Value)
+		}
+		return m
+	case bson.M:
+		m := make(map[string]any, len(t))
+		for k, val := range t {
+			m[k] = normalizeValue(val)
+		}
+		return m
+	case map[string]any:
+		m := make(map[string]any, len(t))
+		for k, val := range t {
+			m[k] = normalizeValue(val)
+		}
+		return m
+	case bson.A:
+		s := make([]any, len(t))
+		for i, val := range t {
+			s[i] = normalizeValue(val)
+		}
+		return s
+	case []any:
+		s := make([]any, len(t))
+		for i, val := range t {
+			s[i] = normalizeValue(val)
+		}
+		return s
+	default:
+		return v
+	}
+}
 
 func (c *client) Close() error { return c.engine.Close() }
