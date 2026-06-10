@@ -32,8 +32,11 @@
       `deleted_fd` 全程 0、goroutine 趋势 0、RSS 峰值 259MB、fs_used 有界锯齿）。基线归档
       `test/results/soak_G1.csv` + `soak_G1_summary.txt`。**"真的不泄漏"的硬证据已落地——P0 验证面闭环。**
 
-> ⚠️ 注意：`v1.5.1` 这个 tag 是在测试任务单（`91e0d17`，加了 test.md/test2.md）**之前**就打的，
-> 所以 tag 本身不代表通过了任何 release gate。要么补全验证后视为正式可用，要么重打 `v1.5.2`。
+> ~~⚠️ 注意：`v1.5.1` 这个 tag 是在测试任务单（`91e0d17`，加了 test.md/test2.md）**之前**就打的，
+> 所以 tag 本身不代表通过了任何 release gate。要么补全验证后视为正式可用，要么重打 `v1.5.2`。~~
+> ✅ **已重打 `v1.5.2`（at `548213c`，2026-06-10）**：首个通过完整 release gate 的 tag——
+> 含 4 个 tailer 并发修复 + identity `id_counter` 竞争修复，D/E2/G1/H/I 全过（G1 4h soak PASS）。
+> **生产部署请用 `v1.5.2`，不要用 `v1.5.1`。**
 
 ## P0 — 生产仍在"裸奔"（修复未落地）
 
