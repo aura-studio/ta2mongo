@@ -109,13 +109,40 @@ database/collection 前缀并在结束清理**，互不串库。
 > 备注：以上单元用例**未发现生产 bug**——代码与契约一致（如 talog `toString` 丢弃非字符串字段为 `""`、
 > `maskURI` 把 `user:pass`→`***:***`、`Process` 把逐行 panic 收成 dead_letter、`BatchSize<=0`→默认 1000）。
 
-### 仍未覆盖（需 Mongo 集成 / DocumentDB / 长跑，留作后续）
+### 第二轮收尾（2026-06-10）：剩余缺口全部处置完毕
 
-- §5.6 Data API 各 action 细分断言（EJ-2~7/9/10）、§5.7 SQL（SQL-2/4/5/6/7）——需 Mongo，多为 `🟡`。
-- §7 cfgsync changestream（CS-14~18/35）——需带 `--replSet` 的 Mongo 才跑。
-- §10.2 X-4（DocumentDB 兼容矩阵）——`dao/store` 存储层已在真 DocumentDB 跑过 23 用例，其余 Data API 面未单独跑。
-- G1 4h 长稳——进行中，跑满归档 VERDICT 后 G-C 完全闭环。
-- DocumentDB daemon 上报能力压测——见 `doc/` 下单独报告（计划中）。
+| 测试文件（新增） | 覆盖 ID | 结果 |
+|---|---|---|
+| `internal/dao/ejson/ultra_ejson_test.go` | EJ-2~EJ-10 逐 action + **X-7 防加限回归卫**（谁给 Data API 加 allowlist 它就红） | ✅ |
+| `internal/dao/sql/ultra_sql_test.go` | SQL-2/4/5/7（SQL-6 留 skip，注明需 DocumentDB） | ✅ |
+| `internal/dao/ultra_importboundary_test.go` | DAO-6 import 边界静态审计 + SQL-2 once 缓存指针同一性 | ✅ |
+| `internal/dao/store/ultra_writemodel_test.go` | WM-15 metaKeys/splitFields 精确分离、WM-7 未知 user 类型≡user_set、WM-11 #uuid/_ts 注入、IDX-2 user 索引集精确 5 个 | ✅ |
+| `internal/source/tailer/ultra_retry_test.go` | TAIL-21 错误重试按 pollInterval 限频不忙等 | ✅ |
+| `internal/parser/ultra_facade_test.go` | FILT-12 门面重导出与 talog 类型同一 | ✅ |
+| `client/ultra_concurrent_test.go` | SDK-8 单 Client 16×50 并发 Upload `-race`（batch+pipeline），800/800 精确 | ✅ |
+| `internal/cfgsync/ultra_cs16_test.go` | CS-16 断流（副本集上 drop collection）→"change stream broke, re-subscribing"→恢复（reconcile 调到 10m 排除干扰） | ✅ |
+
+- **X-2（P0）panic 隔离**：✅ 以穷举审计闭环——生产代码共 **12 个 goroutine 派生点**，逐一核验均有
+  `logging.Recover`（或可证不会 panic，如 `stopTail` 的纯 drain 循环）；gateway 每请求 goroutine 由
+  net/http 自带 recover 兜底。无缺口、无需补测试。
+- **CS 组在副本集上真跑**：起 `--replSet rs0` 的 mongo 后,原本一直 `t.Skip` 的
+  `TestIntegration_ChangeStream_*` 首次真跑,`-race` 当场抓出 **pump/Close 数据竞争**(生产
+  `backend=changestream` 每次退出/断流重连都踩),已修(`stopPump` 等 pump 退出再 `cs.Close`,
+  commit `7c1a854`),`-race -count=3` 验证通过。
+- **CS-16 附带的运维语义记档**（非 bug）：`_tango_config` 集合若被删除重建，版本从 1 重计，运行中的
+  watcher 因单调版本守卫会**静默忽略**新配置，直到版本超过其内存中的 lastVersion——符合 no-rollback
+  设计，但运维删集合后需以更高版本重发配置（或重启 watcher）。
+
+### 明确不做 / 需专属环境的残余（全部有理由）
+
+- **SQL-6 / EJ-11 / X-4 全矩阵**：DocumentDB 特有报错透传与全兼容矩阵——需再开 DocumentDB 隧道专跑；
+  存储层 23 用例已在真 DocumentDB 通过，daemon 上报压测亦然（见 `v1.5/perf-daemon-throughput.md`）。
+- **CS-35 安全模型逐机制矩阵**：startup 收敛/单调守卫/validate-then-swap/subscribe-then-snapshot 各机制
+  已被现有 poll/changestream 集成用例分别覆盖（HotSwap/BadFilterKeepsLastGood/VersionGuardNoRollback/
+  FanOut + ultra_cs16），未再写单独的逐机制矩阵用例——增量价值低。
+- **DMN-14**（daemon 内嵌 cfgsync e2e）、**GW-8**（10s 优雅 Shutdown 计时）、**MAIN-2**（进程级退出码）、
+  **X-8**（重读幂等专测，H3 的 uuid 上插已覆盖主路径）、**CFG-14**（错误前缀逐模块）等 P1/P2 🟡：
+  主路径均有覆盖，残余为细化断言，留作 v1.6 测试债（不阻发版）。
 
 ---
 

@@ -52,11 +52,14 @@
 
 ## P1 — 平台局限 / 已知但未根治的坑
 
-- [ ] **上游库 hpcloud/tail 的自锁根因没消除，只是绕过**。当前靠两条兜底：`reapMissing`（≤1×rescan，≤30s）
+- [~] **上游库 hpcloud/tail 的自锁根因没消除，只是绕过**。当前靠两条兜底：`reapMissing`（≤1×rescan，≤30s）
       + event/hybrid 的 `os.Stat`+`os.SameFile` 自检 ticker（~500ms）。event 模式本质上是"我们自己加了 ticker"
       才不泄漏（v1.5.0 前 event 模式无 ticker，会一直挂住）。
       **风险**：谁要是把 `tailFileEvent`/`tailFileHybridEvent` 里那个 `ticker` 删了、或把 reap 改回去，坑立刻复发，
       且 Windows 测试发现不了。考虑加注释护栏 / fork 或替换上游库，从源头根治。
+      （**护栏已落地** `1aaf686`：两处标了 RELEASE-GATE INVARIANT "do NOT remove" 注释 + Linux 容器回归
+      `TestReap_C2`/`TestFD_D2/D3` 看门；另在 `-race` 下顺带修了 hpcloud 交互的 4 个并发 bug。
+      **fork/替换上游库的决策项保留** → 移交 v1.6 议题（v1.6/todo.md）。）
 - [ ] **poll 模式在 Windows 无法删除打开的文件**（`os.Open` 没带 `FILE_SHARE_DELETE`），
       所以 poll 的 deleted-fd 回收**只能在 Linux 验证**，Windows 永远测不出泄漏。
       本机（Windows）开发时务必记得：fd / inode / deleted-but-open 相关的"绿"都是假绿，一律以 Linux 容器结果为准。
@@ -73,7 +76,10 @@
 - [x] ~~**`NewFromTree` 重构等价性（test2.md G 组）未验证**~~ — daemon/api/gateway 三处 `NewFromTree` 等价
       （`TestNewFromTree_G1/G3/G4`）+ daemon fail-fast 在连 Mongo 前校验 logPattern（`G2`，0.00s 返回）+
       typed `New()` 回归（全量 `-race ./...` 含 role/client/test 全绿）。
-- [ ] **附带产物清理**：旧分支 `hotfix/logger-dedup-5e3316c73` 确认可删（logger ext 路由改名为 tango 已在 master `3c63ad5c7` 落地，消除了 double-writer 配置问题）。
+- [x] ~~**附带产物清理**：旧分支 `hotfix/logger-dedup-5e3316c73` 确认可删（logger ext 路由改名为 tango 已在 master `3c63ad5c7` 落地，消除了 double-writer 配置问题）。~~
+      （已核实 2026-06-10：该分支在 **rocket-nano** 仓库，分支上的 dedup 修复未合 master，但取代它的
+      `3c63ad5c7` **确认在 master**——按本条自身判据**可删**。删除命令（破坏性，人工执行）：
+      `git push origin --delete hotfix/logger-dedup-5e3316c73 && git branch -D hotfix/logger-dedup-5e3316c73`）
 
 ---
 
