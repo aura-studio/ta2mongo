@@ -7,6 +7,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -105,10 +106,12 @@ func RunSQL(ctx context.Context, daoCfg *dao.Config, in io.Reader, out io.Writer
 // RunConfig reads a single runtime config document (JSON) from in, publishes it
 // to the central cfgsync collection through the embedded api engine, and writes
 // {"version":<new>} as JSON to out. It is the console equivalent of the gateway
-// POST /config endpoint. cfgsyncCfg supplies the target collection / document id
-// (so the cli publishes to the same document the daemon/gateway watch); it does
-// not use the process/parser config.
-func RunConfig(ctx context.Context, daoCfg *dao.Config, cfgsyncCfg *cfgsync.Config, in io.Reader, out io.Writer) error {
+// POST /config endpoint. mode selects the publish semantics: "" / "set" replaces
+// the stored subtrees (historical behaviour), "append" unions the published
+// filter rules into the stored ones. cfgsyncCfg supplies the target collection /
+// document id (so the cli publishes to the same document the daemon/gateway
+// watch); it does not use the process/parser config.
+func RunConfig(ctx context.Context, daoCfg *dao.Config, cfgsyncCfg *cfgsync.Config, mode string, in io.Reader, out io.Writer) error {
 	body, err := io.ReadAll(in)
 	if err != nil {
 		return err
@@ -124,7 +127,15 @@ func RunConfig(ctx context.Context, daoCfg *dao.Config, cfgsyncCfg *cfgsync.Conf
 	}
 	defer eng.Close()
 
-	version, err := eng.PublishConfig(ctx, doc)
+	var version int64
+	switch mode {
+	case "", "set":
+		version, err = eng.PublishConfig(ctx, doc)
+	case "append":
+		version, err = eng.AppendConfig(ctx, doc)
+	default:
+		return fmt.Errorf("cli: unknown configMode %q (want set or append)", mode)
+	}
 	if err != nil {
 		return err
 	}
@@ -132,4 +143,28 @@ func RunConfig(ctx context.Context, daoCfg *dao.Config, cfgsyncCfg *cfgsync.Conf
 	enc := json.NewEncoder(out)
 	enc.SetIndent("", "  ")
 	return enc.Encode(map[string]int64{"version": version})
+}
+
+// RunConfigGet fetches the current central config document through the embedded
+// api engine and writes it as JSON to out — the console equivalent of the
+// gateway GET /config endpoint. When nothing has been published yet it returns
+// an error rather than printing an empty document.
+func RunConfigGet(ctx context.Context, daoCfg *dao.Config, cfgsyncCfg *cfgsync.Config, out io.Writer) error {
+	eng, err := api.New(ctx, daoCfg, nil, nil, cfgsyncCfg)
+	if err != nil {
+		return err
+	}
+	defer eng.Close()
+
+	doc, err := eng.FetchConfig(ctx)
+	if err != nil {
+		return err
+	}
+	if doc == nil {
+		return fmt.Errorf("cli: config document not found (nothing published yet)")
+	}
+
+	enc := json.NewEncoder(out)
+	enc.SetIndent("", "  ")
+	return enc.Encode(doc)
 }

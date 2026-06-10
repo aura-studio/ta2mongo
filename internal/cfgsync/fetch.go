@@ -8,6 +8,20 @@ import (
 	"github.com/aura-studio/tango/internal/dao"
 )
 
+// Fetch is the read face of the central config document: it returns the
+// document the Watcher converges on (including its monotonic version), or
+// (nil, nil) when nothing has been published yet. It is the query counterpart
+// to Publish/PublishAppend — gateway GET /config, cli function=configget and
+// api.FetchConfig all relay here, so operators can inspect the live remote
+// filter before appending to it. cfg may be nil (defaults applied).
+func Fetch(ctx context.Context, d *dao.Dao, cfg *Config) (bson.M, error) {
+	if cfg == nil {
+		cfg = &Config{}
+	}
+	cfg.ApplyDefaults()
+	return fetchDoc(ctx, d, cfg.Collection, cfg.DocumentID)
+}
+
 // fetchDoc reads the tracked config document via the dao EJSON façade
 // (findOne by _id) — reusing the existing read surface, adding no new dao API.
 // A missing document (never published) decodes to a nil document and is returned

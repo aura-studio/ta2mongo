@@ -104,14 +104,14 @@ func TestRunConfig_PublishesFromStdin(t *testing.T) {
 
 	var out1 bytes.Buffer
 	in1 := strings.NewReader(`{"filter":{"include":["#type == \"track\""]}}`)
-	if err := RunConfig(ctx, daoCfg, cfgsyncCfg, in1, &out1); err != nil {
+	if err := RunConfig(ctx, daoCfg, cfgsyncCfg, "", in1, &out1); err != nil {
 		t.Fatalf("RunConfig 1: %v", err)
 	}
 	v1 := readVersion(out1.String())
 
 	var out2 bytes.Buffer
 	in2 := strings.NewReader(`{"filter":{"include":["#type == \"user_set\""]}}`)
-	if err := RunConfig(ctx, daoCfg, cfgsyncCfg, in2, &out2); err != nil {
+	if err := RunConfig(ctx, daoCfg, cfgsyncCfg, "", in2, &out2); err != nil {
 		t.Fatalf("RunConfig 2: %v", err)
 	}
 	v2 := readVersion(out2.String())
@@ -129,7 +129,7 @@ func TestRunConfig_RejectsOffAllowlist(t *testing.T) {
 
 	var out bytes.Buffer
 	in := strings.NewReader(`{"dao":{"mongo":{"uri":"x"}}}`)
-	if err := RunConfig(context.Background(), daoCfg, &cfgsync.Config{}, in, &out); err == nil {
+	if err := RunConfig(context.Background(), daoCfg, &cfgsync.Config{}, "", in, &out); err == nil {
 		t.Fatal("expected RunConfig to reject an off-allowlist document")
 	}
 }

@@ -18,7 +18,12 @@ const (
 	// FunctionConfig reads a single runtime config document (JSON) from stdin,
 	// publishes it to the central cfgsync collection, and writes {"version":<new>}
 	// to stdout (the console equivalent of the gateway POST /config endpoint).
+	// role.cli.configMode selects set (default, replace) or append (merge).
 	FunctionConfig = "config"
+	// FunctionConfigGet fetches the current central config document and writes it
+	// as JSON to stdout (the console equivalent of the gateway GET /config
+	// endpoint); exits with an error when nothing has been published yet.
+	FunctionConfigGet = "configget"
 )
 
 // DefaultFunction is the cli function used when role.cli.function is unset.
@@ -29,9 +34,14 @@ const DefaultFunction = FunctionUpload
 // cli-specific knobs live here.
 type Config struct {
 	// Function selects what the cli role does (file key role.cli.function):
-	// upload (stdin log ingest), ejson (stdin Mongo Data API request), or
-	// sql (stdin SQL statement).
+	// upload (stdin log ingest), ejson (stdin Mongo Data API request),
+	// sql (stdin SQL statement), config (stdin config publish), or
+	// configget (fetch the central config document).
 	Function string `mapstructure:"function"`
+	// ConfigMode selects the publish mode for function=config (file key
+	// role.cli.configMode): set (default, replace the stored subtrees) or
+	// append (union the published filter rules into the stored ones).
+	ConfigMode string `mapstructure:"configMode"`
 }
 
 // ApplyDefaults fills unset options with sensible defaults.
@@ -44,15 +54,21 @@ func (c *Config) ApplyDefaults() {
 // Validate checks cli-specific config.
 func (c *Config) Validate() error {
 	switch c.Function {
-	case FunctionUpload, FunctionEJSON, FunctionSQL, FunctionConfig:
+	case FunctionUpload, FunctionEJSON, FunctionSQL, FunctionConfig, FunctionConfigGet:
+	default:
+		return fmt.Errorf("function %q is invalid (want %q / %q / %q / %q / %q)",
+			c.Function, FunctionUpload, FunctionEJSON, FunctionSQL, FunctionConfig, FunctionConfigGet)
+	}
+	switch c.ConfigMode {
+	case "", "set", "append":
 		return nil
 	default:
-		return fmt.Errorf("function %q is invalid (want %q / %q / %q / %q)",
-			c.Function, FunctionUpload, FunctionEJSON, FunctionSQL, FunctionConfig)
+		return fmt.Errorf("configMode %q is invalid (want set or append)", c.ConfigMode)
 	}
 }
 
 // RegisterDefaults registers this role's config keys (under prefix).
 func (c *Config) RegisterDefaults(set func(key string, value any), prefix string) {
 	set(prefix+".function", "")
+	set(prefix+".configMode", "")
 }

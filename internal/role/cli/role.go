@@ -49,7 +49,14 @@ func (Role) Run(ctx context.Context, cfg cfgtree.Tree) error {
 		if err != nil {
 			return err
 		}
-		return RunConfig(ctx, daoCfg, cfgsyncCfg, os.Stdin, os.Stdout)
+		return RunConfig(ctx, daoCfg, cfgsyncCfg, cliCfg.ConfigMode, os.Stdin, os.Stdout)
+	}
+	if cliCfg.Function == FunctionConfigGet {
+		cfgsyncCfg, err := cfgsync.FromTree(cfg)
+		if err != nil {
+			return err
+		}
+		return RunConfigGet(ctx, daoCfg, cfgsyncCfg, os.Stdout)
 	}
 
 	procCfg, err := process.FromTree(cfg)

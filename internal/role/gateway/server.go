@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -294,14 +295,45 @@ func (s *Server) handleSQL(w http.ResponseWriter, r *http.Request) {
 // is rejected with 400 before any write. It is independent of /upload, /ejson and
 // /sql; /ingest is intentionally still not provided.
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
-	var doc bson.M
-	if !decodeBody(w, r, &doc) {
-		return
+	switch r.Method {
+	case http.MethodGet:
+		// Query face: return the current central config document (incl. its
+		// version) so operators can inspect the live remote filter; 404 while
+		// nothing has been published yet.
+		doc, err := s.engine.FetchConfig(r.Context())
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		if doc == nil {
+			writeErr(w, http.StatusNotFound, errors.New("config document not found (nothing published yet)"))
+			return
+		}
+		writeJSON(w, http.StatusOK, doc)
+	case http.MethodPost:
+		var doc bson.M
+		if !decodeBody(w, r, &doc) {
+			return
+		}
+		var version int64
+		var err error
+		// ?mode=append unions the published rules into the stored ones;
+		// default (or ?mode=set) keeps the historical replace semantics.
+		switch mode := r.URL.Query().Get("mode"); mode {
+		case "", "set":
+			version, err = s.engine.PublishConfig(r.Context(), doc)
+		case "append":
+			version, err = s.engine.AppendConfig(r.Context(), doc)
+		default:
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("unknown mode %q (want set or append)", mode))
+			return
+		}
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]int64{"version": version})
+	default:
+		writeErr(w, http.StatusMethodNotAllowed, errors.New("GET or POST required"))
 	}
-	version, err := s.engine.PublishConfig(r.Context(), doc)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]int64{"version": version})
 }

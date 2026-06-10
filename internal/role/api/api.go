@@ -157,6 +157,23 @@ func (c *Engine) PublishConfig(ctx context.Context, doc bson.M) (int64, error) {
 	return cfgsync.Publish(ctx, c.dao, c.cfgsyncCfg, doc)
 }
 
+// AppendConfig is the merge flavour of PublishConfig: the published filter
+// rules are unioned into the stored ones (an omitted include/exclude side keeps
+// its stored value) under an optimistic version guard, so concurrent appends
+// never lose each other's rules. Same validation gates as PublishConfig, run on
+// the merged document.
+func (c *Engine) AppendConfig(ctx context.Context, doc bson.M) (int64, error) {
+	return cfgsync.PublishAppend(ctx, c.dao, c.cfgsyncCfg, doc)
+}
+
+// FetchConfig returns the current central config document (including its
+// monotonic version), or (nil, nil) when nothing has been published yet. It is
+// the query face operators use to inspect the live remote filter before
+// appending to it (gateway GET /config and cli function=configget relay here).
+func (c *Engine) FetchConfig(ctx context.Context) (bson.M, error) {
+	return cfgsync.Fetch(ctx, c.dao, c.cfgsyncCfg)
+}
+
 // Run processes the source with c.procCfg.Mode, blocking until the source is
 // drained or ctx is cancelled, and returns per-run statistics. Lines that fail
 // to parse or resolve identity are routed to dead_letter (counted in the
