@@ -144,10 +144,22 @@ TANGO_SOURCE_TAILER_LOGPATTERN='/var/log/ta/.*\.log,/data/extra/*.ndjson'
 
 | 键 | required/optional | 默认 | 说明 |
 |----|----|----|----|
-| `dao.mongo.uri` | **required** | `""`（占位） | MongoDB/DocumentDB 连接串；库名取自 URI 路径。`mongo.Config.Validate`（`internal/dao/mongo/config.go`）强制非空 |
+| `dao.mongo.uri` | **required**（daemon/gateway 可空降级） | `""`（占位） | MongoDB/DocumentDB 连接串；库名取自 URI 路径。`mongo.Config.Validate`（`internal/dao/mongo/config.go`）强制非空——但 **daemon/gateway 两个长驻角色对"刻意留空"做了降级**（见下），库调用（api/client/cli）仍然报错 |
 | `dao.mongo.connectTimeout` | optional | `10s` | 初次连接握手超时。占位 `"0s"`，`ApplyDefaults` 修正 |
 | `dao.mongo.serverSelectionTimeout` | optional | `30s` | 选择可用节点超时。占位 `"0s"`，`ApplyDefaults` 修正 |
 | `dao.store.maxElapsedTime` | optional | `10s` | 单次 bulk-write 退避重试总时长上限（属于 store，不属于 mongo 连接；`internal/dao/store` 的 backoff `MaxElapsedTime`） |
+
+#### uri 留空时的降级行为（daemon / gateway）
+
+`dao.mongo.uri` 为空时进程**不再启动失败**，而是进入降级模式（`dao.URIConfigured` 在 Role 层判定，
+typed `New`/`NewFromTree` 契约不变、库调用方照旧拿到 `uri is required`）：
+
+- **daemon**（`internal/role/daemon/role.go`）：正常启动后**空转**——不起 tailer/pipeline/Mongo，
+  打一条 WARN（`running idle, no reporting will happen`），收到 SIGTERM 干净退出。
+- **gateway**（`internal/role/gateway/role.go`）：正常监听——`/healthz` 保持 200（编排器不杀 pod），
+  但 `/upload` `/ejson` `/sql` `/config` 一律返回 **503** + `{"error":"uri is empty, service unavailable"}`，
+  不触碰任何数据库。
+- 补上 `dao.mongo.uri`（或 `TANGO_DAO_MONGO_URI`）并重启即恢复正常模式。
 
 #### 库名取自 URI path（`MongoDBFromURI`）
 

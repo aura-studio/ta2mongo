@@ -21,9 +21,18 @@ import (
 
 // Server is the gateway runtime: the embedded api engine plus the HTTP face. It
 // is safe for concurrent use from multiple goroutines.
+//
+// A Server with a nil engine is the degraded "unavailable" runtime used by
+// Role.Run when dao.mongo.uri is empty: it serves /healthz normally while every
+// API route answers 503 errServiceUnavailable (see Handler). The typed
+// constructors below never produce a nil-engine Server.
 type Server struct {
 	engine *api.Engine
 }
+
+// errServiceUnavailable is the response body for every API route while the
+// gateway runs without a configured MongoDB URI (degraded unavailable mode).
+var errServiceUnavailable = errors.New("uri is empty, service unavailable")
 
 // New builds a Server, connecting to MongoDB via the api engine. It is wired
 // from the shared top-level module configs (dao, the process strategy config,
@@ -45,12 +54,8 @@ func New(ctx context.Context, daoCfg *dao.Config, procCfg *process.Config, parse
 // the resolved gateway Config alongside the Server so the caller can read the
 // listen address. The typed New remains for tests and programmatic construction.
 func NewFromTree(ctx context.Context, cfg cfgtree.Tree) (*Server, Config, error) {
-	var gwCfg Config
-	if err := cfg.Sub("role").Sub("gateway").Into(&gwCfg); err != nil {
-		return nil, Config{}, err
-	}
-	gwCfg.ApplyDefaults()
-	if err := gwCfg.Validate(); err != nil {
+	gwCfg, err := configFromTree(cfg)
+	if err != nil {
 		return nil, Config{}, err
 	}
 
@@ -61,8 +66,29 @@ func NewFromTree(ctx context.Context, cfg cfgtree.Tree) (*Server, Config, error)
 	return &Server{engine: eng}, gwCfg, nil
 }
 
-// Close disconnects from MongoDB and releases all resources.
-func (s *Server) Close() error { return s.engine.Close() }
+// configFromTree slices and validates the gateway's own role.gateway.* section.
+// Shared by NewFromTree and Role.Run's unavailable mode (which needs the listen
+// address without constructing an engine).
+func configFromTree(cfg cfgtree.Tree) (Config, error) {
+	var gwCfg Config
+	if err := cfg.Sub("role").Sub("gateway").Into(&gwCfg); err != nil {
+		return Config{}, err
+	}
+	gwCfg.ApplyDefaults()
+	if err := gwCfg.Validate(); err != nil {
+		return Config{}, err
+	}
+	return gwCfg, nil
+}
+
+// Close disconnects from MongoDB and releases all resources. Nil-safe for the
+// unavailable mode, which holds no connection.
+func (s *Server) Close() error {
+	if s.engine == nil {
+		return nil
+	}
+	return s.engine.Close()
+}
 
 // EnsureIndexes creates all required MongoDB indexes (idempotent).
 func (s *Server) EnsureIndexes(ctx context.Context) error { return s.engine.EnsureIndexes(ctx) }
@@ -98,6 +124,18 @@ func (s *Server) PublishConfig(ctx context.Context, doc bson.M) (int64, error) {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	if s.engine == nil {
+		// Unavailable mode (empty dao.mongo.uri): keep liveness green but make
+		// every API route state the problem instead of touching a database.
+		unavailable := func(w http.ResponseWriter, r *http.Request) {
+			writeErr(w, http.StatusServiceUnavailable, errServiceUnavailable)
+		}
+		mux.HandleFunc("/upload", unavailable)
+		mux.HandleFunc("/ejson", unavailable)
+		mux.HandleFunc("/sql", unavailable)
+		mux.HandleFunc("/config", unavailable)
+		return mux
+	}
 	mux.HandleFunc("/upload", s.handleUpload)
 	mux.HandleFunc("/ejson", s.handleEJSON)
 	mux.HandleFunc("/sql", s.handleSQL)
@@ -109,7 +147,9 @@ func (s *Server) Handler() http.Handler {
 // the cfgsync Watcher (when enabled) so the gateway's live reporting filter is
 // hot-swapped from the central config document while it serves.
 func (s *Server) Run(ctx context.Context, addr string) error {
-	s.engine.StartCfgsync(ctx)
+	if s.engine != nil {
+		s.engine.StartCfgsync(ctx)
+	}
 
 	httpSrv := &http.Server{Addr: addr, Handler: s.Handler()}
 	errCh := make(chan error, 1)

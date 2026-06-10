@@ -8,6 +8,20 @@ import (
 	"github.com/aura-studio/tango/internal/dao/store"
 )
 
+// URIConfigured reports whether dao.mongo.uri is present (non-empty) in the
+// resolved tree — file, TANGO_DAO_MONGO_URI env, or flag — WITHOUT validating
+// the rest of the dao config. Long-running roles (daemon / gateway) use it to
+// enter a degraded idle / unavailable mode instead of failing startup when the
+// URI is intentionally left empty; FromTree below still rejects an empty URI
+// for every caller that actually needs a connection.
+func URIConfigured(t cfgtree.Tree) bool {
+	var c Config
+	if err := t.Sub("dao").Into(&c); err != nil {
+		return false
+	}
+	return c.Mongo != nil && c.Mongo.URI != ""
+}
+
 // FromTree decodes the dao.* branch of t into a Config, applies defaults and
 // validates it (which requires dao.mongo.uri).
 func FromTree(t cfgtree.Tree) (*Config, error) {
