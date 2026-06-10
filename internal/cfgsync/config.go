@@ -114,7 +114,7 @@ func (c *Config) RegisterDefaults(set func(key string, value any), prefix string
 	set(prefix+".enabled", false)
 	set(prefix+".backend", "")
 	set(prefix+".documentID", "")
-	set(prefix+".pollInterval", "")
-	set(prefix+".reconcileInterval", "")
+	set(prefix+".pollInterval", "0s")
+	set(prefix+".reconcileInterval", "0s")
 	set(prefix+".collection", "")
 }
