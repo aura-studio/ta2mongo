@@ -40,6 +40,7 @@ package cfgsync
 
 import (
 	"context"
+	"sync"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 
@@ -63,6 +64,14 @@ type Watcher struct {
 	// monotonic guard that drops stale or replayed documents. Touched only from
 	// the backend goroutine via observe.
 	lastVersion int64
+
+	// ready is closed (once) after the FIRST remote document is successfully
+	// applied. Embedders that must not act before converging on the central
+	// config (the daemon's pull-before-ingest gate) block on Ready(); a missing
+	// document keeps ready open, so "no config published yet" reads as "not
+	// ready" rather than "converged on nothing".
+	ready     chan struct{}
+	readyOnce sync.Once
 }
 
 // New builds a Watcher. onChange is the injected applier (typically a
@@ -72,8 +81,15 @@ type Watcher struct {
 // read-only no-op (every document is fetched and version-guarded but nothing is
 // applied), which is convenient for tests.
 func New(d *dao.Dao, cfg *Config, onChange func(bson.M) error) *Watcher {
-	return &Watcher{dao: d, cfg: cfg, onChange: onChange}
+	return &Watcher{dao: d, cfg: cfg, onChange: onChange, ready: make(chan struct{})}
 }
+
+// Ready returns a channel that is closed after the first remote config document
+// has been successfully applied (version accepted + applier succeeded; with a
+// nil onChange, version accepted alone). It never closes while no document is
+// published — callers gating on "must have pulled the config" (the daemon's
+// pull-before-ingest mode) should select on Ready() together with their ctx.
+func (w *Watcher) Ready() <-chan struct{} { return w.ready }
 
 // Run selects the backend and runs it until ctx is cancelled, returning the
 // backend's error (nil on clean ctx cancellation). The backend performs the
@@ -118,6 +134,7 @@ func (w *Watcher) observe(doc bson.M) error {
 	}
 	w.lastVersion = version
 	if w.onChange == nil {
+		w.readyOnce.Do(func() { close(w.ready) })
 		return nil
 	}
 	if err := w.onChange(doc); err != nil {
@@ -125,6 +142,7 @@ func (w *Watcher) observe(doc bson.M) error {
 			Warn("cfgsync: applying config document failed, keeping last-good")
 		return err
 	}
+	w.readyOnce.Do(func() { close(w.ready) })
 	logging.WithField("version", version).Info("cfgsync: applied config document")
 	return nil
 }

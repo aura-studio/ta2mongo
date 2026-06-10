@@ -131,7 +131,35 @@ func (d *Service) Run(ctx context.Context) error {
 	// reporting filter from the central config document. It shares runCtx, so
 	// it stops when the daemon does, and runs under its own panic recover like
 	// the stats reporter above.
-	d.startCfgsync(runCtx)
+	//
+	// Pull-before-ingest gate: with cfgsync ENABLED the daemon must not ingest a
+	// single line before the central config has been pulled and applied —
+	// otherwise the startup window (tailer re-reads whole existing logs
+	// immediately) would run on the baseline/empty filter and could flood the
+	// store unfiltered. Ready() only fires once a published document has been
+	// applied, so "nothing published yet" keeps the daemon waiting (fail-closed)
+	// with a periodic warning instead of ingesting everything (fail-open).
+	if w := d.startCfgsync(runCtx); w != nil {
+		logging.Info("report: cfgsync enabled — waiting for the central config before starting ingestion")
+		waitLog := time.NewTicker(30 * time.Second)
+		waiting := true
+		for waiting {
+			select {
+			case <-w.Ready():
+				logging.Info("report: central config applied — starting ingestion")
+				waiting = false
+			case <-runCtx.Done():
+				waitLog.Stop()
+				<-reportDone
+				d.logFinalStats(stats, startTime)
+				return nil
+			case <-waitLog.C:
+				logging.Warn("report: cfgsync enabled but no central config applied yet — daemon is NOT ingesting; " +
+					"publish a config document (gateway POST /config, cli function=config, or api.PublishConfig) or disable cfgsync")
+			}
+		}
+		waitLog.Stop()
+	}
 
 	// Drive the async pipeline strategy; it blocks until runCtx is cancelled,
 	// then the workers flush and exit.
@@ -154,15 +182,19 @@ func (d *Service) Run(ctx context.Context) error {
 	return nil
 }
 
-// startCfgsync launches the cfgsync Watcher goroutine when cfgsync is enabled.
-// The Watcher feeds the central config document's filter subtree into the live
-// parser filter (atomic Holder swap), keeping last-good on a bad config. A nil or
-// disabled config is a no-op. The goroutine exits when ctx is cancelled; a fatal
-// watcher error (e.g. backend=changestream on an unsupported topology) is logged
-// rather than taking the daemon down.
-func (d *Service) startCfgsync(ctx context.Context) {
+// startCfgsync launches the cfgsync Watcher goroutine when cfgsync is enabled
+// and returns the Watcher so Run can gate ingestion on its Ready() signal (nil
+// when cfgsync is disabled — no gate). The Watcher feeds the central config
+// document's filter subtree into the live parser filter (atomic Holder swap),
+// keeping last-good on a bad config. The goroutine exits when ctx is cancelled;
+// a fatal watcher error (e.g. backend=changestream on an unsupported topology)
+// is logged rather than taking the daemon down — note that with the
+// pull-before-ingest gate this leaves the daemon waiting (visible via the ERROR
+// here plus the gate's periodic warning), which is the intended fail-closed
+// behaviour rather than ingesting unfiltered.
+func (d *Service) startCfgsync(ctx context.Context) *cfgsync.Watcher {
 	if d.cfgsyncCfg == nil || !d.cfgsyncCfg.Enabled {
-		return
+		return nil
 	}
 	reg := cfgsync.NewRegistry()
 	cfgsync.RegisterFilter(reg, d.parser)
@@ -173,6 +205,7 @@ func (d *Service) startCfgsync(ctx context.Context) {
 			logging.WithError(err).Error("cfgsync: watcher exited with error")
 		}
 	}()
+	return w
 }
 
 // reportStats periodically logs processing statistics every statsReportInterval.
