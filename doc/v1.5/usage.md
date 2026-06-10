@@ -162,14 +162,31 @@ cfgsync 把上报 filter 等**显式 allowlist 的配置**在运行中对齐中�
 （`cfgsync.Publish`），先按 allowlist 校验 + 编译 filter 再写，坏配置在源头就挡掉。文档 schema：
 `{_id, version(单调), filter:{include,exclude}}`，`_id`/`version` 由 cfgsync 拥有（发布自动 `$inc`）。
 
+发布支持两种模式：**set**（默认，整树替换——发布 `{"filter":{...}}` 会覆盖存储的整个 filter，
+连省略的 `exclude` 都会被清掉）与 **append**（拉取→合并→乐观锁写回：include/exclude 做有序并集
+（存量在前、新增在后、完全相同的串去重），delta 省略的一侧保留存量；带版本守卫重试，**并发 append 互不丢失**）。
+
 ```bash
-# gateway：POST /config，body = 配置文档，返回 {"version": N}
+# gateway：POST /config（默认 set，整树替换），返回 {"version": N}
 curl -X POST localhost:8080/config -H 'Content-Type: application/json' \
   -d '{"filter":{"include":["#type == \"track\""],"exclude":[]}}'
 
-# cli：从 stdin 读配置文档，stdout 写 {"version": N}
+# gateway：POST /config?mode=append —— 只追加一条规则，存量 include/exclude 保留
+curl -X POST 'localhost:8080/config?mode=append' -H 'Content-Type: application/json' \
+  -d '{"filter":{"include":["#event_name == \"NewEvent\""]}}'
+
+# gateway：GET /config —— 查询当前远端过滤（含 version）；未发布过返回 404
+curl localhost:8080/config
+
+# cli：从 stdin 读配置文档发布（role.cli.configMode 选 set/append，默认 set）
 echo '{"filter":{"include":["#type == \"track\""]}}' \
   | tango --role.mode cli --role.cli.function config --dao.mongo.uri mongodb://localhost:27017/tango
+echo '{"filter":{"include":["#event_name == \"NewEvent\""]}}' \
+  | tango --role.mode cli --role.cli.function config --role.cli.configMode append \
+      --dao.mongo.uri mongodb://localhost:27017/tango
+
+# cli：查询当前远端过滤（等价 GET /config）
+tango --role.mode cli --role.cli.function configget --dao.mongo.uri mongodb://localhost:27017/tango
 ```
 
 读侧由 daemon / gateway 开启（默认关闭）：
@@ -182,6 +199,11 @@ tango --role.mode gateway --dao.mongo.uri mongodb://localhost:27017/tango \
 `backend=poll`（默认）任意拓扑可用，最坏陈旧 = 一个 `pollInterval`；`backend=changestream` 亚秒级，
 需副本集（普通 MongoDB）或 DocumentDB 开启 `modifyChangeStreams`，standalone mongod 会清晰报错提示改用 `poll`。
 单调版本守卫保证不回退（旧/重放版本丢弃）；新 filter 编译失败保留 last-good（坏配置打不挂）。
+
+**daemon 拉取门禁（pull-before-ingest）**：daemon 在 `cfgsync.enabled=true` 时**先拉到并应用中央配置
+才开始摄入**——发布前 tailer 一行都不读（fail-closed，启动时不会用空/基线 filter 把存量日志全量灌库），
+等待期间每 30s 打 WARN 提示去发布或关掉 cfgsync；SIGTERM 在等待中也能干净退出。gateway 不设此门禁
+（请求由客户端驱动，基线 filter 先行、中央文档随后热替换）。
 
 ## 作为库使用（api 角色）
 

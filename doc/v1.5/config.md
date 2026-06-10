@@ -263,6 +263,17 @@ mongodb://user:pass@<cluster-endpoint>:27017/tango?tls=true&tlsCAFile=/path/glob
 cli `role.cli.function=config`、api `(*Engine).PublishConfig`。默认动态 allowlist 只放 `parser.filter`
 （`dao.mongo.*` / `role.mode` / `role.gateway.addr` / `cfgsync.*` 自身绝不可远程覆盖）。用法见 [usage.md](usage.md)。
 
+**发布双模式**：set（默认，整树替换，省略的 `exclude` 会被清掉）/ **append**（拉取→include/exclude
+有序并集→乐观版本锁写回，并发 append 互不丢失；`cfgsync.PublishAppend`）。选择方式：gateway
+`POST /config?mode=append`、cli `role.cli.configMode=append`、api `(*Engine).AppendConfig`。
+
+**远端过滤查询面**（`cfgsync.Fetch`）：gateway `GET /config`（404=未发布）、cli
+`role.cli.function=configget`、api `(*Engine).FetchConfig`（未发布返回 `nil,nil`）。
+
+**daemon 拉取门禁**：`cfgsync.enabled=true` 时 daemon **先拉到并应用中央配置才开始摄入**
+（`Watcher.Ready()` 信号；未发布= fail-closed 等待并每 30s WARN，不会用基线 filter 全量灌库；
+等待中可被 SIGTERM 干净打断）。gateway 无此门禁。
+
 ### role.mode → `internal/role`
 
 | 键 | required/optional | 默认 | 说明 |
@@ -290,7 +301,8 @@ gateway 同时暴露三个独立路径（与 `/upload` 互不影响，无额外�
 
 | 键 | required/optional | 默认 | 说明 |
 |----|----|----|----|
-| `role.cli.function` | optional | `upload` | cli 角色功能：`upload`（stdin 日志数组上报）/ `ejson`（stdin 一个 EJSON Mongo Data API 请求，等价 `POST /ejson`）/ `sql`（stdin 一条 SQL，等价 `POST /sql`）/ `config`（stdin 一个 cfgsync 配置文档，等价 `POST /config`，输出 `{version}`），输出均为 EJSON/JSON |
+| `role.cli.function` | optional | `upload` | cli 角色功能：`upload`（stdin 日志数组上报）/ `ejson`（stdin 一个 EJSON Mongo Data API 请求，等价 `POST /ejson`）/ `sql`（stdin 一条 SQL，等价 `POST /sql`）/ `config`（stdin 一个 cfgsync 配置文档，等价 `POST /config`，输出 `{version}`）/ `configget`（查询当前中央配置文档，等价 `GET /config`），输出均为 EJSON/JSON |
+| `role.cli.configMode` | optional | `set` | `function=config` 的发布模式：`set`（整树替换）/ `append`（include/exclude 并集合并，等价 `POST /config?mode=append`） |
 
 完整样例：[daemon](../examples/config/daemon/daemon.max.yaml)、
 [gateway](../examples/config/gateway/gateway.max.yaml)、
