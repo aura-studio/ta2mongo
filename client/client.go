@@ -30,6 +30,9 @@
 // Beyond log ingestion the client also exposes the cfgsync central-config faces
 // (the same cores behind gateway POST/GET /config): PublishConfig/AppendConfig
 // validate and write the runtime config document, FetchConfig reads it back.
+// Likewise it exposes the Data API query faces (the same cores behind gateway
+// POST /ejson and /sql): EJSON runs a Mongo Data API request shell and SQL runs
+// a SQL statement, both returning relaxed Extended JSON.
 package client
 
 import (
@@ -77,6 +80,19 @@ type Client interface {
 	// The document carries only plain Go values — map[string]any, []any and
 	// scalars — never driver types, so callers stay decoupled from BSON.
 	FetchConfig(ctx context.Context) (map[string]any, error)
+	// EJSON executes a Mongo Data API request against the connected MongoDB and
+	// returns the response as relaxed Extended JSON. request is the same
+	// Extended-JSON request shell gateway POST /ejson accepts ({"action":
+	// "find", "collection": ..., "filter": ..., ...}); the database defaults to
+	// the one named in the connection URI when the shell omits it. The query
+	// faces are independent of the upload pipeline — process/parser config is
+	// unused.
+	EJSON(ctx context.Context, request []byte) ([]byte, error)
+	// SQL parses and executes a SQL statement against the connected MongoDB
+	// (SQL Data API, same core as gateway POST /sql) and returns the result as
+	// relaxed Extended JSON: a SELECT carries its rows, a write its affected
+	// counts. Like EJSON it is independent of the upload pipeline.
+	SQL(ctx context.Context, query string) ([]byte, error)
 	// Close disconnects from MongoDB and releases all resources.
 	Close() error
 }
@@ -184,6 +200,19 @@ func normalizeValue(v any) any {
 	default:
 		return v
 	}
+}
+
+// EJSON and SQL keep the public surface at []byte/string so callers never see
+// internal request/response types: they forward to the engine's
+// bytes-in/bytes-out faces (EJSONBytes / SQLBytes), where the dao-typed
+// decode/encode lives — the client package never imports internal/dao.
+
+func (c *client) EJSON(ctx context.Context, request []byte) ([]byte, error) {
+	return c.engine.EJSONBytes(ctx, request)
+}
+
+func (c *client) SQL(ctx context.Context, query string) ([]byte, error) {
+	return c.engine.SQLBytes(ctx, query)
 }
 
 func (c *client) Close() error { return c.engine.Close() }

@@ -6,11 +6,7 @@ import (
 	"time"
 
 	"github.com/aura-studio/tango/config"
-	"github.com/aura-studio/tango/internal/cfgsync"
-	"github.com/aura-studio/tango/internal/cfgtree"
-	"github.com/aura-studio/tango/internal/dao"
-	"github.com/aura-studio/tango/internal/parser"
-	"github.com/aura-studio/tango/internal/process"
+	"github.com/aura-studio/tango/internal/role/api"
 )
 
 // Option configures a Client. Options follow the functional-options idiom: pass
@@ -28,17 +24,18 @@ type Option func(*options)
 
 // options holds the actual tango module config structs the ingestion engine
 // consumes, so each With* sets a field of the real config structure rather than
-// a parallel re-declaration: dao.Config (dao.mongo.* + dao.store.*),
-// parser.Config (parser.filter.*), process.Config (process.* +
-// process.pipeline.*) and cfgsync.Config (cfgsync.*). New hands &dao / &proc /
-// &parser / &cfgsync straight to api.New.
+// a parallel re-declaration: dao.* (dao.mongo.* + dao.store.*), parser.*
+// (parser.filter.*), process.* (process.* + process.pipeline.*) and cfgsync.*.
+// The structs are held through the api package's config aliases — the client
+// depends on internal/role/api alone, never on the config-owning domains
+// themselves. New hands &dao / &proc / &parser / &cfgsync straight to api.New.
 type options struct {
 	ctx context.Context
 
-	dao     dao.Config
-	parser  parser.Config
-	proc    process.Config
-	cfgsync cfgsync.Config
+	dao     api.DaoConfig
+	parser  api.ParserConfig
+	proc    api.ProcessConfig
+	cfgsync api.CfgsyncConfig
 
 	// err records the first failure from a config-loading option
 	// (WithConfigFile / WithConfigBytes); New surfaces it instead of building a
@@ -120,7 +117,7 @@ func WithConfigBytes(data []byte) Option {
 // rather than a zero value. The other unified-schema sections (logging /
 // source / role) are intentionally ignored: they configure the binary roles,
 // not an embedded client.
-func (o *options) applyTree(tree cfgtree.Tree) {
+func (o *options) applyTree(tree api.Tree) {
 	if err := tree.Sub("dao").Into(&o.dao); err != nil {
 		o.err = fmt.Errorf("client: config dao: %w", err)
 		return

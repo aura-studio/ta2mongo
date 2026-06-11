@@ -231,3 +231,31 @@ func (c *Engine) EJSON(ctx context.Context, req *dao.EJSONRequest) (*dao.EJSONRe
 func (c *Engine) SQL(ctx context.Context, query string) (*dao.SQLResult, error) {
 	return c.dao.SQL(ctx, query)
 }
+
+// EJSONBytes is the bytes-in/bytes-out form of EJSON backing the public client
+// facade: the Extended-JSON request shell is decoded here and the response
+// re-encoded via its own MarshalEJSON. The client package must not touch dao
+// types, so the dao-typed decode/encode sinks into the engine.
+func (c *Engine) EJSONBytes(ctx context.Context, request []byte) ([]byte, error) {
+	req, err := dao.DecodeEJSONRequest(request)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.dao.EJSON(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return resp.MarshalEJSON()
+}
+
+// SQLBytes is the bytes-out form of SQL backing the public client facade: the
+// result is encoded here via its own MarshalEJSON. As with EJSONBytes, the
+// client package must not touch dao types — the query side is already a plain
+// string, so only the response encode sinks into the engine.
+func (c *Engine) SQLBytes(ctx context.Context, query string) ([]byte, error) {
+	res, err := c.dao.SQL(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	return res.MarshalEJSON()
+}
