@@ -57,8 +57,14 @@ func TestSQL_GatewayAndCLI(t *testing.T) {
 	}
 	post(t, `INSERT INTO widgets (name, n) VALUES ('y', 2)`)
 
-	if r := post(t, `SELECT * FROM widgets`); r.Kind != "select" || len(r.Rows) != 2 {
+	if r := post(t, `SELECT * FROM widgets`); r.Kind != "select" || r.Rows == nil || len(*r.Rows) != 2 {
 		t.Fatalf("gateway select: want 2 rows, got %+v", r)
+	}
+
+	// A 0-row SELECT still carries its rows key over the wire ("rows": []) —
+	// the kind-owned pointer fields are always set (see dao/sql result.go).
+	if r := post(t, `SELECT * FROM widgets WHERE name = 'nope'`); r.Rows == nil || len(*r.Rows) != 0 {
+		t.Fatalf("gateway empty select: want non-nil empty rows, got %+v", r)
 	}
 
 	// Confirm via the independent verify handle.
@@ -76,7 +82,7 @@ func TestSQL_GatewayAndCLI(t *testing.T) {
 	if err := bson.UnmarshalExtJSON(buf.Bytes(), false, &cliRes); err != nil {
 		t.Fatalf("decode cli response: %v (%s)", err, buf.Bytes())
 	}
-	if len(cliRes.Rows) != 1 || cliRes.Rows[0]["name"] != "x" {
+	if cliRes.Rows == nil || len(*cliRes.Rows) != 1 || (*cliRes.Rows)[0]["name"] != "x" {
 		t.Fatalf("cli select: %+v", cliRes)
 	}
 }

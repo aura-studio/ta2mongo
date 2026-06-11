@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,24 +73,51 @@ func TestSQL_Integration(t *testing.T) {
 	}
 	exec(`INSERT INTO items (name, n) VALUES ('b', 2)`)
 
-	if r := exec(`SELECT * FROM items`); r.Kind != "select" || len(r.Rows) != 2 {
+	if r := exec(`SELECT * FROM items`); r.Kind != "select" || r.Rows == nil || len(*r.Rows) != 2 {
 		t.Fatalf("select all: want 2 rows, got %+v", r)
 	}
-	if r := exec(`SELECT name, n FROM items WHERE name = 'a'`); len(r.Rows) != 1 || r.Rows[0]["name"] != "a" {
+	if r := exec(`SELECT name, n FROM items WHERE name = 'a'`); r.Rows == nil || len(*r.Rows) != 1 || (*r.Rows)[0]["name"] != "a" {
 		t.Fatalf("select filtered: %+v", r)
 	}
-	if r := exec(`UPDATE items SET n = 10 WHERE name = 'a'`); r.Kind != "update" || r.MatchedCount != 1 {
+	if r := exec(`UPDATE items SET n = 10 WHERE name = 'a'`); r.Kind != "update" || r.MatchedCount == nil || *r.MatchedCount != 1 {
 		t.Fatalf("update: %+v", r)
 	}
-	if r := exec(`DELETE FROM items WHERE name = 'b'`); r.Kind != "delete" || r.DeletedCount != 1 {
+	if r := exec(`DELETE FROM items WHERE name = 'b'`); r.Kind != "delete" || r.DeletedCount == nil || *r.DeletedCount != 1 {
 		t.Fatalf("delete: %+v", r)
 	}
-	if r := exec(`SELECT * FROM items`); len(r.Rows) != 1 {
+	if r := exec(`SELECT * FROM items`); r.Rows == nil || len(*r.Rows) != 1 {
 		t.Fatalf("select after: want 1 row, got %+v", r)
 	}
 
 	// MarshalEJSON sanity.
 	if _, err := exec(`SELECT * FROM items`).MarshalEJSON(); err != nil {
 		t.Fatalf("MarshalEJSON: %v", err)
+	}
+
+	// Empty-result shapes: the kind-owned pointer fields are set even when the
+	// statement matches nothing, so the EJSON never collapses to {"kind": ...}.
+	// A 0-row SELECT keeps "rows": [] ...
+	zero := exec(`SELECT * FROM items WHERE name = 'nope'`)
+	if zero.Rows == nil || len(*zero.Rows) != 0 {
+		t.Fatalf("empty select: want non-nil empty rows, got %+v", zero)
+	}
+	if b, err := zero.MarshalEJSON(); err != nil || !strings.Contains(string(b), `"rows":[]`) {
+		t.Fatalf("empty select EJSON: want \"rows\":[] present, got %s (err=%v)", b, err)
+	}
+	// ... an UPDATE that matched nothing keeps its zero counts ...
+	upd := exec(`UPDATE items SET n = 99 WHERE name = 'nope'`)
+	if upd.MatchedCount == nil || *upd.MatchedCount != 0 || upd.ModifiedCount == nil || *upd.ModifiedCount != 0 {
+		t.Fatalf("no-match update: want zero counts set, got %+v", upd)
+	}
+	if b, err := upd.MarshalEJSON(); err != nil || !strings.Contains(string(b), `"matchedCount":0`) {
+		t.Fatalf("no-match update EJSON: want \"matchedCount\":0 present, got %s (err=%v)", b, err)
+	}
+	// ... and so does a DELETE.
+	del := exec(`DELETE FROM items WHERE name = 'nope'`)
+	if del.DeletedCount == nil || *del.DeletedCount != 0 {
+		t.Fatalf("no-match delete: want zero count set, got %+v", del)
+	}
+	if b, err := del.MarshalEJSON(); err != nil || !strings.Contains(string(b), `"deletedCount":0`) {
+		t.Fatalf("no-match delete EJSON: want \"deletedCount\":0 present, got %s (err=%v)", b, err)
 	}
 }

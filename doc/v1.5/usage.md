@@ -240,7 +240,7 @@ resp, _ := eng.EJSON(ctx, &dao.EJSONRequest{
 
 ```go
 res, _ := eng.SQL(ctx, "SELECT * FROM event LIMIT 5")
-// res.Kind == "select"; res.Rows ...
+// res.Kind == "select"; *res.Rows ...（指针字段：kind=select 时必有，可能为空切片）
 ```
 
 以及 cfgsync 配置发布（同核 `cfgsync.Publish`；校验+编译 filter 后原子写中心文档，返回新单调 version）：

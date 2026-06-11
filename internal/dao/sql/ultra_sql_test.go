@@ -190,11 +190,11 @@ func TestSQL4_SelectRows_MarshalEJSON_Integration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SELECT: %v", err)
 	}
-	if r.Kind != "select" || len(r.Rows) != 1 {
+	if r.Kind != "select" || r.Rows == nil || len(*r.Rows) != 1 {
 		t.Fatalf("SELECT result: want kind=select with 1 row, got %+v", r)
 	}
 	// SELECT * hides the auto _id (mongosql buildFindProjection: {"_id": 0}).
-	if got, present := r.Rows[0]["_id"]; present {
+	if got, present := (*r.Rows)[0]["_id"]; present {
 		t.Fatalf("SELECT *: _id must be projected out, got %v", got)
 	}
 
