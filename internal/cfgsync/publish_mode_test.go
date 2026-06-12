@@ -229,4 +229,3 @@ func TestFetch_NilWhenAbsent(t *testing.T) {
 		t.Errorf("fetched version = %d ok=%v, want 1", ver, ok)
 	}
 }
-
