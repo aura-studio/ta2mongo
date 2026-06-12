@@ -16,10 +16,12 @@ import (
 // engine's own default.
 //
 // Only the config subtrees the ingestion engine actually consumes are exposed:
-// dao.*, parser.filter.*, process.* and cfgsync.* (the central-config
+// dao.*, parser.filter.*, process.*, cfgsync.* (the central-config
 // collection/document the PublishConfig/FetchConfig faces address; the client
-// never starts the cfgsync watcher). The logging.*, source.* and role.*
-// subtrees belong to the binary roles, not to an embedded client.
+// never starts the cfgsync watcher) and source.uploadfile.* tuning (the
+// UploadFile face takes its patterns at call time). The logging.*,
+// source.tailer.* and role.* subtrees belong to the binary roles, not to an
+// embedded client.
 type Option func(*options)
 
 // options holds the actual tango module config structs the ingestion engine
@@ -32,10 +34,11 @@ type Option func(*options)
 type options struct {
 	ctx context.Context
 
-	dao     api.DaoConfig
-	parser  api.ParserConfig
-	proc    api.ProcessConfig
-	cfgsync api.CfgsyncConfig
+	dao        api.DaoConfig
+	parser     api.ParserConfig
+	proc       api.ProcessConfig
+	cfgsync    api.CfgsyncConfig
+	uploadfile api.UploadFileConfig
 
 	// err records the first failure from a config-loading option
 	// (WithConfigFile / WithConfigBytes); New surfaces it instead of building a
@@ -52,6 +55,7 @@ func defaultOptions() *options {
 	o.parser.ApplyDefaults()
 	o.proc.ApplyDefaults()
 	o.cfgsync.ApplyDefaults()
+	o.uploadfile.ApplyDefaults()
 	return o
 }
 
@@ -159,6 +163,16 @@ func WithDaoMongoConnectTimeout(d time.Duration) Option {
 // (default 30s).
 func WithDaoMongoServerSelectionTimeout(d time.Duration) Option {
 	return func(o *options) { o.dao.Mongo.ServerSelectionTimeout = d }
+}
+
+// ---------------------------------------------------------- source.uploadfile
+
+// WithSourceUploadFileMaxLineBytes sets source.uploadfile.maxLineBytes: the cap
+// on a single log line's length for the UploadFile face (default 10485760 =
+// 10 MB, matching the tailer). A file holding an over-cap line imports up to
+// that line and is then skipped; the other matched files still import.
+func WithSourceUploadFileMaxLineBytes(n int) Option {
+	return func(o *options) { o.uploadfile.MaxLineBytes = n }
 }
 
 // -------------------------------------------------------------------- dao.store

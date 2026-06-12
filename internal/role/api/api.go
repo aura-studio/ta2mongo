@@ -214,6 +214,21 @@ func (c *Engine) Upload(ctx context.Context, lines []string) (Result, error) {
 	return c.Run(ctx, source.NewLines(lines))
 }
 
+// UploadFile imports the already-on-disk log files matching cfg's glob
+// patterns once (the finite uploadfile source) and runs them with
+// c.procCfg.Mode — the file-backed convenience over Run, backing cli
+// function=uploadfile and the public client facade (the source construction
+// sinks into the engine, so the client never touches the source domain).
+// There is no checkpoint: re-running re-imports everything and converges
+// through the idempotent write models. cfg must carry at least one pattern;
+// patterns that match no files yield an empty Result.
+func (c *Engine) UploadFile(ctx context.Context, cfg *UploadFileConfig) (Result, error) {
+	if cfg == nil || len(cfg.LogPattern) == 0 {
+		return Result{}, fmt.Errorf("api: uploadfile logPattern is required")
+	}
+	return c.Run(ctx, source.NewUploadFile(cfg))
+}
+
 // EJSON executes a Mongo Data API request against the engine's MongoDB
 // connection and returns the result. It is the shared functional core behind the
 // gateway POST /ejson endpoint and the cli ejson sub-mode, and is independent of

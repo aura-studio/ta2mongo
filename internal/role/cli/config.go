@@ -7,6 +7,12 @@ const (
 	// FunctionUpload is the default: read TA log lines from stdin and ingest them
 	// with the configured process.mode (the console equivalent of /upload).
 	FunctionUpload = "upload"
+	// FunctionUploadFile bulk imports the already-on-disk log files matching
+	// source.uploadfile.logPattern once (read to EOF, no checkpoint) and ingests
+	// them with the configured process.mode. The finite counterpart of the
+	// daemon's tailer; re-running re-imports and converges through the
+	// idempotent write models.
+	FunctionUploadFile = "uploadfile"
 	// FunctionEJSON reads a single Extended-JSON Mongo Data API request from stdin,
 	// executes it, and writes the Extended-JSON response to stdout (the console
 	// equivalent of the gateway POST /ejson endpoint).
@@ -34,8 +40,9 @@ const DefaultFunction = FunctionUpload
 // cli-specific knobs live here.
 type Config struct {
 	// Function selects what the cli role does (file key role.cli.function):
-	// upload (stdin log ingest), ejson (stdin Mongo Data API request),
-	// sql (stdin SQL statement), config (stdin config publish), or
+	// upload (stdin log ingest), uploadfile (one-shot import of the files
+	// matching source.uploadfile.logPattern), ejson (stdin Mongo Data API
+	// request), sql (stdin SQL statement), config (stdin config publish), or
 	// configget (fetch the central config document).
 	Function string `mapstructure:"function"`
 	// ConfigMode selects the publish mode for function=config (file key
@@ -54,10 +61,10 @@ func (c *Config) ApplyDefaults() {
 // Validate checks cli-specific config.
 func (c *Config) Validate() error {
 	switch c.Function {
-	case FunctionUpload, FunctionEJSON, FunctionSQL, FunctionConfig, FunctionConfigGet:
+	case FunctionUpload, FunctionUploadFile, FunctionEJSON, FunctionSQL, FunctionConfig, FunctionConfigGet:
 	default:
-		return fmt.Errorf("function %q is invalid (want %q / %q / %q / %q / %q)",
-			c.Function, FunctionUpload, FunctionEJSON, FunctionSQL, FunctionConfig, FunctionConfigGet)
+		return fmt.Errorf("function %q is invalid (want %q / %q / %q / %q / %q / %q)",
+			c.Function, FunctionUpload, FunctionUploadFile, FunctionEJSON, FunctionSQL, FunctionConfig, FunctionConfigGet)
 	}
 	switch c.ConfigMode {
 	case "", "set", "append":

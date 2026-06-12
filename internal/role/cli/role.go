@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 
 	"github.com/aura-studio/tango/internal/cfgsync"
@@ -10,12 +11,16 @@ import (
 	"github.com/aura-studio/tango/internal/dao"
 	"github.com/aura-studio/tango/internal/parser"
 	"github.com/aura-studio/tango/internal/process"
+	"github.com/aura-studio/tango/internal/source"
 )
 
 // Role is the cli runtime role (role.mode = cli). With role.cli.function=upload
 // (the default) it is the console equivalent of the gateway /upload — read TA log
 // lines from stdin, ingest them with the configured process.mode, and print the
-// run statistics as JSON to stdout. With role.cli.function=ejson it is the console
+// run statistics as JSON to stdout. With role.cli.function=uploadfile it bulk
+// imports the already-on-disk files matching source.uploadfile.logPattern once
+// (no checkpoint; re-runs converge through the idempotent write models) and
+// prints the same statistics. With role.cli.function=ejson it is the console
 // equivalent of POST /ejson — read one Extended-JSON Mongo Data API request from
 // stdin and write the Extended-JSON response to stdout. With
 // role.cli.function=sql it is the console equivalent of POST /sql — read one SQL
@@ -66,6 +71,24 @@ func (Role) Run(ctx context.Context, cfg cfgtree.Tree) error {
 	parserCfg, err := parser.FromTree(cfg)
 	if err != nil {
 		return err
+	}
+
+	if cliCfg.Function == FunctionUploadFile {
+		srcCfg, err := source.FromTree(cfg)
+		if err != nil {
+			return err
+		}
+		// Fail fast before connecting Mongo (the daemon's logPattern precedent).
+		if len(srcCfg.UploadFile.LogPattern) == 0 {
+			return fmt.Errorf("cli: function=uploadfile requires source.uploadfile.logPattern")
+		}
+		res, err := RunUploadFile(ctx, daoCfg, procCfg, parserCfg, srcCfg.UploadFile)
+		if err != nil {
+			return err
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(res)
 	}
 
 	res, err := RunUpload(ctx, daoCfg, procCfg, parserCfg, os.Stdin)

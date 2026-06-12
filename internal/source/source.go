@@ -16,6 +16,7 @@ import (
 	"github.com/aura-studio/tango/internal/source/httpbody"
 	"github.com/aura-studio/tango/internal/source/stdin"
 	"github.com/aura-studio/tango/internal/source/tailer"
+	"github.com/aura-studio/tango/internal/source/uploadfile"
 )
 
 // Source streams log lines onto a channel. Run returns a receive-only channel
@@ -56,4 +57,16 @@ func NewTailer(cfg *tailer.Config) Source {
 	}
 	return tailer.New(cfg.LogPattern, cfg.RescanInterval, cfg.TailMode).
 		WithTuning(cfg.PollInterval, cfg.MaxLineBytes)
+}
+
+// NewUploadFile returns the finite one-shot file-import Source configured by
+// cfg (source.uploadfile.*): it discovers the files matching the glob patterns
+// once, streams every line of every file from start to EOF, then closes the
+// channel. Used by the uploadfile faces (cli function=uploadfile and
+// Engine.UploadFile) to bulk import already-on-disk log files.
+func NewUploadFile(cfg *uploadfile.Config) Source {
+	if cfg == nil {
+		cfg = &uploadfile.Config{}
+	}
+	return uploadfile.New(cfg.LogPattern, cfg.MaxLineBytes)
 }

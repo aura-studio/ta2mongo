@@ -1,6 +1,7 @@
 // Package client is the public, redis-go-style client for tango's log-ingestion
 // engine. Construct a Client with New plus functional With* options, then feed
-// it ThinkingData log lines via Upload.
+// it ThinkingData log lines via Upload — or bulk import already-on-disk log
+// files via UploadFile (glob patterns, one-shot, no checkpoint).
 //
 // It is a thin, stable facade over the internal ingestion engine
 // (internal/role/api): callers depend only on this interface and never on
@@ -60,6 +61,16 @@ type Client interface {
 	// are routed to dead_letter (counted in Result) rather than erroring; a
 	// non-nil error indicates a bulk-write failure or an unknown mode.
 	Upload(ctx context.Context, lines ...string) (Result, error)
+	// UploadFile bulk imports the already-on-disk TA log files matching the
+	// given glob patterns (the tailer's pattern syntax, including ** and
+	// cross-platform paths) once — every file is read start to EOF through the
+	// configured strategy, then the run ends. At least one pattern is
+	// required; patterns that match no files yield an empty Result. There is
+	// no checkpoint: re-running re-imports everything and converges through
+	// the idempotent write models (events upsert by uuid, user fields are
+	// _ts-guarded). The per-line error contract matches Upload. The line cap
+	// defaults to 10 MB; tune it with WithSourceUploadFileMaxLineBytes.
+	UploadFile(ctx context.Context, patterns ...string) (Result, error)
 	// EnsureIndexes creates all required MongoDB indexes (idempotent).
 	EnsureIndexes(ctx context.Context) error
 	// PublishConfig validates and publishes a runtime config document to the
@@ -99,6 +110,11 @@ type Client interface {
 
 type client struct {
 	engine *api.Engine
+	// uploadfile carries the source.uploadfile.* tuning (maxLineBytes) the
+	// UploadFile face combines with its call-time patterns; the engine
+	// constructs the source from it (the client never touches the source
+	// domain).
+	uploadfile api.UploadFileConfig
 }
 
 // New connects to MongoDB and builds a Client from the given options.
@@ -122,11 +138,27 @@ func New(opts ...Option) (Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &client{engine: engine}, nil
+	return &client{engine: engine, uploadfile: o.uploadfile}, nil
 }
 
 func (c *client) Upload(ctx context.Context, lines ...string) (Result, error) {
 	res, err := c.engine.Upload(ctx, lines)
+	if err != nil {
+		return Result{}, err
+	}
+	return Result{
+		Lines:       res.Lines,
+		UserWrites:  res.UserWrites,
+		EventWrites: res.EventWrites,
+		DeadLetters: res.DeadLetters,
+		Filtered:    res.Filtered,
+	}, nil
+}
+
+func (c *client) UploadFile(ctx context.Context, patterns ...string) (Result, error) {
+	cfg := c.uploadfile // copy: the call-time patterns never mutate the client
+	cfg.LogPattern = patterns
+	res, err := c.engine.UploadFile(ctx, &cfg)
 	if err != nil {
 		return Result{}, err
 	}
