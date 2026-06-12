@@ -14,7 +14,7 @@ import (
 	"github.com/aura-studio/tango/internal/dao"
 	"github.com/aura-studio/tango/internal/parser"
 	"github.com/aura-studio/tango/internal/process"
-	"github.com/aura-studio/tango/internal/source/uploadfile"
+	"github.com/aura-studio/tango/internal/source"
 )
 
 // DaoConfig is the dao.* module config (dao.mongo.* + dao.store.*). Alias for
@@ -34,10 +34,12 @@ type ProcessConfig = process.Config
 type CfgsyncConfig = cfgsync.Config
 
 // UploadFileConfig is the source.uploadfile.* module config (the one-shot
-// file-import source's glob patterns and line cap). Alias for
-// uploadfile.Config, so an embedder hands a populated value to
-// Engine.UploadFile without importing the source domain.
-type UploadFileConfig = uploadfile.Config
+// file-import source's glob patterns and line cap). Alias for the source
+// facade's UploadFileConfig (itself an alias for uploadfile.Config — DAO-6:
+// the role layer names source types through the facade only), so an embedder
+// hands a populated value to Engine.UploadFile without importing the source
+// domain.
+type UploadFileConfig = source.UploadFileConfig
 
 // Tree is the resolved unified-config tree NewFromTree slices its module
 // branches from. Alias for cfgtree.Tree.

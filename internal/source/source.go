@@ -59,14 +59,20 @@ func NewTailer(cfg *tailer.Config) Source {
 		WithTuning(cfg.PollInterval, cfg.MaxLineBytes)
 }
 
+// UploadFileConfig is the one-shot file-import source's configuration
+// (source.uploadfile.*), re-exported so the role layer names it through the
+// source facade alone (the DAO-6 boundary: role/* never imports source
+// subpackages). Alias for uploadfile.Config.
+type UploadFileConfig = uploadfile.Config
+
 // NewUploadFile returns the finite one-shot file-import Source configured by
 // cfg (source.uploadfile.*): it discovers the files matching the glob patterns
 // once, streams every line of every file from start to EOF, then closes the
 // channel. Used by the uploadfile faces (cli function=uploadfile and
 // Engine.UploadFile) to bulk import already-on-disk log files.
-func NewUploadFile(cfg *uploadfile.Config) Source {
+func NewUploadFile(cfg *UploadFileConfig) Source {
 	if cfg == nil {
-		cfg = &uploadfile.Config{}
+		cfg = &UploadFileConfig{}
 	}
 	return uploadfile.New(cfg.LogPattern, cfg.MaxLineBytes)
 }
