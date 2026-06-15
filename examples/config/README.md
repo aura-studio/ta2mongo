@@ -8,10 +8,11 @@ tango 是**单一二进制**（用法见 [../../doc/v1.6/usage.md](../../doc/v1.
 
 每个角色目录提供 yaml 与 json 各两份：**max**（全量，逐字段标注 required/optional 与默认值）
 与 **min**（最小，仅 required 字段）。daemon / gateway 另含 `start.sh`。
-cli 示例覆盖四种功能（`role.cli.function` 取值 `upload` / `uploadfile` / `ejson` / `sql`；另有
+cli 示例覆盖五种功能（`role.cli.function` 取值 `upload` / `uploadfile` / `backfill` / `ejson` / `sql`；另有
 `config` / `configget` 配置发布/读取功能，无独立示例配置），各一套 max/min × yaml/json，
-共 16 份（`cli.upload.*` / `cli.uploadfile.*` / `cli.ejson.*` / `cli.sql.*`）；upload / ejson / sql 以管道喂 stdin 运行，
-uploadfile 不读 stdin（输入来自 `source.uploadfile.logPattern` 匹配的存量文件），均无 `start.sh`。
+共 20 份（`cli.upload.*` / `cli.uploadfile.*` / `cli.backfill.*` / `cli.ejson.*` / `cli.sql.*`）；upload / ejson / sql 以管道喂 stdin 运行，
+uploadfile 不读 stdin（输入来自 `source.uploadfile.logPattern` 匹配的存量文件），backfill 不读 stdin（数据来自
+ThinkingData OpenAPI，按日期范围拉历史并断点续传），均无 `start.sh`。
 另有 `requests.sample.ejson`（EJSON 请求样例）与 `queries.sample.sql`（SQL 语句样例）。
 
 | 角色 | role.mode | 目录 | 主要配置段 |
@@ -20,6 +21,7 @@ uploadfile 不读 stdin（输入来自 `source.uploadfile.logPattern` 匹配的�
 | gateway    | `gateway`    | [gateway/](gateway/)       | logging · dao · parser · process · role.gateway |
 | cli (upload) | `cli`      | [cli/](cli/)               | logging · dao · parser · process · role.cli（`function=upload`，stdin 日志上报） |
 | cli (uploadfile) | `cli`  | [cli/](cli/)               | logging · dao · parser · process · source.uploadfile · role.cli（`function=uploadfile`，存量文件一次性导入） |
+| cli (backfill) | `cli`    | [cli/](cli/)               | logging · dao · process · backfill · role.cli（`function=backfill`，不读 stdin，数据来自 TA OpenAPI 历史回填） |
 | cli (ejson) | `cli`       | [cli/](cli/)               | logging · dao · role.cli（`function=ejson`，Mongo Data API） |
 | cli (sql) | `cli`         | [cli/](cli/)               | logging · dao · role.cli（`function=sql`，SQL Data API） |
 
@@ -44,6 +46,9 @@ echo 'SELECT * FROM event LIMIT 5' | tango --config examples/config/cli/cli.sql.
 # cli uploadfile 不读 stdin（输入来自 source.uploadfile.logPattern 匹配的存量文件，读到 EOF 即止，统计 JSON 写 stdout）：
 tango --config examples/config/cli/cli.uploadfile.min.yaml
 
+# cli backfill 不读 stdin（数据来自 TA OpenAPI，按 partDateRange 拉历史；同 runID 断点续传，统计 JSON 写 stdout）：
+tango --config examples/config/cli/cli.backfill.min.yaml
+
 # flag 名即配置键（viper 原生层级），角色也可用 flag 覆盖：
 tango --role.mode daemon --dao.mongo.uri mongodb://host/db
 # 环境变量同理用原始层级（role.mode → TANGO_ROLE_MODE，dao.mongo.uri → TANGO_DAO_MONGO_URI）：
@@ -58,5 +63,6 @@ TANGO_DAO_MONGO_URI=mongodb://user:pass@host/db examples/config/daemon/start.sh
 | gateway    | `dao.mongo.uri` |
 | cli (upload) | `dao.mongo.uri`（`role.cli.function` 默认即 upload） |
 | cli (uploadfile) | `dao.mongo.uri`、`role.cli.function: uploadfile`、`source.uploadfile.logPattern` |
+| cli (backfill) | `dao.mongo.uri`、`role.cli.function: backfill`、`backfill.apiBaseURL`、`backfill.token`、`backfill.projectID`、`backfill.runID`、`backfill.partDateRange.start`/`.end` |
 | cli (ejson) | `dao.mongo.uri`、`role.cli.function: ejson` |
 | cli (sql) | `dao.mongo.uri`、`role.cli.function: sql` |

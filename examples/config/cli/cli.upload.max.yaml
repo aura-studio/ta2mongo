@@ -42,4 +42,4 @@ process:                          # internal/process（上传策略处理参数�
 role:                             # internal/role
   mode: cli                       # [required] 选择 cli 角色（默认是 daemon）
   cli:                            # internal/role/cli
-    function: upload              # [optional]（默认 upload）upload / uploadfile / ejson / sql / config / configget
+    function: upload              # [optional]（默认 upload）upload / uploadfile / backfill / ejson / sql / config / configget
