@@ -1,0 +1,63 @@
+# cli.backfill.max.yaml — cli 角色 backfill 功能的全量配置（仅含该功能实际用到的段）。
+#
+# 启动：tango --config cli.backfill.max.yaml   （不读 stdin，数据来自 TA OpenAPI）
+#
+# backfill = 从 ThinkingData OpenAPI 按日期范围（或 user 表整表）拉历史数据：submit→poll→paginate，
+# 逐页处理。事件表（v_event_<projectID>）每页编码成 TA JSON 行喂 Engine 上报链路（解析/过滤/identity/
+# DocumentDB 安全写全复用）；用户表（v_user_<projectID>）每行走 UserSnapshotWriteModel 快照 upsert。
+# 断点可续：逐页写 _backfill_progress checkpoint，同 runID 重跑从断点恢复；SQL 签名变化拒绝续跑。
+# 选择 filter 经 SQL WHERE 下推到 TA（events/include/exclude）。统计 JSON 写 stdout。
+# 实际用到：logging · dao · process · backfill · role.cli；不读 source、parser.filter、gateway、daemon —— 故此处不列。
+# 环境变量覆盖：键 . → _ 加 TANGO_ 前缀（backfill.token → TANGO_BACKFILL_TOKEN；[]string 用逗号分隔）。
+
+logging:                          # internal/logging
+  level: info                     # [optional]（默认 info）debug / info / warn / error
+  format: text                    # [optional]（默认 text）text / json
+
+dao:                              # internal/dao
+  mongo:                          # internal/dao/mongo
+    uri: mongodb://localhost:27017/tango  # [required] 写入目标库；库名取自 URI 路径
+    connectTimeout: 10s           # [optional]（默认 10s）初次连接握手超时
+    serverSelectionTimeout: 30s   # [optional]（默认 30s）选择可用节点超时
+  store:                          # internal/dao/store
+    maxElapsedTime: 10s           # [optional]（默认 10s）单次 bulk-write 退避重试总时长上限
+
+process:                          # internal/process（事件路径的上传策略；用户路径直走 BulkWrite 不读此段）
+  mode: batch                     # [optional]（默认 batch）single / batch / pipeline
+  batchSize: 1000                 # [optional]（默认 1000）single/batch 模式 bulk-write 批大小
+
+backfill:                         # internal/backfill
+  apiBaseURL: https://ta.example.com   # [required] TA OpenAPI 基址（http:// 或 https://）
+  token: your-ta-openapi-token         # [required] TA OpenAPI token（查询参数 token）
+  proxy: ""                            # [optional]（默认直连）出网代理 http/https/socks5（含 user:pass）
+  projectID: 35                        # [required] TA 项目 id（>0）
+  table: event                         # [optional]（默认 event）event / user
+  events:                              # [optional] 事件名白名单（event 表）→ SQL 下推 #event_name IN (...)
+    - login
+    - pay
+  include:                             # [optional] expr-lang include 规则 → SQL WHERE 下推
+    - '#type == "track"'
+  exclude:                             # [optional] expr-lang exclude 规则 → SQL WHERE 下推
+    - 'debug == true'
+  schemaPrefix: ""                     # [optional]（默认空）表名前的 schema 限定（如 ta.）
+  partDateRange:                       # [required]（event 表）分区日期闭区间 YYYY-MM-DD
+    start: "2026-05-01"
+    end: "2026-05-03"
+  eventTimeRange:                      # [optional]（event 表）事件时间窗 YYYY-MM-DD HH:MM:SS
+    start: "2026-05-01 00:00:00"
+    end: "2026-05-03 23:59:59"
+  limit: 0                             # [optional]（默认 0=不限）每天行数上限（冒烟用）
+  pageSize: 10000                      # [optional]（默认 10000，最小 1000）TA 服务端分页大小（提交时定）
+  paginate: true                       # [optional]（默认 true）false=不分页（整批一页）
+  pageRetries: 3                       # [optional]（默认 3）单页失败重试次数
+  pollInterval: 3s                     # [optional]（默认 3s）轮询任务状态间隔
+  pollTimeout: 30m                     # [optional]（默认 30m）单任务轮询超时
+  runID: backfill-2026-05              # [required] 断点续传键（同 runID 续跑；改 filter/table/范围会变 SQL 签名）
+  progressCollection: _backfill_progress  # [optional]（默认 _backfill_progress）checkpoint 集合
+  forceSkipExisting: true              # [optional]（默认 true）历史写用 $setOnInsert，绝不覆盖线上数据
+  skipLocalFilter: false               # [optional]（默认 false）跳过用户路径的本地兜底 filter（SQL 下推仍生效）
+
+role:                             # internal/role
+  mode: cli                       # [required] 选择 cli 角色（默认是 daemon）
+  cli:                            # internal/role/cli
+    function: backfill            # [required] 切到 TA OpenAPI 历史回填（默认 upload）

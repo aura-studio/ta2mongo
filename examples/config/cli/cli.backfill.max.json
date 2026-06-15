@@ -1,0 +1,42 @@
+{
+  "logging": { "level": "info", "format": "text" },
+  "dao": {
+    "mongo": {
+      "uri": "mongodb://localhost:27017/tango",
+      "connectTimeout": "10s",
+      "serverSelectionTimeout": "30s"
+    },
+    "store": { "maxElapsedTime": "10s" }
+  },
+  "process": {
+    "mode": "batch",
+    "batchSize": 1000
+  },
+  "backfill": {
+    "apiBaseURL": "https://ta.example.com",
+    "token": "your-ta-openapi-token",
+    "proxy": "",
+    "projectID": 35,
+    "table": "event",
+    "events": ["login", "pay"],
+    "include": ["#type == \"track\""],
+    "exclude": ["debug == true"],
+    "schemaPrefix": "",
+    "partDateRange": { "start": "2026-05-01", "end": "2026-05-03" },
+    "eventTimeRange": { "start": "2026-05-01 00:00:00", "end": "2026-05-03 23:59:59" },
+    "limit": 0,
+    "pageSize": 10000,
+    "paginate": true,
+    "pageRetries": 3,
+    "pollInterval": "3s",
+    "pollTimeout": "30m",
+    "runID": "backfill-2026-05",
+    "progressCollection": "_backfill_progress",
+    "forceSkipExisting": true,
+    "skipLocalFilter": false
+  },
+  "role": {
+    "mode": "cli",
+    "cli": { "function": "backfill" }
+  }
+}
