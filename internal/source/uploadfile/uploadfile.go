@@ -6,8 +6,10 @@
 // imports already-on-disk log files through the regular upload pipeline.
 //
 // There is no checkpoint and no resume: re-running re-imports everything, and
-// idempotency is owned by the write model (events upsert by uuid, user fields
-// are _ts-guarded), so a re-import converges to the same state.
+// idempotency is owned by the write models per operation type — events upsert
+// by uuid (zero new docs) and user_set-style ops converge, while accumulating
+// ops (user_add/$inc, user_append/$push) re-apply on every run because the
+// _ts guard orders writes but does not deduplicate replays.
 package uploadfile
 
 import (

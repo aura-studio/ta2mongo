@@ -10,8 +10,8 @@ const (
 	// FunctionUploadFile bulk imports the already-on-disk log files matching
 	// source.uploadfile.logPattern once (read to EOF, no checkpoint) and ingests
 	// them with the configured process.mode. The finite counterpart of the
-	// daemon's tailer; re-running re-imports and converges through the
-	// idempotent write models.
+	// daemon's tailer; re-running re-imports everything (events and
+	// user_set-style ops converge; accumulating user_add/user_append re-apply).
 	FunctionUploadFile = "uploadfile"
 	// FunctionEJSON reads a single Extended-JSON Mongo Data API request from stdin,
 	// executes it, and writes the Extended-JSON response to stdout (the console

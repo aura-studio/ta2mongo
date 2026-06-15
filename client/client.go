@@ -66,10 +66,12 @@ type Client interface {
 	// cross-platform paths) once — every file is read start to EOF through the
 	// configured strategy, then the run ends. At least one pattern is
 	// required; patterns that match no files yield an empty Result. There is
-	// no checkpoint: re-running re-imports everything and converges through
-	// the idempotent write models (events upsert by uuid, user fields are
-	// _ts-guarded). The per-line error contract matches Upload. The line cap
-	// defaults to 10 MB; tune it with WithSourceUploadFileMaxLineBytes.
+	// no checkpoint: re-running re-imports everything; events (uuid upsert)
+	// and user_set-style ops converge through the write models, while
+	// accumulating ops (user_add/$inc, user_append/$push) re-apply on every
+	// run — don't blindly re-run files carrying those. The per-line error
+	// contract matches Upload. The line cap defaults to 10 MB; tune it with
+	// WithSourceUploadFileMaxLineBytes.
 	UploadFile(ctx context.Context, patterns ...string) (Result, error)
 	// EnsureIndexes creates all required MongoDB indexes (idempotent).
 	EnsureIndexes(ctx context.Context) error

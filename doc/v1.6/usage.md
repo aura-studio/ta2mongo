@@ -1,0 +1,511 @@
+# tango 命令行使用说明（v1.6）
+
+tango 是单一二进制，**运行角色由配置键 `role.mode` 选择**（不再用子命令）。所有上报角色共享同一引擎，区别在数据来源/入口：
+
+```bash
+tango --config daemon.yaml      # role.mode=daemon：常驻采集上报，追尾日志文件 → 写 MongoDB
+tango --config gateway.yaml     # role.mode=gateway：常驻 HTTP gateway，暴露 /upload（httpbody 源）
+tango --config cli.yaml         # role.mode=cli：一次性，从 stdin 读日志数组上报（process.mode 选策略）
+tango --role.mode gateway       # 角色也可用 flag / 环境变量覆盖（等价 TANGO_ROLE_MODE=gateway）
+# api 角色无运行入口：作为 Go 库被业务代码 import（见“作为库使用”）
+```
+
+## 通用规则
+
+- **角色由配置键 `role.mode` 指定**（`daemon` / `gateway` / `cli`，默认 `daemon`），和其它配置键一样可经文件 / `TANGO_ROLE_MODE` / `--role.mode` 设置；不再有角色子命令。
+- **三个途径完全一致**：每个配置键都可经 ① 配置文件、② `TANGO_*` 环境变量、③ `--<键>` 命令行参数 三种方式设置，键名一致。优先级（低→高）：默认值 < 文件 < 环境变量 < 命令行参数。
+  - 文件键：`dao.mongo.uri`
+  - 环境变量：嵌套键 `.` 转 `_` 并大写加 `TANGO_` 前缀 → `TANGO_DAO_MONGO_URI`
+  - 命令行：flag 名即键路径 → `--dao.mongo.uri`
+  - **配置键路径 = 包路径**（`internal/` 下）：`logging.*`、`dao.mongo.*`、`dao.store.*`、`parser.filter.*`、`source.tailer.*`、`source.uploadfile.*`、`process.*`、`role.gateway.*`。
+- **唯一的例外**：`--config <path>`（配置文件路径，`.yaml`/`.yml`/`.json`）只有命令行这一种途径；它不是配置键。留空时在二进制同级目录查找 `tango.{yaml,yml,json}`，缺失则静默回退到默认值 + 环境变量 + flag。
+- 不要混淆两个 `mode`：`role.mode` 选**运行角色**（daemon/gateway/cli）；`process.mode` 选**上传策略**（`single`/`batch`/`pipeline`，默认 `batch`，CLI/gateway/api 共用）。
+
+| role.mode | 主要配置段 |
+|---|---|
+| `daemon`（默认） | `logging` · `dao` · `parser` · `source` · `process` |
+| `gateway` | `logging` · `dao` · `parser` · `process` · `role.gateway` |
+| `cli` | `logging` · `dao` · `parser` · `process` · `role.cli`（`function=uploadfile` 时另加 `source.uploadfile`；`function=ejson`/`sql` 时仅 `logging` · `dao` · `role.cli`） |
+
+## Daemon Service
+
+```bash
+tango --config daemon.yaml                                       # role.mode=daemon（写在配置里）
+tango --role.mode daemon --dao.mongo.uri mongodb://localhost:27017/tango
+```
+
+职责：追尾 `source.tailer.logPattern` 匹配的日志文件 → 解析 TA JSON → 上报 filter → identity resolve → 流水线批量写 MongoDB。
+
+常用参数（任意配置键都有同名 flag，下面只列最常用的）：
+
+| 参数 | 说明 |
+|---|---|
+| `--dao.mongo.uri` | MongoDB 连接串（配置键 `dao.mongo.uri`） |
+| `--logging.level` | 日志级别（配置键 `logging.level`） |
+| `--source.tailer.logPattern` | 追尾文件模式（配置键 `source.tailer.logPattern`） |
+
+## HTTP Gateway Service
+
+```bash
+tango --config gateway.yaml                          # role.mode=gateway（写在配置里）
+tango --role.mode gateway --role.gateway.addr :8080  # 角色与监听地址都是普通配置键
+```
+
+gateway 是常驻 HTTP 服务，读取共享段 `logging` + `dao` + `parser` + `process`，外加 gateway 专属的
+`role.gateway`（`addr`）。上传模式、批量/流水线参数与过滤器即顶层 `process.*` / `parser.filter.*`。
+监听地址用配置键 `role.gateway.addr`（文件 / `TANGO_ROLE_GATEWAY_ADDR` / `--role.gateway.addr` 三选一）。
+
+| 方法 | 路径 | body | 功能 |
+|---|---|---|---|
+| GET | `/healthz` | - | 健康检查 |
+| POST | `/upload` | `{"line":...,"lines":[...]}` | 日志数组上报，策略由 `process.mode` 决定 |
+| POST | `/ejson` | EJSON `{action, collection, ...}` | Mongo Data API：通用 CRUD/aggregate（见下） |
+| POST | `/sql` | JSON `{"sql":"..."}` | SQL Data API：SQL → MongoDB（见下） |
+
+请求体的 `line` / `lines` 会被包成一个 httpbody 源，按 `process.mode` 选 single / batch / pipeline
+三种上传策略之一写入 MongoDB，返回本次统计（行数 / user / event / 死信等）。
+
+## Mongo Data API（`/ejson` · cli `ejson` · `api.EJSON`）
+
+通用的 MongoDB 读写接口，与 `/upload` 完全独立。功能核心在 `internal/dao/ejson`（由 `dao` 根包经 `dao.go` 中转），三端共享、只是入口不同：
+gateway 的 `POST /ejson`、cli 的 `role.cli.function=ejson`（stdin→stdout）、库的 `engine.EJSON(ctx, req)`。
+
+请求/响应体均为 **Extended JSON v2**（`bson.UnmarshalExtJSON` / `MarshalExtJSON`）；请求 `Content-Type`
+建议 `application/ejson`，也接受 `application/json`（JSON 是 EJSON 子集）；响应为 relaxed EJSON。
+
+**这是完全放开的接口**：可访问任意 database / collection，任意 filter / operator / aggregate pipeline，
+不设白名单、不设返回条数 / body / 超时上限——访问控制由调用方负责。
+
+action 列表：`findOne`、`find`、`insertOne`、`updateOne`、`deleteOne`、`aggregate`。
+请求外壳字段：`action`（必填）、`collection`（必填）、`database`（缺省取连接 URI 里的库）、
+`filter`、`projection`、`sort`、`limit`、`skip`、`document`（insertOne）、`update`（updateOne）、
+`pipeline`（aggregate）、`upsert`。
+
+```bash
+# find（限制 5 条，按 #time 倒序）
+curl -X POST localhost:8080/ejson -H 'Content-Type: application/ejson' -d '{
+  "action":"find","collection":"event",
+  "filter":{"#event_name":"login"},"sort":{"#time":-1},"limit":5}'
+
+# insertOne
+curl -X POST localhost:8080/ejson -H 'Content-Type: application/ejson' -d '{
+  "action":"insertOne","collection":"event",
+  "document":{"#event_name":"login","#time":{"$date":"2026-01-01T00:00:00Z"}}}'
+
+# updateOne（upsert）
+curl -X POST localhost:8080/ejson -H 'Content-Type: application/ejson' -d '{
+  "action":"updateOne","collection":"user","filter":{"#user_id":{"$numberLong":"1"}},
+  "update":{"$set":{"vip":true}},"upsert":true}'
+
+# aggregate
+curl -X POST localhost:8080/ejson -H 'Content-Type: application/ejson' -d '{
+  "action":"aggregate","collection":"event",
+  "pipeline":[{"$group":{"_id":"$#event_name","n":{"$sum":1}}}]}'
+```
+
+cli 端等价（一次性，从 stdin 读一个请求、stdout 输出一个响应）：
+
+```bash
+echo '{"action":"find","collection":"event","filter":{},"limit":5}' \
+  | tango --role.mode cli --role.cli.function ejson --dao.mongo.uri mongodb://localhost:27017/tango
+```
+
+## SQL Data API（`/sql` · cli `sql` · `api.SQL`）
+
+用 SQL 读写 MongoDB，与 `/upload`、`/ejson` 完全独立。功能核心在 `internal/dao/sql`（由 `dao` 根包经 `dao.go`
+中转；代码自 `github.com/aura-studio/mongosql` 拷贝并适配），三端共享：gateway 的 `POST /sql`、cli 的
+`role.cli.function=sql`（stdin→stdout）、库的 `engine.SQL(ctx, query)`。
+
+SQL 由 vitess 解析（MySQL 方言），**表名即集合名**，操作的库取自连接 URI。请求体是 JSON `{"sql":"..."}`；
+响应是 relaxed Extended JSON（SELECT 行含 BSON 类型）。支持 `SELECT`（含 WHERE/ORDER BY/LIMIT/GROUP BY/聚合）、
+`INSERT`、`UPDATE`、`DELETE`、`INSERT ... SELECT`。
+
+```bash
+# SELECT
+curl -X POST localhost:8080/sql -H 'Content-Type: application/json' \
+  -d '{"sql":"SELECT * FROM event WHERE `#event_name` = '"'"'login'"'"' LIMIT 5"}'
+
+# INSERT
+curl -X POST localhost:8080/sql -H 'Content-Type: application/json' \
+  -d '{"sql":"INSERT INTO event (`#event_name`) VALUES ('"'"'login'"'"')"}'
+```
+
+cli 端等价（从 stdin 读一条 SQL）：
+
+```bash
+echo "SELECT * FROM event LIMIT 5" \
+  | tango --role.mode cli --role.cli.function sql --dao.mongo.uri mongodb://localhost:27017/tango
+```
+
+⚠️ DocumentDB 不支持含表达式的 `UPDATE`（翻译为 aggregation-pipeline 形式），如 `SET n = n + 1`；
+常量赋值 `SET n = 10` 走普通 `$set`，正常。DDL（CREATE/ALTER TABLE）未引入（在 mongosql 的 MySQL 协议层），
+故 AUTO_INCREMENT/DEFAULT/ON UPDATE 需要的 schema 不存在时自动跳过。
+
+## CLI Upload
+
+```bash
+# 从 stdin 读 newline 分隔的 TA JSON 日志数组，按 process.mode 上报，打印统计 JSON
+cat events.ndjson | tango --role.mode cli --process.mode batch --dao.mongo.uri mongodb://localhost:27017/tango
+```
+
+`process.mode` 取 `single` / `batch` / `pipeline`（默认 `batch`），可来自配置文件、`TANGO_PROCESS_MODE` 或 `--process.mode`。
+`role.mode=cli` 是 gateway `POST /upload` 的控制台等价入口（从 stdin 读取）。
+
+cli 角色由 `role.cli.function` 选功能：`upload`（默认，上面这种日志上报）、`uploadfile`（存量文件一次性导入，
+**不读 stdin**，见下节）、`ejson`（Mongo Data API，读一个 EJSON 请求、输出 EJSON 响应，等价 `POST /ejson`）或
+`sql`（SQL Data API，读一条 SQL、输出 EJSON 结果，等价 `POST /sql`）或 `config`（cfgsync 配置发布，
+读一个配置文档、输出 `{version}`，等价 `POST /config`；见 §cfgsync 一节）。
+
+## CLI UploadFile（存量文件一次性导入）
+
+```bash
+# 把 source.uploadfile.logPattern 匹配到的存量日志文件一次性灌入上报链路，打印统计 JSON
+# 注意：不读 stdin，没有管道——输入来自 logPattern 匹配的文件
+tango --config cli.uploadfile.max.yaml
+```
+
+`role.cli.function=uploadfile`（v1.6 新增）是 `upload` 的**存量文件版**：输入不来自 stdin，而是
+`source.uploadfile.logPattern`（glob 列表，**tailer 同款语法**：`**`、跨平台路径）匹配到的已落盘文件——
+按发现顺序（逐 pattern、字典序）逐文件**从头读到 EOF**（跳过空行），读完即退出，统计 JSON
+（与 `upload` 同形：行数 / user / event / 死信等）写 stdout。与其它键一样可经
+`TANGO_SOURCE_UPLOADFILE_LOGPATTERN`（**逗号分隔**多 glob）/ `--source.uploadfile.logPattern` 覆盖。
+完整可运行样例见 [`examples/config/cli/`](../../examples/config/cli) 的
+`cli.uploadfile.{min,max}.{yaml,json}`（min = `role.mode` + `role.cli.function` + `dao.mongo.uri` +
+`source.uploadfile.logPattern` 四个 required 键；max 含 `logging`/`parser`/`process`/`maxLineBytes` 逐字段说明）。
+
+- **缺 `source.uploadfile.logPattern` 即 fail-fast**：连 Mongo 之前就报
+  `cli: function=uploadfile requires source.uploadfile.logPattern`。
+- **无 checkpoint / 断点续传**：重跑全量重导，幂等由写模型**按操作类型**保证——event 按 `#uuid` upsert
+  （`$setOnInsert`）重导零新增；`user_set`/`user_setOnce`/`user_uniq_append` 收敛（重导只推进 `$max`
+  保护的 `_ts` 元字段）；但 **`user_add`（`$inc`）/`user_append`（`$push`）不幂等**——`_ts` 是摄取时刻、
+  `$lte` 守卫只防乱序不防重放，重跑会**重复累加/追加**，含此类操作的存量文件不宜盲目重跑；
+  `dead_letter` 是 append-only 诊断集合，**每重跑一遍会再涨一份**。
+- **坏行/坏文件不拖垮整次导入**：单行超 `source.uploadfile.maxLineBytes`（默认 10485760 = 10MB，对齐 tailer）
+  时记日志（`bufio.ErrTooLong`）并跳过**该文件剩余部分**（超限行不会入库），打不开的文件同样记日志跳过，
+  其余匹配文件继续导入。
+- **边界**：`source.tailer`（daemon）= 常驻追**新增**；`cli upload` = stdin 喂行；`uploadfile` = **存量**文件、
+  有限运行（读完即止）。gateway / daemon **不设** uploadfile 入口（v1.6 需求 §7），也没有新增集合。
+
+## cfgsync 配置发布与运行时热替换（`/config` · cli `config` · `api.PublishConfig`）
+
+cfgsync 把上报 filter 等**显式 allowlist 的配置**在运行中对齐中心文档 `_tango_config`：daemon / gateway
+（`cfgsync.enabled=true`）内嵌 Watcher 持续读取并**原子热替换** live filter；发布侧三面同核
+（`cfgsync.Publish`），先按 allowlist 校验 + 编译 filter 再写，坏配置在源头就挡掉。文档 schema：
+`{_id, version(单调), filter:{include,exclude}}`，`_id`/`version` 由 cfgsync 拥有（发布自动 `$inc`）。
+
+发布支持两种模式：**set**（默认，整树替换——发布 `{"filter":{...}}` 会覆盖存储的整个 filter，
+连省略的 `exclude` 都会被清掉）与 **append**（拉取→合并→乐观锁写回：include/exclude 做有序并集
+（存量在前、新增在后、完全相同的串去重），delta 省略的一侧保留存量；带版本守卫重试，**并发 append 互不丢失**）。
+
+```bash
+# gateway：POST /config（默认 set，整树替换），返回 {"version": N}
+curl -X POST localhost:8080/config -H 'Content-Type: application/json' \
+  -d '{"filter":{"include":["#type == \"track\""],"exclude":[]}}'
+
+# gateway：POST /config?mode=append —— 只追加一条规则，存量 include/exclude 保留
+curl -X POST 'localhost:8080/config?mode=append' -H 'Content-Type: application/json' \
+  -d '{"filter":{"include":["#event_name == \"NewEvent\""]}}'
+
+# gateway：GET /config —— 查询当前远端过滤（含 version）；未发布过返回 404
+curl localhost:8080/config
+
+# cli：从 stdin 读配置文档发布（role.cli.configMode 选 set/append，默认 set）
+echo '{"filter":{"include":["#type == \"track\""]}}' \
+  | tango --role.mode cli --role.cli.function config --dao.mongo.uri mongodb://localhost:27017/tango
+echo '{"filter":{"include":["#event_name == \"NewEvent\""]}}' \
+  | tango --role.mode cli --role.cli.function config --role.cli.configMode append \
+      --dao.mongo.uri mongodb://localhost:27017/tango
+
+# cli：查询当前远端过滤（等价 GET /config）
+tango --role.mode cli --role.cli.function configget --dao.mongo.uri mongodb://localhost:27017/tango
+```
+
+读侧由 daemon / gateway 开启（默认关闭）：
+
+```bash
+tango --role.mode gateway --dao.mongo.uri mongodb://localhost:27017/tango \
+  --cfgsync.enabled true --cfgsync.backend poll --cfgsync.pollInterval 5s
+```
+
+`backend=poll`（默认）任意拓扑可用，最坏陈旧 = 一个 `pollInterval`；`backend=changestream` 亚秒级，
+需副本集（普通 MongoDB）或 DocumentDB 开启 `modifyChangeStreams`，standalone mongod 会清晰报错提示改用 `poll`。
+单调版本守卫保证不回退（旧/重放版本丢弃）；新 filter 编译失败保留 last-good（坏配置打不挂）。
+
+**daemon 拉取门禁（pull-before-ingest）**：daemon 在 `cfgsync.enabled=true` 时**先拉到并应用中央配置
+才开始摄入**——发布前 tailer 一行都不读（fail-closed，启动时不会用空/基线 filter 把存量日志全量灌库），
+等待期间每 30s 打 WARN 提示去发布或关掉 cfgsync；SIGTERM 在等待中也能干净退出。gateway 不设此门禁
+（请求由客户端驱动，基线 filter 先行、中央文档随后热替换）。
+
+## 作为库使用（api 角色）
+
+`internal/role/api` 是可复用引擎（仅本仓库内部 import）。gateway / cli 都内嵌它，三者上传能力完全一致：
+
+```go
+import (
+    "github.com/aura-studio/tango/internal/dao"
+    daomongo "github.com/aura-studio/tango/internal/dao/mongo"
+    "github.com/aura-studio/tango/internal/process"
+    "github.com/aura-studio/tango/internal/role/api"
+)
+
+eng, _ := api.New(ctx, &dao.Config{Mongo: &daomongo.Config{URI: "mongodb://localhost:27017/tango"}}, &process.Config{Mode: string(process.ModeBatch)}, nil, nil)
+defer eng.Close()
+eng.EnsureIndexes(ctx)
+
+res, _ := eng.Upload(ctx, lines)
+```
+
+v1.6 起同一引擎多一个存量文件导入面：嵌入方直接调 `eng.UploadFile(ctx, &api.UploadFileConfig{LogPattern: []string{...}})`
+（`api.UploadFileConfig` 是 `source/uploadfile` 配置的类型别名，套路同 `DaoConfig`；空 `LogPattern` 在任何
+source / 数据库动作之前即被拒绝：`api: uploadfile logPattern is required`）。仓库外的使用方走**公开 `client` 包**
+（它只依赖引擎、从不 import `internal/source`），glob 模式在**调用时**传：
+
+```go
+import "github.com/aura-studio/tango/client"
+
+c, _ := client.New(
+    client.WithDaoMongoURI("mongodb://localhost:27017/tango"),
+    client.WithSourceUploadFileMaxLineBytes(10485760), // 可选：单行上限（== source.uploadfile.maxLineBytes，默认 10MB）
+)
+defer c.Close()
+
+res, _ := c.UploadFile(ctx, "/var/log/app/ta.*.log") // 无 checkpoint：重跑全量重导（event/user_set 类收敛；含 user_add/user_append 的文件勿盲目重跑）
+```
+
+同一引擎也暴露 Mongo Data API（与上报共用连接，不需要 process/parser 配置；类型经 `dao` 根包中转）：
+
+```go
+import "github.com/aura-studio/tango/internal/dao"
+
+resp, _ := eng.EJSON(ctx, &dao.EJSONRequest{
+    Action: dao.EJSONActionFind, Collection: "event",
+    Filter: bson.M{"#event_name": "login"}, Limit: 5,
+})
+// resp.Documents ...
+```
+
+以及 SQL Data API（SQL → MongoDB，同样复用引擎连接）：
+
+```go
+res, _ := eng.SQL(ctx, "SELECT * FROM event LIMIT 5")
+// res.Kind == "select"; *res.Rows ...（指针字段：kind=select 时必有，可能为空切片）
+```
+
+以及 cfgsync 配置发布（同核 `cfgsync.Publish`；校验+编译 filter 后原子写中心文档，返回新单调 version）：
+
+```go
+import "go.mongodb.org/mongo-driver/v2/bson"
+
+version, _ := eng.PublishConfig(ctx, bson.M{
+    "filter": bson.M{"include": []string{`#type == "track"`}},
+})
+// version 单调递增；daemon/gateway 的 Watcher 会在 ≤pollInterval（或亚秒，changestream）内热替换生效
+```
+
+## 部署与运维（daemon）
+
+daemon 是常驻进程，部署在容器（生产为 EKS/Fargate）里长时间追尾日志、批量写 MongoDB。本节讲清楚二进制
+**怎么找配置**、**怎么用纯环境变量驱动多环境**，以及 **fd 看门狗**这一兜底机制的运维语义。
+
+### 二进制怎么找配置（`resolveConfigPath`）
+
+配置文件路径的解析逻辑全部在 `main.go` 的 `resolveConfigPath(flagVal, "tango.yaml", "tango.yml", "tango.json")`，
+优先级三步：
+
+1. **`--config <path>` 显式指定**：非空时原样返回（`.yaml`/`.yml`/`.json` 由扩展名决定 YAML/JSON 解析器，见
+   `config/loader.go` 的 `readConfigFile`）。
+2. **二进制同级目录自动探测**：`--config` 留空时，用 `os.Executable()` 取二进制自身所在目录（**不是当前工作目录**），
+   依次探测 `tango.yaml` → `tango.yml` → `tango.json`，返回第一个存在且非目录的文件。这样无论从哪个 cwd 启动，
+   只要把 `tango.yaml` 和二进制放一起即可被自动加载。
+3. **纯环境变量 / flag**：以上都没有时返回 `""`，`config.Load` 静默跳过文件（`readConfigFile` 对空路径和
+   `os.ErrNotExist` 都返回 nil），配置完全来自 **默认值 + `TANGO_*` 环境变量 + `--<键>` flag**。
+
+```bash
+# (1) 显式指定配置文件
+tango --config /etc/tango/daemon.yaml
+
+# (2) 把 tango.yaml 放在二进制同级目录，直接裸跑即自动加载（cwd 无关）
+/opt/tango/tango          # 自动读 /opt/tango/tango.yaml（若存在）
+
+# (3) 完全无配置文件，纯环境变量驱动（容器里最常用，见下）
+tango                     # role.mode 默认 daemon
+```
+
+### 纯 `TANGO_*` 环境变量驱动多环境（一份镜像多集群）
+
+配置分层是 **默认值 < 文件 < `TANGO_*` 环境变量 < flag**（`config/loader.go` 的 viper：`SetEnvPrefix("TANGO")` +
+`SetEnvKeyReplacer(".".→."_")` + `AutomaticEnv`；`registerAll` 预注册所有键的默认值，使 `AllSettings()` 能
+**物化出仅由环境变量提供的叶子值**）。因此**同一个二进制 / 同一份基础配置**，靠每集群不同的环境变量即可服务多个
+集群，**无需改代码、无需改配置文件**。最常改的两个键：
+
+| 配置键 | 环境变量 | 说明 |
+|---|---|---|
+| `dao.mongo.uri` | `TANGO_DAO_MONGO_URI` | 每集群指向各自的 MongoDB / DocumentDB |
+| `source.tailer.logPattern` | `TANGO_SOURCE_TAILER_LOGPATTERN` | 追尾文件 glob；**逗号分隔**可配多个 glob（`cfgtree.Into` 装了 `StringToSliceHookFunc(",")`，把 `a,b` 解成 `[]string{"a","b"}`） |
+| `source.tailer.maxOpenFDs` | `TANGO_SOURCE_TAILER_MAXOPENFDS` | fd 看门狗阈值（见下，生产务必设非 0） |
+| `logging.level` | `TANGO_LOGGING_LEVEL` | 日志级别 |
+
+```bash
+# 同一镜像，A 集群
+export TANGO_DAO_MONGO_URI='mongodb://.../tango_a'
+export TANGO_SOURCE_TAILER_LOGPATTERN='/var/log/app/*.log,/var/log/app/**/*.ta.log'
+export TANGO_SOURCE_TAILER_MAXOPENFDS=4096
+tango                                 # role.mode 默认 daemon
+
+# 同一镜像，B 集群——只换环境变量
+export TANGO_DAO_MONGO_URI='mongodb://.../tango_b'
+export TANGO_SOURCE_TAILER_LOGPATTERN='/data/logs/*.log'
+tango
+```
+
+> `time.Duration` 类型的键（如 `source.tailer.rescanInterval`、`process.pipeline.flushInterval`）支持
+> `"5s"`/`"200ms"` 字符串（`cfgtree.Into` 的 `StringToTimeDurationHookFunc`），所以环境变量里直接写
+> `TANGO_SOURCE_TAILER_RESCANINTERVAL=10s` 即可。
+
+### fd 看门狗（生产必开）
+
+源码：`internal/role/daemon/report.go` 的 `reportStats` / `fdWatchdogTriggered`，阈值键
+`source.tailer.maxOpenFDs`（`internal/source/tailer/config.go`，**默认 0 = 关闭**）。
+
+- **判定**：`fdWatchdogTriggered(openFDs, threshold) = (threshold > 0 && openFDs > threshold)`——**严格大于**，
+  且非正阈值永不触发。fd 计数来自 `openFDCount()`（`internal/role/daemon/procstats.go`），**仅 Linux** 读
+  `/proc/self/fd`，其它平台返回 `-1`（`-1` 永远不 `>` 任何阈值，故看门狗在非 Linux 上**天然惰性、不会误触**）。
+- **触发动作**：`reportStats` 每 `statsReportInterval`（60s）跑一次检查，越线时打 ERROR 日志
+  `report: open fd count exceeded threshold — triggering graceful restart ...`，随后调用 `triggerRestart()`
+  取消 `runCtx`——这会让 pipeline **优雅排空 + flush 在途批次到 Mongo**，`Run` 干净返回、进程退出。
+  这是**主动自杀式重启**：进程带着干净的退出码退出，交给编排器用新容器（**全新的 fd 表**）把它拉起来。
+- **生产配置**：务必把 `maxOpenFDs` 设成**非 0**，否则这道安全网是关的。取值经验：设在容器 `ulimit -n`
+  之下、正常用量之上（正常用量 ≈ 追尾文件数 + 少量 Mongo / 连接 fd）。fd 泄漏的**根因已由 tailer reaping 修复**
+  （见 `doc/test.md` D/E/G 组），看门狗只是 defense-in-depth 兜底。
+- **编排器侧**：把容器的 `restartPolicy` 设为 `Always`（K8s Deployment 默认即是），看门狗退出后由 kubelet
+  自动重建，配合 graceful drain 实现「零丢数据的自愈」。
+
+```yaml
+# K8s 片段：看门狗 + 自动重启 + fd 上限
+spec:
+  template:
+    spec:
+      containers:
+        - name: tango
+          env:
+            - name: TANGO_SOURCE_TAILER_MAXOPENFDS
+              value: "4096"          # 务必非 0，否则安全网关闭
+          # restartPolicy: Always 是 Deployment Pod 的默认值，看门狗退出后自动重建
+```
+
+## 可观测性
+
+daemon 每 60s（`statsReportInterval`，`internal/role/daemon/report.go`，是 `var` 故测试可缩短）打三类统计日志，
+退出时打一份 shutdown summary。运维关注的是 **runtime stats** 这一行，它是 fd 泄漏的早期信号。
+
+### 每 60s 的 `report: runtime stats`
+
+`reportStats` 每个周期输出（除 `report: periodic stats (last 60s)` 增量 + `report: cumulative stats` 累计外）：
+
+```text
+report: runtime stats   goroutines=42  open_fds=137  tailed_files=12
+```
+
+三个字段含义与读法：
+
+| 字段 | 来源 | 含义 / 读法 |
+|---|---|---|
+| `goroutines` | `runtime.NumGoroutine()` | 进程内 goroutine 数；稳态应平稳，**持续单调上升**= goroutine 泄漏 |
+| `open_fds` | `openFDCount()` 读 `/proc/self/fd` | 进程打开的 fd 总数（Linux）；**非 Linux 恒为 `-1`（"unknown"）**。**持续上升**= fd 泄漏 |
+| `tailed_files` | `Tailer.TailedCount()`（`internal/source/tailer/tailer.go`，即 `len(t.tailed)` 活跃 per-file tail goroutine 数） | **当前正在追尾的文件数，是打开的日志 fd 最直接的代理**。reaping 正常时它随真实文件数涨落；**只增不减、远超磁盘上实际文件数**= deleted-but-open 泄漏复现 |
+
+判断 fd 泄漏的最快办法：盯 `open_fds` 和 `tailed_files`，**两者随时间稳步攀升而日志文件实际数量没变**，
+就是泄漏。修复后这两个值应跟随 `reapMissing` / event 模式 ticker（`hybridPollInterval` ~500ms）在
+≤1 个 `rescanInterval`（默认 30s）内回落到真实文件数。
+
+### shutdown summary（`logFinalStats`）
+
+优雅退出（SIGTERM 或看门狗触发）时 `Run` 调 `logFinalStats` 打印一份总账：
+
+```text
+report: ========== shutdown summary ==========
+report: final stats   total_lines=... total_event_writes=... total_dead_letters=... total_retries=... uptime=...
+report: average throughput   lines_per_second=...
+report: ========== SHUTDOWN COMPLETE ==========      # 若有 parse/identity/write 错误则为 SHUTDOWN WITH ERRORS
+```
+
+其中 `total_retries` 取自 `dao.Store.Stats().TotalRetries()`（含 identity id_counter 的 dup-key 重试次数，
+见 §吞吐压测里的修复），`total_dead_letters > 0` 说明有事件被丢进 `dead_letter` 而非 `event`，需排查。
+
+### Linux 上的 ground-truth 检查：`/proc/<pid>/fd`
+
+日志里的 `open_fds` 来自同一来源，但要**实锤** deleted-but-open（已删除但仍被持有的 fd），直接看 `/proc`：
+
+```bash
+# 该进程打开的 fd 总数（对应日志的 open_fds）
+ls /proc/<pid>/fd | wc -l
+
+# 实锤 deleted-but-open：仍被持有的已删除文件（泄漏时这里会有一长串日志文件）
+ls -l /proc/<pid>/fd | grep '(deleted)'
+
+# 按打开文件聚合（需要 lsof）
+lsof -p <pid> | grep deleted
+```
+
+修复后 `grep '(deleted)'` 应为空或仅短暂出现（下一个 ticker / rescan 即释放）。
+
+## 吞吐压测
+
+压测器：[`test/perf/main.go`](../../test/perf/main.go)。它预填一个含 `-n` 条 TA track 事件的日志文件，
+跑**真实的 daemon `Service`**（强制 pipeline 策略）打到 `TANGO_TEST_MONGO_URI`，统计落库速率；用一份扔后即弃的
+`tango_perf_<unixsec>` 库、结束即 drop。完整报告见 [`doc/v1.5/perf-daemon-throughput.md`](../v1.5/perf-daemon-throughput.md)。
+
+一行复现（在 in-VPC 的 EC2 上、直连 DocumentDB）：
+
+```bash
+export TANGO_TEST_MONGO_URI='mongodb://USER:PASS@<docdb>:27017/?tls=true&tlsCAFile=./global-bundle.pem&replicaSet=rs0&readPreference=primary&retryWrites=false'
+go run ./test/perf -n 20000 -workers 4 -batch 1000     # 或交叉编译 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 后 scp 上去跑
+```
+
+压测器 flag（`flag.Int`）：`-n`（事件数，默认 50000）、`-workers`（pipeline batch workers，默认 4）、
+`-batch`（batch size，默认 1000）、`-users`（不同 `#account_id` 数，默认 500，给 identity 缓存施压）。
+
+实测数字（测试环境单个 DocumentDB 实例，in-VPC）：
+
+| 配置 | 落库 | 耗时 | 吞吐 |
+|---|---|---|---|
+| n=20000，workers=4，batch=1000 | 20000 / 20000 | 17.0 s | ≈1175 events/s |
+| n=20000，workers=8，batch=1000 | 20000 / 20000 | 13.7 s | ≈1456 events/s |
+
+- 全部 20000 条**完整落库、零 dead-letter**（这次压测顺带抓出并修复了 identity `id_counter` 的 `E11000`
+  dup-key 竞争——`internal/dao/store/identity_atomic.go` 的 `nextUserID` 现对 dup-key 重试 ≤8 次；该竞争在
+  原生 MongoDB 潜伏、在 DocumentDB 的 upsert 并发语义下高概率触发，详见 perf 报告）。
+- **吞吐杠杆**：`process.pipeline.batchWorkers`（4→8 吞吐 +24%，已验证）与 `process.pipeline.batchSize`
+  （增大摊薄往返）。workers 提升非线性收敛说明**瓶颈在 DocumentDB 写延迟**，不是 daemon 单线程。
+  identity 缓存（`internal/dao/store/identity_cache.go`）让 500 个用户里只有首现的 500 次走库、其余命中缓存，
+  所以瓶颈是**写**不是 identity 查。
+
+## fd 泄漏排查
+
+历史背景：v1.5.0 在 rocket-nano 把 EKS overlay 以 ~5GB/h 撑满，根因是 hpcloud/tail 的 `ReOpen:true` 持有
+已删除/已轮转的日志 fd 不释放（inotify 在**我们仍持有文件**时不投递 `IN_DELETE_SELF`），形成 deleted-but-open
+累积。v1.5 已修复（tailer reaping + 每文件 ticker 自检），本节是出现疑似症状时的快速排查路径。
+
+**症状识别**：
+
+- 容器 **overlay / 磁盘占用持续增长**，但 `du -sh <日志目录>` 算出来的实际占用**基本不变**——这个「磁盘在涨、
+  du 却平」的背离，就是 deleted-but-open（fd 还按着已删除文件，空间不被回收）的典型特征。
+- 日志里 `report: runtime stats` 的 `open_fds` / `tailed_files` **只增不减**，且 `tailed_files` 远超磁盘上
+  实际日志文件数。
+
+**排查步骤**（Linux）：
+
+```bash
+# 1) 拿到 daemon 进程 pid
+pidof tango
+
+# 2) 实锤 deleted-but-open：仍被持有的已删除文件
+ls -l /proc/<pid>/fd | grep '(deleted)'        # 泄漏时是一长串日志文件；修复后应为空/瞬时
+
+# 3) 对照日志的 open_fds（应与 fd 目录条数一致）
+ls /proc/<pid>/fd | wc -l
+```
+
+**兜底**：即便出现泄漏，只要生产设了 `source.tailer.maxOpenFDs`（非 0），fd 看门狗会在 `open_fds` 越线时打
+ERROR `triggering graceful restart` 并优雅 drain + flush + 退出，由编排器（`restartPolicy: Always`）用全新
+fd 表的新容器自愈——是泄漏的最后一道 backstop（见 §部署与运维 的 fd 看门狗）。

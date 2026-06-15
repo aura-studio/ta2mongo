@@ -19,8 +19,9 @@ import (
 // lines from stdin, ingest them with the configured process.mode, and print the
 // run statistics as JSON to stdout. With role.cli.function=uploadfile it bulk
 // imports the already-on-disk files matching source.uploadfile.logPattern once
-// (no checkpoint; re-runs converge through the idempotent write models) and
-// prints the same statistics. With role.cli.function=ejson it is the console
+// (no checkpoint; re-runs re-import everything — events and user_set-style ops
+// converge, accumulating user_add/user_append re-apply) and prints the same
+// statistics. With role.cli.function=ejson it is the console
 // equivalent of POST /ejson — read one Extended-JSON Mongo Data API request from
 // stdin and write the Extended-JSON response to stdout. With
 // role.cli.function=sql it is the console equivalent of POST /sql — read one SQL

@@ -219,9 +219,10 @@ func (c *Engine) Upload(ctx context.Context, lines []string) (Result, error) {
 // c.procCfg.Mode — the file-backed convenience over Run, backing cli
 // function=uploadfile and the public client facade (the source construction
 // sinks into the engine, so the client never touches the source domain).
-// There is no checkpoint: re-running re-imports everything and converges
-// through the idempotent write models. cfg must carry at least one pattern;
-// patterns that match no files yield an empty Result.
+// There is no checkpoint: re-running re-imports everything; events and
+// user_set-style ops converge through the write models, while accumulating
+// ops (user_add/user_append) re-apply per run. cfg must carry at least one
+// pattern; patterns that match no files yield an empty Result.
 func (c *Engine) UploadFile(ctx context.Context, cfg *UploadFileConfig) (Result, error) {
 	if cfg == nil || len(cfg.LogPattern) == 0 {
 		return Result{}, fmt.Errorf("api: uploadfile logPattern is required")
