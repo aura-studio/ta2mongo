@@ -61,6 +61,15 @@ type Client interface {
 	// are routed to dead_letter (counted in Result) rather than erroring; a
 	// non-nil error indicates a bulk-write failure or an unknown mode.
 	Upload(ctx context.Context, lines ...string) (Result, error)
+	// RunBackfill pulls historical data from the ThinkingData OpenAPI and
+	// ingests it: the event table streams through the configured upload
+	// strategy, the user table writes snapshot upserts, and progress is
+	// checkpointed per page in _backfill_progress so an interrupted run
+	// resumes (same backfill RunID). Configure it via the WithBackfill*
+	// options (apiBaseURL/token/projectID/runID are required; an invalid
+	// config errors before any network or database work). Returns the run's
+	// aggregate ingestion statistics.
+	RunBackfill(ctx context.Context) (Result, error)
 	// UploadFile bulk imports the already-on-disk TA log files matching the
 	// given glob patterns (the tailer's pattern syntax, including ** and
 	// cross-platform paths) once — every file is read start to EOF through the
@@ -117,6 +126,9 @@ type client struct {
 	// constructs the source from it (the client never touches the source
 	// domain).
 	uploadfile api.UploadFileConfig
+	// backfill carries the backfill.* config the RunBackfill face hands to the
+	// engine (set via the WithBackfill* options).
+	backfill api.BackfillConfig
 }
 
 // New connects to MongoDB and builds a Client from the given options.
@@ -140,11 +152,26 @@ func New(opts ...Option) (Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &client{engine: engine, uploadfile: o.uploadfile}, nil
+	return &client{engine: engine, uploadfile: o.uploadfile, backfill: o.backfill}, nil
 }
 
 func (c *client) Upload(ctx context.Context, lines ...string) (Result, error) {
 	res, err := c.engine.Upload(ctx, lines)
+	if err != nil {
+		return Result{}, err
+	}
+	return Result{
+		Lines:       res.Lines,
+		UserWrites:  res.UserWrites,
+		EventWrites: res.EventWrites,
+		DeadLetters: res.DeadLetters,
+		Filtered:    res.Filtered,
+	}, nil
+}
+
+func (c *client) RunBackfill(ctx context.Context) (Result, error) {
+	cfg := c.backfill // copy so the engine's ApplyDefaults never mutates the client
+	res, err := c.engine.RunBackfill(ctx, &cfg)
 	if err != nil {
 		return Result{}, err
 	}

@@ -56,6 +56,7 @@ func TestClient_ImportBoundaries(t *testing.T) {
 		{pkg: "internal/cfgsync"},
 		{pkg: "internal/cfgtree"},
 		{pkg: "internal/source"},
+		{pkg: "internal/backfill"},
 		{pkg: "internal/role/cli"},
 		{pkg: "internal/role/gateway"},
 		{pkg: "internal/role/daemon"},

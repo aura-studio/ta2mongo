@@ -13,6 +13,11 @@ const (
 	// daemon's tailer; re-running re-imports everything (events and
 	// user_set-style ops converge; accumulating user_add/user_append re-apply).
 	FunctionUploadFile = "uploadfile"
+	// FunctionBackfill pulls historical data from the ThinkingData OpenAPI per
+	// backfill.* (submit → poll → paginate), ingesting the event table through
+	// the upload pipeline and the user table as snapshot upserts, with per-page
+	// checkpoint resume in _backfill_progress.
+	FunctionBackfill = "backfill"
 	// FunctionEJSON reads a single Extended-JSON Mongo Data API request from stdin,
 	// executes it, and writes the Extended-JSON response to stdout (the console
 	// equivalent of the gateway POST /ejson endpoint).
@@ -41,9 +46,10 @@ const DefaultFunction = FunctionUpload
 type Config struct {
 	// Function selects what the cli role does (file key role.cli.function):
 	// upload (stdin log ingest), uploadfile (one-shot import of the files
-	// matching source.uploadfile.logPattern), ejson (stdin Mongo Data API
-	// request), sql (stdin SQL statement), config (stdin config publish), or
-	// configget (fetch the central config document).
+	// matching source.uploadfile.logPattern), backfill (TA OpenAPI history
+	// backfill per backfill.*), ejson (stdin Mongo Data API request), sql
+	// (stdin SQL statement), config (stdin config publish), or configget
+	// (fetch the central config document).
 	Function string `mapstructure:"function"`
 	// ConfigMode selects the publish mode for function=config (file key
 	// role.cli.configMode): set (default, replace the stored subtrees) or
@@ -61,10 +67,10 @@ func (c *Config) ApplyDefaults() {
 // Validate checks cli-specific config.
 func (c *Config) Validate() error {
 	switch c.Function {
-	case FunctionUpload, FunctionUploadFile, FunctionEJSON, FunctionSQL, FunctionConfig, FunctionConfigGet:
+	case FunctionUpload, FunctionUploadFile, FunctionBackfill, FunctionEJSON, FunctionSQL, FunctionConfig, FunctionConfigGet:
 	default:
-		return fmt.Errorf("function %q is invalid (want %q / %q / %q / %q / %q / %q)",
-			c.Function, FunctionUpload, FunctionUploadFile, FunctionEJSON, FunctionSQL, FunctionConfig, FunctionConfigGet)
+		return fmt.Errorf("function %q is invalid (want %q / %q / %q / %q / %q / %q / %q)",
+			c.Function, FunctionUpload, FunctionUploadFile, FunctionBackfill, FunctionEJSON, FunctionSQL, FunctionConfig, FunctionConfigGet)
 	}
 	switch c.ConfigMode {
 	case "", "set", "append":

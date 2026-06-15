@@ -90,6 +90,55 @@ func TestUserWriteModel_UserSet_FilterGuard(t *testing.T) {
 	assertTsGuardFilter(t, upd.Filter, "#user_id", int64(7), ts)
 }
 
+// TestUserSnapshotWriteModel pins the backfill snapshot upsert: keyed by
+// #user_id, a plain (non-pipeline) update, $set by default and $setOnInsert
+// when skipExisting; #user_id and _ts are injected. Covers both a string and a
+// numeric userID since the TA columnar result carries it untyped.
+func TestUserSnapshotWriteModel(t *testing.T) {
+	t.Run("set_default", func(t *testing.T) {
+		model := UserSnapshotWriteModel("u-42", bson.M{"name": "Bob", "age": 30}, false)
+		upd, ok := model.(*mongo.UpdateOneModel)
+		if !ok {
+			t.Fatalf("expected *mongo.UpdateOneModel, got %T", model)
+		}
+		if upd.Upsert == nil || !*upd.Upsert {
+			t.Error("snapshot model must be an upsert")
+		}
+		f, ok := upd.Filter.(bson.M)
+		if !ok || f["#user_id"] != "u-42" {
+			t.Fatalf("filter = %v, want {#user_id: u-42}", upd.Filter)
+		}
+		u := assertPlainUpdate(t, upd.Update)
+		set, ok := u["$set"].(bson.M)
+		if !ok {
+			t.Fatalf("update missing $set: %v", u)
+		}
+		if set["name"] != "Bob" || set["age"] != 30 || set["#user_id"] != "u-42" {
+			t.Errorf("$set = %v, want name/age/#user_id present", set)
+		}
+		if _, ok := set["_ts"]; !ok {
+			t.Error("$set must inject _ts when absent")
+		}
+	})
+
+	t.Run("skipExisting_setOnInsert", func(t *testing.T) {
+		ts := int64(999)
+		model := UserSnapshotWriteModel(int64(7), bson.M{"_ts": ts, "k": "v"}, true)
+		upd := model.(*mongo.UpdateOneModel)
+		u := assertPlainUpdate(t, upd.Update)
+		soi, ok := u["$setOnInsert"].(bson.M)
+		if !ok {
+			t.Fatalf("skipExisting must use $setOnInsert, got %v", u)
+		}
+		if u["$set"] != nil {
+			t.Errorf("skipExisting must not emit $set, got %v", u["$set"])
+		}
+		if soi["#user_id"] != int64(7) || soi["_ts"] != ts || soi["k"] != "v" {
+			t.Errorf("$setOnInsert = %v, want #user_id/_ts(preserved)/k", soi)
+		}
+	})
+}
+
 // TestEventWriteModel_TrackUpdate_FilterGuard pins track_update: a plain
 // {$set: doc} update guarded by an _ts filter.
 func TestEventWriteModel_TrackUpdate_FilterGuard(t *testing.T) {

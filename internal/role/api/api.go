@@ -23,6 +23,7 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 
+	"github.com/aura-studio/tango/internal/backfill"
 	"github.com/aura-studio/tango/internal/cfgsync"
 	"github.com/aura-studio/tango/internal/cfgtree"
 	"github.com/aura-studio/tango/internal/dao"
@@ -228,6 +229,53 @@ func (c *Engine) UploadFile(ctx context.Context, cfg *UploadFileConfig) (Result,
 		return Result{}, fmt.Errorf("api: uploadfile logPattern is required")
 	}
 	return c.Run(ctx, source.NewUploadFile(cfg))
+}
+
+// RunBackfill pulls historical data from the ThinkingData OpenAPI per cfg
+// (backfill.*) and ingests it: the event table streams each result page through
+// this engine's Upload pipeline (parse → filter → identity → document-form
+// write), while the user table writes snapshot upserts via the dao. Progress is
+// checkpointed per page in the _backfill_progress collection so an interrupted
+// run resumes (same RunID). It borrows this engine's existing Mongo connection
+// and dao; it does not open or close its own. The returned Result aggregates
+// the run's ingestion counters.
+func (c *Engine) RunBackfill(ctx context.Context, cfg *BackfillConfig) (Result, error) {
+	if cfg == nil {
+		return Result{}, fmt.Errorf("api: backfill config is required")
+	}
+	cfg.ApplyDefaults()
+	if err := cfg.Validate(); err != nil {
+		return Result{}, fmt.Errorf("api: %w", err)
+	}
+
+	// The event path reuses Upload; adapt its Result to the cross-layer shape
+	// so internal/backfill never imports this package (which would be a cycle).
+	uploader := func(ctx context.Context, lines []string) (backfill.UploadStats, error) {
+		res, err := c.Upload(ctx, lines)
+		return backfill.UploadStats{
+			Lines:       res.Lines,
+			UserWrites:  res.UserWrites,
+			EventWrites: res.EventWrites,
+			DeadLetters: res.DeadLetters,
+			Filtered:    res.Filtered,
+		}, err
+	}
+
+	runner, err := backfill.NewRunner(ctx, cfg, c.dao, uploader)
+	if err != nil {
+		return Result{}, err
+	}
+	if err := runner.Run(ctx); err != nil {
+		return Result{}, err
+	}
+	s := runner.Result()
+	return Result{
+		Lines:       s.Lines,
+		UserWrites:  s.UserWrites,
+		EventWrites: s.EventWrites,
+		DeadLetters: s.DeadLetters,
+		Filtered:    s.Filtered,
+	}, nil
 }
 
 // EJSON executes a Mongo Data API request against the engine's MongoDB
