@@ -615,12 +615,16 @@ const hybridPollInterval = 500 * time.Millisecond
 // This combines the low latency of kqueue/inotify with the reliability
 // of polling, eliminating the sendOnlyIfEmpty notification-drop race.
 func (t *Tailer) tailFileHybrid(ctx context.Context, path string, out chan<- string) {
-	// Track the last file size the event watcher has delivered up to.
-	// We use this to detect whether the watcher has stalled.
+	// Start from the head of the file (offset 0), matching poll and event modes:
+	// a newly-discovered file is read in full from its beginning, so content that
+	// already exists when the file is first matched — a backlog written before the
+	// tailer attaches, or while the daemon was down — is ingested rather than
+	// skipped. lastSize is the byte offset the event watcher has delivered up to;
+	// it advances only after a line is forwarded (see tailFileHybridEvent) and is
+	// reset to 0 on rotation/truncation so the replacement inode is likewise read
+	// from the start. Re-reading the same content on a later restart is acceptable
+	// (at-least-once): the write models dedup events by #uuid.
 	var lastSize int64
-	if fi, err := os.Stat(path); err == nil {
-		lastSize = fi.Size()
-	}
 
 	for {
 		// --- Phase 1: event-driven reading via hpcloud/tail ---
