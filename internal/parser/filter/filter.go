@@ -60,10 +60,21 @@ func New(include, exclude []string) (*Filter, error) {
 	return &Filter{include: inc, exclude: exc}, nil
 }
 
-// Keep returns whether the record should be kept. Evaluation errors are
-// returned alongside the decision so the caller can record them; on error the
-// expression is treated as not-matched (conservative: include miss / exclude
-// miss). A nil *Filter keeps every record.
+// Keep returns whether the record should be kept, plus the first evaluation
+// error encountered (informational — the caller records it, e.g. OnFilterError).
+//
+// Evaluation errors are data-dependent: the expressions are validated at compile
+// time (New / cfgsync publish), so an error here means a valid rule hit a record
+// it cannot evaluate — a type mismatch or a missing field in a comparison, etc.
+// On such an error Keep FAILS OPEN — it never silently drops a record it cannot
+// decide on (that would lose otherwise-valid data, the more so since filters can
+// be hot-published at runtime):
+//   - include: if no include rule matched but one errored, the errored rule
+//     might have matched, so the record is kept (excludes below still apply);
+//   - exclude: an errored exclude rule does not exclude — only a rule that
+//     definitively matches drops the record.
+//
+// A nil *Filter keeps every record.
 func (f *Filter) Keep(env map[string]any) (bool, error) {
 	if f == nil {
 		return true, nil
@@ -73,10 +84,14 @@ func (f *Filter) Keep(env map[string]any) (bool, error) {
 
 	if len(f.include) > 0 {
 		matched := false
+		errored := false
 		for _, p := range f.include {
 			ok, err := evalBool(p, env)
-			if err != nil && firstErr == nil {
-				firstErr = err
+			if err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				errored = true
 				continue
 			}
 			if ok {
@@ -84,19 +99,24 @@ func (f *Filter) Keep(env map[string]any) (bool, error) {
 				break
 			}
 		}
-		if !matched {
+		// Drop as "not included" only when sure: no rule matched AND none errored.
+		// If an include errored, fail open and keep (the errored rule may have
+		// matched) — still subject to the exclude rules below.
+		if !matched && !errored {
 			return false, firstErr
 		}
 	}
 
 	for _, p := range f.exclude {
 		ok, err := evalBool(p, env)
-		if err != nil && firstErr == nil {
-			firstErr = err
-			continue
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue // an errored exclude does not exclude (fail open)
 		}
 		if ok {
-			return false, firstErr
+			return false, firstErr // definitively excluded
 		}
 	}
 
