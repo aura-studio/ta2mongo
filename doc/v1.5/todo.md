@@ -23,7 +23,7 @@ B1（hybrid 从头读）+ 拍板的「读取位点只存内存、重启重读可
 据此重判其余项：
 
 - **仍须修（运行中永久丢、重启救不回）**：**B5**（写失败丢批，daemon 不重启）= ✅ 已修；
-  **B6**（filter 求值错丢合法行，重读再触发）—— 用到非平凡 filter 就修。
+  **B6**（filter 求值错丢合法行，重读再触发）= ✅ 已修（fail-open）。
 - **被「B1+重启重读」兜底，降级为可选加固**：**B2/B3/B4/B8**（停机/自重启不排空缓冲）——
   常见重启场景重读自愈；残留真丢仅在「缩容不重启」或「重启拖到文件已被滚动删除」。
   **实测确认（`restart_recovery.sh`，三模式）**：中途 SIGTERM 后只入库 ~19–21K/100K（停机丢 ~80%），
@@ -34,7 +34,8 @@ B1（hybrid 从头读）+ 拍板的「读取位点只存内存、重启重读可
 - **罕见边角**：**B10**（单行 >10MB）。
 - **运维项（非代码 bug）**：**B7** + 滚动实测结论 —— 保证消费吞吐 ≥ 写速率、监控滞后（详见文末）。
 
-> 一句话：修完 B1+B5，对你这套（DocumentDB / `log.<ts>` 100MB×5）真正剩下的代码项只有 B6（若用 filter）。
+> 一句话：B1+B5+B6 已修。对你这套（DocumentDB / `log.<ts>` 100MB×5），代码层面的真丢失项已全部清掉；
+> 其余 B2/B3/B4/B8 被重启重读兜底（可选）、B9/B10/B11/B12/B13/B14 不适用或配置可规避、B7 是运维项。
 
 ---
 
@@ -68,10 +69,11 @@ B1（hybrid 从头读）+ 拍板的「读取位点只存内存、重启重读可
       `out<-line` 处遇 `ctx.Done()` 丢手里行（poll `:450`、event `:583`、hybrid `:722`、drainByPoll `:775`）。
       停机时 `out` 缓冲整段无人下游消费。**修**：随 B2/B3 的有序收口；停机让下游把 `out` 排空后再关。
 
-- [ ] **B6　filter 求值出错→合法行当 filtered 静默丢**（确定性、与模式无关，重读也再触发）—
-      `internal/process/core/processor.go:96-101`：`flt.Keep` 对 include 规则求值出错时按“未匹配”返回 `false`
-      （`internal/parser/filter/filter.go` `Keep`），processor 据此 `OnFiltered` 丢弃。**修**：求值错误的行应保留
-      或转 `dead_letter`，不可当成被过滤静默丢。
+- [x] ~~**B6　filter 求值出错→合法行当 filtered 静默丢**~~ — 已修。`internal/parser/filter/filter.go` `Keep`
+      改为 **fail-open**：include 求值错且无规则确定命中 → 保留该行（仍走 exclude）；exclude 求值错 → 不排除；
+      只有 exclude **确定命中**才丢（精确——不会因别的规则报错把该排除的行救回）。`err` 仍返回供 `OnFilterError`
+      计数。processor 不变。测试更新 `filter_test.go` + `ultra_filter_test.go`（含「exclude 确定命中仍丢」守卫）。
+      鉴于 filter 可经 cfgsync 热发布、发布校验只编译不跑数据，本修复让运维发布任意 filter 时最坏只是「多收」而非「静默丢」。
 
 - [ ] **B7　轮转/删除走的文件不回读（无 checkpoint）** — daemon 宕机/重启期间被改名移走（不再匹配 glob）
       或被删的文件永不回读。**注**：按拍板**不做 checkpoint**，故“断点续传”不修；**残留真风险见下方滚动实测**——
