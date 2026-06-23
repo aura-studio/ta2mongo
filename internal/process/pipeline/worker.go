@@ -13,6 +13,18 @@ import (
 	"github.com/aura-studio/tango/internal/process/core"
 )
 
+// bulkRetryPause is the coarse cadence between whole-batch write retries while
+// MongoDB is unavailable. store.BulkWrite already does fine-grained exponential
+// backoff within each attempt (up to MaxElapsedTime); this outer pause keeps
+// re-trying the SAME batch — applying backpressure — instead of dropping it.
+const bulkRetryPause = 1 * time.Second
+
+// drainFlushTimeout bounds the final flush at shutdown: long enough to drain a
+// healthy backend, but capped so an unreachable MongoDB cannot hang shutdown
+// forever. On give-up the batch is left for re-read on the next start, never
+// silently dropped.
+const drainFlushTimeout = 30 * time.Second
+
 // RunWorkers launches N workers with affinity-based dispatch and blocks
 // until all workers finish. prs carries the parser and its filter holder, whose
 // active filter can be hot-swapped while workers run.
@@ -83,6 +95,15 @@ func worker(ctx context.Context, cfg *Config, st *dao.Store,
 		lastFlush = time.Now()
 	}
 
+	// drainFlush is the shutdown flush: a fresh, bounded context so the final
+	// write can still run after the pipeline ctx is cancelled, yet cannot block
+	// shutdown indefinitely if MongoDB is unreachable.
+	drainFlush := func() {
+		dctx, cancel := context.WithTimeout(context.Background(), drainFlushTimeout)
+		defer cancel()
+		flush(dctx)
+	}
+
 	// Use a ticker to ensure batches are flushed even when no new lines arrive.
 	flushTicker := time.NewTicker(flushInterval)
 	defer flushTicker.Stop()
@@ -91,8 +112,8 @@ func worker(ctx context.Context, cfg *Config, st *dao.Store,
 		select {
 		case line, ok := <-lineCh:
 			if !ok {
-				// Channel closed (tailer stopped). Flush remaining data.
-				flush(context.Background())
+				// Channel closed (tailer stopped): drain remaining data.
+				drainFlush()
 				return
 			}
 
@@ -144,25 +165,53 @@ func worker(ctx context.Context, cfg *Config, st *dao.Store,
 			}
 
 		case <-ctx.Done():
-			// Use a background context for the final flush so remaining
-			// data is written even after the main context is cancelled.
-			flush(context.Background())
+			// Final flush after cancellation, on a bounded fresh context.
+			drainFlush()
 			return
 		}
 	}
 }
 
-// flushBatch writes a batch to the given collection (unordered) and resets it.
+// flushBatch writes a batch to the given collection (unordered). On success the
+// batch is reset; on failure it is RETAINED and retried until the write succeeds
+// or ctx is done — it is never silently dropped. (The pre-fix code reset the
+// batch unconditionally, so a write that failed for longer than MaxElapsedTime
+// lost the whole batch with only a log line.) Blocking here applies backpressure
+// up the pipeline — the worker stops draining its channel, the dispatcher and
+// tailer block, and log files accumulate on disk — until MongoDB recovers. When
+// ctx is done (shutdown / drain deadline) the unwritten batch is left in place
+// rather than dropped: the next start re-reads the source from the head and the
+// write models dedup by #uuid / _ts, so no event is lost.
 func flushBatch(ctx context.Context, st *dao.Store,
 	coll *mongo.Collection, b *Batch, stats core.StatsCollector,
 ) {
 	if b.Empty() {
 		return
 	}
-	if err := st.BulkWrite(ctx, coll, b.Models); err != nil {
-		stats.OnWriteError()
-		logging.WithError(err).WithField("collection", coll.Name()).
-			Error("bulk write failed")
+	for {
+		if err := st.BulkWrite(ctx, coll, b.Models); err == nil {
+			b.Reset()
+			return
+		} else {
+			stats.OnWriteError()
+			logging.WithError(err).
+				WithField("collection", coll.Name()).
+				WithField("batch", b.Len()).
+				Error("bulk write failed; retaining batch and retrying (pipeline backpressure)")
+		}
+		if ctx.Err() != nil {
+			// Shutdown / drain deadline reached while still failing. Do NOT drop:
+			// the retained lines are re-read from the source head on the next
+			// start (idempotent by #uuid / _ts).
+			logging.WithField("collection", coll.Name()).
+				WithField("batch", b.Len()).
+				Warn("bulk write still failing at shutdown; batch left for re-read on restart (not dropped)")
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(bulkRetryPause):
+		}
 	}
-	b.Reset()
 }
