@@ -16,6 +16,23 @@
 - `user_add`($inc) / `user_append`($push) 重读会**过计**（可容忍，非丢失）。
 - **真丢失** = 读到/缓冲过的行最终没入库，且不会被重读（文件已轮转/删除）。
 
+## 修了 B1 后的优先级重评估（2026-06-23）
+
+B1（hybrid 从头读）+ 拍板的「读取位点只存内存、重启重读可容忍」共同形成一个兜底：
+**进程一重启，tailer 把盘上还在的文件从头重读、重新入库**（事件 uuid 去重；user_add/append 过计可容忍）。
+据此重判其余项：
+
+- **仍须修（运行中永久丢、重启救不回）**：**B5**（写失败丢批，daemon 不重启）= ✅ 已修；
+  **B6**（filter 求值错丢合法行，重读再触发）—— 用到非平凡 filter 就修。
+- **被「B1+重启重读」兜底，降级为可选加固**：**B2/B3/B4/B8**（停机/自重启不排空缓冲）——
+  常见重启场景重读自愈；残留真丢仅在「缩容不重启」或「重启拖到文件已被滚动删除」。
+- **不适用本形态（`log.<ts>` 新名文件）**：**B9/B12**（原地 rename/truncate）、**B11**（100MB 文件存活 ≫ rescan）。
+- **配置即可规避**：**B13**（别用纯 `event`，用默认 hybrid/poll）、**B14**（不开 cfgsync）。
+- **罕见边角**：**B10**（单行 >10MB）。
+- **运维项（非代码 bug）**：**B7** + 滚动实测结论 —— 保证消费吞吐 ≥ 写速率、监控滞后（详见文末）。
+
+> 一句话：修完 B1+B5，对你这套（DocumentDB / `log.<ts>` 100MB×5）真正剩下的代码项只有 B6（若用 filter）。
+
 ---
 
 ## Critical
@@ -30,11 +47,12 @@
       里未读的行随 goroutine 退出丢弃。**修**：优雅停机改为“排空 channel 直到 close 再退”（走 `!ok` 分支），
       不让 `ctx.Done()` 抄近路；或先停 tailer→drain `lineCh`→drain 各 `workerCh`→flush 的有序收口。
 
-- [ ] **B5　写失败丢整批** — `internal/process/pipeline/worker.go:156` `flushBatch` 在
-      `store.BulkWrite` 重试超 `MaxElapsedTime`（`internal/dao/store/store.go:124`，默认 10s）返回 err 后，
-      只 `OnWriteError()`+`b.Reset()`（worker.go:167），**整批静默丢弃**，不 dead-letter、不停机、不延迟重试。
-      高延迟后端/停机末次 flush 时尤甚（H4 写侧根因）。**修**：失败批转 `dead_letter` 或阻塞重试到成功/停机，
-      绝不 `Reset` 丢弃；并考虑写错持续时主动告警。
+- [x] ~~**B5　写失败丢整批**~~ — 已修。`flushBatch`（`internal/process/pipeline/worker.go`）改为
+      **失败保留并重试到成功或 ctx 结束、绝不 `Reset` 丢弃**：运行中持续失败 → 阻塞重试形成背压（worker 停读 →
+      tailer 停读 → 日志文件在盘上堆积，等 mongo 恢复），停机末次 flush 用有界 `drainFlushTimeout`(30s) 的 fresh
+      ctx 兜底，超时仍失败则**保留待重启重读**（uuid/_ts 幂等）而非丢弃。回归测试
+      `flushbatch_test.go`（不可达 mongo→断言 batch 保留+不 hang）+ pipeline/batch 真 mongo 集成全过 + logloss
+      端到端零丢失复跑。
 
 ## High
 
