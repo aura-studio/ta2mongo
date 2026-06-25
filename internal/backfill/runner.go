@@ -44,6 +44,7 @@ func (f *Fetcher) Run(ctx context.Context, emit func(line string) error) error {
 		return fmt.Errorf("backfill: %w", err)
 	}
 	defaultType := f.cfg.defaultType()
+	userKeys := f.userKeys()
 	logging.WithFields(logging.Fields{
 		"projectID": f.cfg.ProjectID,
 		"table":     f.cfg.Table,
@@ -58,7 +59,7 @@ func (f *Fetcher) Run(ctx context.Context, emit func(line string) error) error {
 			return ctx.Err()
 		default:
 		}
-		if err := f.fetchDay(ctx, day, defaultType, emit); err != nil {
+		if err := f.fetchDay(ctx, day, defaultType, userKeys, emit); err != nil {
 			return fmt.Errorf("backfill: chunk %s: %w", day, err)
 		}
 		logging.WithField("chunk", day).Info("backfill: chunk fetched")
@@ -67,10 +68,24 @@ func (f *Fetcher) Run(ctx context.Context, emit func(line string) error) error {
 	return nil
 }
 
+// userKeys returns the per-run #uuid/#time synthesis config for the user table
+// (nil for the event table, whose rows carry their own #uuid/#time). The
+// Fallback timestamp is stamped once per run so a user row missing both #time
+// and the configured time column still parses.
+func (f *Fetcher) userKeys() *UserKeys {
+	if f.cfg.Table != TableUser {
+		return nil
+	}
+	return &UserKeys{
+		TimeColumn: f.cfg.UserTimeColumn,
+		Fallback:   time.Now().Format("2006-01-02 15:04:05.000"),
+	}
+}
+
 // fetchDay submits one day's SQL, polls to completion, and paginates — encoding
 // each row and emitting it. On a task-expired error it re-submits a fresh task
 // once and restarts pagination from page 0 (safe: write models dedup).
-func (f *Fetcher) fetchDay(ctx context.Context, day, defaultType string, emit func(line string) error) error {
+func (f *Fetcher) fetchDay(ctx context.Context, day, defaultType string, userKeys *UserKeys, emit func(line string) error) error {
 	sql := f.cfg.BuildSQL(day)
 	var taskID string
 	resubmitted := false
@@ -105,7 +120,7 @@ attempt:
 			return ctx.Err()
 		default:
 		}
-		if err := f.emitPage(ctx, taskID, pageID, info.ResultStat.Headers, defaultType, emit); err != nil {
+		if err := f.emitPage(ctx, taskID, pageID, info.ResultStat.Headers, defaultType, userKeys, emit); err != nil {
 			if errors.Is(err, ErrTaskExpired) && !resubmitted {
 				logging.WithField("chunk", day).Warn("backfill: task expired mid-paginate; resubmitting from page 0")
 				resubmitted, taskID = true, ""
@@ -150,7 +165,7 @@ func (f *Fetcher) await(ctx context.Context, taskID string) (*TaskInfoResult, er
 // emits the whole page. Buffering before emit means a transient retry never
 // double-emits rows (the partial buffer is discarded). ErrTaskExpired and ctx
 // errors bubble up so fetchDay can resubmit.
-func (f *Fetcher) emitPage(ctx context.Context, taskID string, pageID int, headers []string, defaultType string, emit func(line string) error) error {
+func (f *Fetcher) emitPage(ctx context.Context, taskID string, pageID int, headers []string, defaultType string, userKeys *UserKeys, emit func(line string) error) error {
 	attempts := f.cfg.PageRetries
 	if attempts < 1 {
 		attempts = 1
@@ -160,7 +175,7 @@ func (f *Fetcher) emitPage(ctx context.Context, taskID string, pageID int, heade
 		lines := make([]string, 0, 2048)
 		err := f.client.StreamResultPage(ctx, taskID, pageID, f.cfg.PageSize,
 			func(row []interface{}) error {
-				line, encErr := EncodeRowAsJSONLine(headers, row, defaultType)
+				line, encErr := EncodeRowAsJSONLine(headers, row, defaultType, userKeys)
 				if encErr != nil {
 					logging.WithError(encErr).Debug("backfill: encode row; skipping")
 					return nil

@@ -30,6 +30,12 @@ const (
 	typeEvent       = "track"
 	typeUserSet     = "user_set"
 	typeUserSetOnce = "user_setOnce"
+
+	// defaultUserTimeColumn is the v_user_<id> column copied into #time for
+	// user-table rows when none is configured. TA's user table has no column
+	// literally named "#time" (that is an event concept); its per-user timestamp
+	// is #update_time. See Config.UserTimeColumn and UserKeys.
+	defaultUserTimeColumn = "#update_time"
 )
 
 // DateRange is an inclusive [Start, End] partition-date range (YYYY-MM-DD).
@@ -66,6 +72,12 @@ type Config struct {
 	PartDateRange  DateRange `mapstructure:"partDateRange"`
 	EventTimeRange TimeRange `mapstructure:"eventTimeRange"`
 	Limit          int       `mapstructure:"limit"`
+	// UserTimeColumn names the v_user_<id> column copied into #time for user-table
+	// rows (the user table has no column literally named "#time", but talog
+	// requires a non-empty #time for user_* records). Default "#update_time"; when
+	// that column is absent too, a per-run synthesized timestamp is used. Ignored
+	// for the event table.
+	UserTimeColumn string `mapstructure:"userTimeColumn"`
 
 	// --- pagination / polling ---
 	PageSize     int           `mapstructure:"pageSize"`
@@ -106,6 +118,7 @@ func (c *Config) RegisterDefaults(set func(key string, value any), prefix string
 	set(prefix+".table", "")
 	set(prefix+".events", []string{})
 	set(prefix+".schemaPrefix", "")
+	set(prefix+".userTimeColumn", "")
 	set(prefix+".partDateRange.start", "")
 	set(prefix+".partDateRange.end", "")
 	set(prefix+".eventTimeRange.start", "")
@@ -123,6 +136,9 @@ func (c *Config) RegisterDefaults(set func(key string, value any), prefix string
 func (c *Config) ApplyDefaults() {
 	if c.Table == "" {
 		c.Table = TableEvent
+	}
+	if c.UserTimeColumn == "" {
+		c.UserTimeColumn = defaultUserTimeColumn
 	}
 	if c.PageSize <= 0 {
 		c.PageSize = defaultPageSize

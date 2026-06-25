@@ -208,7 +208,10 @@ parse → filter → identity → DocumentDB-safe 写那条链路（事件按 `#
 - **user 表**（`v_user_<projectID>`，`table=user`）：整表同步（无分区 / event-time）。行同样走中转源 → 流水线，
   identity 从 `#account_id`/`#distinct_id` 解析，因此用户文档按 tango **解析后的 `#user_id`** 归档（与事件一致，
   不是源表里的 `#user_id`）——这要求 `v_user` 视图带 identity 列。无 `#type` 的行按 `forceSkipExisting` 注入
-  `#type=user_setOnce`（默认）或 `user_set`。
+  `#type=user_setOnce`（默认）或 `user_set`。另外,`v_user` 快照没有 `#uuid`、时间列也不叫 `#time`,而 talog
+  二者都要;故 user 行在编码时**按身份确定性合成 `#uuid`**（仅为过校验,去重仍按解析后 `#user_id`）、并把
+  `userTimeColumn`（默认 `#update_time`）**映射成 `#time`**（该列缺则回退合成时间戳）。所以你**无需**让 `v_user` 自带
+  `#uuid`/`#time`,只要有 identity 列即可。
 
 ```bash
 # 也可纯 flag / 环境变量驱动（键名即 backfill.*）

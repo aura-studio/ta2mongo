@@ -137,18 +137,24 @@ func TestBackfillEventPath(t *testing.T) {
 }
 
 // TestBackfillUserPath runs a single-page user-table backfill and asserts the
-// rows landed via the normal pipeline as user_setOnce updates. The v_user rows
-// must carry an identity column (#account_id) so the pipeline resolves each to
-// a tango #user_id — the user doc is keyed by that resolved id, consistent with
-// events (no custom snapshot write model).
+// rows landed via the normal pipeline as user_setOnce updates. A v_user row
+// carries an identity column (#account_id, so the pipeline resolves each to a
+// tango #user_id — the user doc is keyed by that resolved id, consistent with
+// events) and #update_time, but NO #uuid and no literal #time column. The
+// encoder synthesizes a deterministic #uuid from identity and maps #update_time
+// into #time (backfill.UserTimeColumn, default "#update_time"), so talog accepts
+// the rows instead of dead-lettering them.
 func TestBackfillUserPath(t *testing.T) {
 	daoCfg, db, cleanup := freshDB(t)
 	defer cleanup()
 	ctx := context.Background()
 
-	headers := []string{"#account_id", "name", "age"}
+	headers := []string{"#account_id", "#update_time", "name", "age"}
 	pages := [][][]interface{}{
-		{{"acc-1", "Alice", float64(30)}, {"acc-2", "Bob", float64(25)}},
+		{
+			{"acc-1", "2026-05-01 08:00:00.000", "Alice", float64(30)},
+			{"acc-2", "2026-05-02 09:00:00.000", "Bob", float64(25)},
+		},
 	}
 	srv := newMockTA(headers, pages).server(t)
 

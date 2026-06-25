@@ -266,6 +266,7 @@ mongodb://user:pass@<cluster-endpoint>:27017/tango?tls=true&tlsCAFile=/path/glob
 | `backfill.table` | optional | `event` | 目标表：`event`（事件表，按日期分区）/ `user`（用户表，整表快照） |
 | `backfill.events` | optional | `[]` | `[]string`，限定要回灌的事件名（事件表），编进 SQL 的 `"#event_name" IN (...)`。env 逗号分隔。超出事件名的选取交给 Engine 上报 filter（`parser.filter.*`） |
 | `backfill.schemaPrefix` | optional | `""` | TA SQL 表名 schema 前缀（`[schema.]v_event_<pid>`），留空则不加 |
+| `backfill.userTimeColumn` | optional | `#update_time` | **仅用户表**：把 `v_user_<pid>` 的哪一列映射成 `#time`。TA 用户表没有名为 `#time` 的列（那是事件概念）、其按用户的时间列是 `#update_time`,但 talog 要求 user_* 记录的 `#time` 非空。该列缺失时回退为一次性合成时间戳。事件表忽略此项 |
 | `backfill.partDateRange.start` | **required（event 表）** | `""` | 分区日期起（含），`YYYY-MM-DD`；事件表必填、用户表忽略 |
 | `backfill.partDateRange.end` | **required（event 表）** | `""` | 分区日期止（含），`YYYY-MM-DD` |
 | `backfill.eventTimeRange.start` | optional | `""` | 事件时间窗起（含），`YYYY-MM-DD HH:MM:SS`，在分区内再收窄；仅事件表 |
@@ -424,6 +425,7 @@ gateway 同时暴露三个独立路径（与 `/upload` 互不影响，无额外�
 | `backfill.table` | `event` | `internal/backfill` |
 | `backfill.events` | `[]` | `internal/backfill` |
 | `backfill.schemaPrefix` | `""` | `internal/backfill` |
+| `backfill.userTimeColumn` | `#update_time` | `internal/backfill`（`ApplyDefaults`；仅用户表→`#time` 映射） |
 | `backfill.partDateRange.start` | **required:event 表**（无默认） | `internal/backfill`（`Validate`） |
 | `backfill.partDateRange.end` | **required:event 表**（无默认） | `internal/backfill`（`Validate`） |
 | `backfill.eventTimeRange.start` | `""`（可选） | `internal/backfill` |

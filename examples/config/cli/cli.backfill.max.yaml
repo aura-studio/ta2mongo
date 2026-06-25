@@ -50,6 +50,7 @@ backfill:                         # internal/backfill（仅依赖 logging + cfgt
     - login
     - pay
   schemaPrefix: ""                     # [optional]（默认空）表名前的 schema 限定（如 ta.）
+  userTimeColumn: "#update_time"       # [optional]（默认 #update_time，仅 user 表）映射成 #time 的 v_user 列；该列缺则回退合成时间戳。user 行还会按身份确定性合成 #uuid（talog 必需，v_user 无）
   partDateRange:                       # [required]（event 表）分区日期闭区间 YYYY-MM-DD
     start: "2026-05-01"
     end: "2026-05-03"
