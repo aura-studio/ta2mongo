@@ -62,9 +62,10 @@ func TestUltraFilt7_NonBoolExcludeCompileError(t *testing.T) {
 // inside the VM, so expr.Run itself returns an "invalid operation: bool(int)"
 // error (the evalBool out.(bool) guard is therefore not the surfacing path in
 // this expr-lang version). The load-bearing, observable contract we assert:
-// Keep returns a non-nil error AND treats the offending include expression as
-// not-matched, so this single-include record is dropped (keep=false).
-func TestUltraFilt7_RuntimeNonBoolTreatedAsNotMatched(t *testing.T) {
+// Keep returns a non-nil error AND fails open — the offending single include
+// rule is indeterminate, so the record is KEPT (keep=true) rather than silently
+// dropped, while the error is surfaced for OnFilterError.
+func TestUltraFilt7_RuntimeNonBoolIncludeFailsOpen(t *testing.T) {
 	// "score" is undefined at compile time (static type unknown) so New()
 	// succeeds; at run time we bind it to a non-bool (an int).
 	f, err := New([]string{"score"}, nil)
@@ -81,9 +82,9 @@ func TestUltraFilt7_RuntimeNonBoolTreatedAsNotMatched(t *testing.T) {
 	if !strings.Contains(ferr.Error(), "bool") || !strings.Contains(ferr.Error(), "int") {
 		t.Errorf("expected a bool/int coercion error, got: %v", ferr)
 	}
-	// Single include rule errored -> treated as not-matched -> record dropped.
-	if keep {
-		t.Errorf("non-bool include result must be treated as not-matched (keep=false), got keep=true")
+	// Single include rule errored -> indeterminate -> fail open -> record kept.
+	if !keep {
+		t.Errorf("non-bool include eval error must fail open (keep=true), got keep=false")
 	}
 }
 

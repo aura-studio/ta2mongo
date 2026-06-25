@@ -181,19 +181,65 @@ func TestRewriteHashRefs(t *testing.T) {
 	}
 }
 
-func TestKeep_EvalErrorPropagates(t *testing.T) {
-	// Force a runtime type error: comparing a string with an int.
+func TestKeep_IncludeEvalErrorFailsOpen(t *testing.T) {
+	// Force a runtime type error: comparing an int with a string. The expression
+	// compiles fine; it only errors on this record's data.
 	f, err := New([]string{`level > "abc"`}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	keep, ferr := f.Keep(map[string]any{"level": 10})
 	if ferr == nil {
-		t.Fatalf("expected eval error")
+		t.Fatalf("expected eval error to be reported")
 	}
-	// On eval error, the expression is treated as not-matched. Since this is
-	// the only include rule, the record should be dropped.
+	// The sole include rule errored, so we cannot prove the record is excluded.
+	// Fail open: keep it (and the error is reported for OnFilterError). The
+	// pre-fix behaviour dropped it here — silent loss of a valid record (B6).
+	if !keep {
+		t.Errorf("expected keep=true (fail open) on include eval error, got false")
+	}
+}
+
+func TestKeep_ExcludeEvalErrorFailsOpen(t *testing.T) {
+	// An exclude rule that errors on the record must NOT exclude it (fail open).
+	f, err := New(nil, []string{`level > "abc"`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	keep, ferr := f.Keep(map[string]any{"level": 10})
+	if ferr == nil {
+		t.Fatalf("expected eval error to be reported")
+	}
+	if !keep {
+		t.Errorf("expected keep=true (fail open) on exclude eval error, got false")
+	}
+}
+
+func TestKeep_DefinitiveExcludeStillDropsDespiteOtherError(t *testing.T) {
+	// Fail-open must stay precise: when one exclude rule errors but ANOTHER
+	// exclude definitively matches, the record is still dropped — the error must
+	// not resurrect a record that genuinely matched an exclude.
+	f, err := New(nil, []string{`level > "abc"`, `country == "CN"`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	keep, ferr := f.Keep(map[string]any{"level": 10, "country": "CN"})
+	if ferr == nil {
+		t.Fatalf("expected the first exclude rule's eval error to be reported")
+	}
 	if keep {
-		t.Errorf("expected keep=false on eval error with single include rule")
+		t.Errorf("expected keep=false: the second exclude rule definitively matched")
+	}
+}
+
+func TestKeep_IncludeErrorButAnotherMatches(t *testing.T) {
+	// An errored include rule must not break a real match by a sibling rule.
+	f, err := New([]string{`level > "abc"`, `#type == "track"`}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keep, _ := f.Keep(map[string]any{"level": 10, "#type": "track"})
+	if !keep {
+		t.Errorf("expected keep=true: a sibling include rule matched")
 	}
 }

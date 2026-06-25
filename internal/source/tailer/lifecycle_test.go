@@ -155,6 +155,43 @@ func mkLines(prefix string, n int) []string {
 // C. tailer file lifecycle — poll / event / hybrid each
 // ---------------------------------------------------------------------------
 
+// C0: a file that already holds content when first discovered must be read from
+// its head in every mode. This pins the "new file → read from the beginning"
+// contract the daemon relies on: a backlog present at first match (written
+// before the tailer attaches, or while the daemon was down) must be ingested,
+// not skipped. Hybrid historically started at EOF and dropped this content;
+// this guards against regressing to that. Re-reads on restart are tolerated
+// (at-least-once; events dedup by #uuid), so only loss is a failure here.
+func TestLifecycle_C0_PreexistingContentReadFromHead(t *testing.T) {
+	for _, mode := range allModes {
+		mode := mode
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			logFile := filepath.Join(dir, "app.log")
+
+			// Write the content BEFORE the tailer starts, so it is present at
+			// the file's first open (not appended after attach as C1–C3 do).
+			pre := mkLines("preexisting", 200)
+			appendLines(t, logFile, pre)
+
+			tl := New([]string{dir + "/*.log"}, 100*time.Millisecond, mode)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			sink := drain(tl.Run(ctx))
+
+			// Every pre-existing line must arrive, including the very first —
+			// proving the reader attached at offset 0, not at EOF.
+			sink.waitForLine(t, pre[len(pre)-1], 8*time.Second)
+			sink.waitForLine(t, pre[0], 2*time.Second)
+			for _, l := range pre {
+				if !sink.has(l) {
+					t.Fatalf("%s: pre-existing line not read from head (lost): %q", mode, l)
+				}
+			}
+		})
+	}
+}
+
 // C1: continuous append — every written line is emitted, none lost. Writes are
 // paced in small bursts so event mode (which can stall under sustained
 // concurrent writes, see config.go) is exercised fairly.
