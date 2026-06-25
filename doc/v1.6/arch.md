@@ -5,25 +5,31 @@
 
 ## 0. 架构图
 
-> 以下三张图按 v1.4（[doc/v1.4](../v1.4)）的画法重绘 v1.5 形态，由
-> [`make_diagrams.py`](../v1.5/make_diagrams.py)（纯 Pillow）生成，改图后重跑该脚本即可。
-> v1.6.0 仅新增 file 源与四层入口（§9），图暂未重绘，仍沿用 v1.5 版本。
+> 以下四张图沿用 v1.4 / v1.5 的画法（分层彩色圆角盒 + 左→右流程图），由本目录的
+> [`make_diagrams.py`](make_diagrams.py)（纯 Pillow，Windows CJK 字体，2x 超采样→LANCZOS）生成，
+> 改图后重跑 `python doc/v1.6/make_diagrams.py` 即可。相对 v1.5：总览补了 `source/file` 源与四层入口，
+> 并新增**图 C**——v1.6 的 file 存量文件一次性导入（§9）。
 
 **图 0 · 架构总览**（分层：入口 → 角色 → 编排领域 cfgsync → 引擎根包 → 子包 → 基础）
 
-![v1.5 架构总览](../v1.5/overview.png)
+![v1.6 架构总览](overview.png)
 
 **图 A · 单行上报数据流**（三策略共享 `core.Processor`：parse→filter→identity→写模型→BulkWrite）
 
-![v1.5 上报数据流](../v1.5/upload-flow.png)
+![v1.6 上报数据流](upload-flow.png)
 
 **图 B · cfgsync 读写同核**（写侧三面 `Publish` + 读侧 `Watcher` 版本守卫热替换 live filter）
 
-![v1.5 cfgsync 读写同核](../v1.5/cfgsync-flow.png)
+![v1.6 cfgsync 读写同核](cfgsync-flow.png)
+
+**图 C · file 存量文件一次性导入（v1.6 新增）**（有限源 → 复用上报同核管线 → 同一批集合；无 checkpoint，重跑靠写模型幂等收敛）
+
+![v1.6 file 一次性导入](file-flow.png)
 
 > 相对 v1.4 的结构差异：**移除** worker 角色 / backfill / taskqueue / fileupload / filebatch /
 > UserSnapshot；remoteconfig **收敛为 cfgsync**；SQL Data API 由"拷贝 mongosql"改为**注入式依赖外部
 > `aura-studio/mongosql`**；新增 daemon 的 **fd 看门狗 + 运行时指标**与三处 **`NewFromTree`** 接线。
+> v1.6 在 v1.5 之上**仅新增** `source/file` 存量文件一次性导入源与四层入口（见 §9），不新增集合、不引入新角色。
 
 ## 1. 目标
 
@@ -393,7 +399,7 @@ distinct、`INSERT`/`UPDATE`/`DELETE`→对应写操作、`INSERT ... SELECT`→
 `internal/cfgsync` 是 `cfgtree` 的**动态对偶**：`cfgtree` 启动时一次性加载静态配置，`cfgsync` 让其中
 **一小撮显式 allowlist 的子树**在运行中持续对齐中心文档（集合 `_tango_config`）。它**不是角色**，而是像
 `api.Engine` 一样的可嵌入 Watcher/Service，被**长驻且持有 live filter** 的角色内嵌：`daemon`（tailer→pipeline）
-与 `gateway`（/upload）；一次性的 `cli` 与库 `api` 不内嵌读侧，`worker`/taskqueue 与之无关。
+与 `gateway`（/upload）；一次性入口（`cli` 含 `function=file`、库 `api`）不内嵌读侧。
 
 **读侧 Watcher**（embed 进 daemon/gateway）：选 backend → 启动拉取一次 → 运行中持续 `observe(doc)`；
 经单调版本守卫后调注入的 `onChange`（= `Registry.Apply`）把变更子树路由到 applier，金标准是
