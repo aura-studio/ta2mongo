@@ -1,7 +1,8 @@
 # tango 架构说明
 
-> 本文对应 **v1.6**（v1.6.0 落地 `file` 一次性文件导入，见 §9；正式需求见
-> [`requirements.md`](requirements.md)）。v1.5 的全部内容仍描述当前系统、原样保留。
+> 本文对应 **v1.6 / v1.7**（v1.6.0 落地 `file` 一次性文件导入，见 §9；v1.7 在其上再落地
+> `backfill` TA OpenAPI 历史回填领域，见 §10；正式需求见 [`requirements.md`](requirements.md)）。
+> v1.5 的全部内容仍描述当前系统、原样保留。
 
 ## 0. 架构图
 
@@ -21,9 +22,12 @@
 
 ![v1.5 cfgsync 读写同核](../v1.5/cfgsync-flow.png)
 
-> 相对 v1.4 的结构差异：**移除** worker 角色 / backfill / taskqueue / fileupload / filebatch /
-> UserSnapshot；remoteconfig **收敛为 cfgsync**；SQL Data API 由"拷贝 mongosql"改为**注入式依赖外部
-> `aura-studio/mongosql`**；新增 daemon 的 **fd 看门狗 + 运行时指标**与三处 **`NewFromTree`** 接线。
+> 相对 v1.4 的结构差异：**移除** worker 角色 / taskqueue / fileupload / filebatch；remoteconfig
+> **收敛为 cfgsync**；SQL Data API 由"拷贝 mongosql"改为**注入式依赖外部 `aura-studio/mongosql`**；
+> 新增 daemon 的 **fd 看门狗 + 运行时指标**与三处 **`NewFromTree`** 接线。
+> （v1.7 起 **backfill 历史回填领域回归**——自 v1.0 tag `8bc899b` 按 mongo driver v2 + DocumentDB 安全
+> 重建，连同 `dao` 的 `UserSnapshotWriteModel` 一并迁回；但**不**带回 v1.4 的 worker 角色 / taskqueue，
+> backfill 仅作 cli/api 的有界一次性入口，见 §10。）
 
 ## 1. 目标
 
@@ -116,7 +120,7 @@ daemon 是长驻的 pipeline 流水线。api 只作为库使用，不由 `role.m
     ├── parser/     # parser.go 整合 talog + filter（日志解析层）+ talog 门面（Record/categories/EnvelopeKeys 重导出）
     │   ├── config.go # parser.Config：聚合 parser 子模块配置
     │   ├── talog/    # TA JSON 行解析 -> Record
-    │   └── filter/   # expr-lang include/exclude 上报过滤器 + filter.Config
+    │   └── filter/   # expr-lang include/exclude 上报过滤器 + filter.Config + sql.go（CompileToSQL：expr → Presto WHERE，backfill 下推用，v1.7）
     ├── source/     # 数据来源集合（source.Source 契约 + source.Config 聚合 tailer/file）+ New{Lines,Reader,Tailer,File} 构造器门面
     │   ├── httpbody/ # HTTP 请求体来源（NewLines；gateway/api 用）
     │   ├── tailer/  # 文件追尾来源 + tailer.Config / TailMode 常量（NewTailer；daemon 用）
@@ -134,11 +138,22 @@ daemon 是长驻的 pipeline 流水线。api 只作为库使用，不由 `role.m
     │   ├── single/  # 逐行即时写 Uploader
     │   ├── batch/   # 同步批量 Uploader（累积 + bulk flush）
     │   └── pipeline/# 异步 N-worker 流水线 Uploader + pipeline.Config + dynamicbatch
+    ├── backfill/   # v1.7 TA OpenAPI 历史回填领域（runner/executor 编排；自 v1.0 8bc899b 迁回、driver v2 + DocumentDB 安全重建）
+    │   ├── client.go    # TA OpenAPI 客户端：submit-sql → 轮询 sql-task-info → 分页 sql-result-page（NDJSON）；token 走 query param；含包文档
+    │   ├── httpclient.go# 底层 HTTP：net/http + x/net/proxy（http/https/socks5）+ backoff/v4（按 pageRetries 重试）
+    │   ├── ndjson.go    # 结果页 NDJSON 流式解码：逐行 json → map row，边解边交（不全量驻留）
+    │   ├── rowdecode.go # EncodeRowAsJSONLine：event 行 → TA JSON 日志行（#/_/$ 前缀升顶层、其余进 properties、nil 丢弃）
+    │   ├── sqlbuilder.go# buildDaySQL：SELECT * FROM [schema.]v_event_<pid> WHERE "$part_date"=... [filterWhere][LIMIT]；user 表 = SELECT * FROM v_user_<pid>
+    │   ├── checkpoint.go# _backfill_progress 状态机：每 RunID 一文档、按 page flush；SQLSignature 漂移守卫；FindOne+ReplaceOne upsert（无 pipeline update）
+    │   ├── runner.go    # NewRunner + Run：event 按 partDateRange 逐日 / user 全表单块；读 checkpoint 续跑 → submit/poll/paginate → 逐页交 executor → 每页写回
+    │   ├── executor.go  # 两路写入：event → 注入的 upload 回调（=Engine.Upload）；user → dao.UserSnapshotWriteModel + Store.BulkWriteOrdered
+    │   ├── stats.go     # 回填统计：内嵌 process.Counters + Pages/HTTPErrors/DaysCompleted/DaysFailed；跨层 UploadStats（→ api.Result）
+    │   └── config.go    # backfill.Config（backfill.*）+ FromTree/RegisterDefaults/ApplyDefaults/Validate + 助手（ForceSkip/ShouldPaginate/...）+ 表名常量 TableEvent/TableUser/DefaultProgressCollection
     └── role/       # 运行角色：Role 接口 + Get(mode) 派发；role.Config 聚合 daemon/gateway
         ├── api/     # 可复用引擎库：api.Engine（New/Upload/Run/EnsureIndexes/Close）——非可派发角色
         ├── daemon/  # daemon.Role + daemon.Service（pipeline + tailer；含信号处理/启动日志）
         ├── gateway/ # gateway.Role + HTTP Server：内嵌 api.Engine + /upload + /ejson + /sql；gateway.Config（role.gateway.*）
-        └── cli/     # cli.Role：内嵌 api.Engine + stdin/file 源；cli.Config（role.cli.function=upload|file|ejson|sql|config|configget）
+        └── cli/     # cli.Role：内嵌 api.Engine + stdin/file 源 + backfill；cli.Config（role.cli.function=upload|file|backfill|ejson|sql|config|configget）
 ```
 
 依赖方向：
@@ -147,9 +162,9 @@ daemon 是长驻的 pipeline 流水线。api 只作为库使用，不由 `role.m
 main             -> config + role + logging
 client           -> role/api                                       (公共门面，redis-go 风格，包装引擎)
 role             -> cfgtree + role/(daemon/gateway/cli/api)         (Role 接口 + Get(mode) 派发)
-role/api         -> process + parser + dao + source + logging       (引擎库，被 gateway/cli 内嵌；Mongo Data API 经 dao 中转)
+role/api         -> process + parser + dao + source + backfill + logging (引擎库，被 gateway/cli 内嵌；Mongo Data API 经 dao 中转；RunBackfill 借引擎已有 Mongo/dao)
 role/gateway     -> api + dao + process + parser + cfgtree + logging (gateway.Role + HTTP 面)
-role/cli         -> api + dao + process + parser + source + cfgtree   (cli.Role + stdin/数据 面)
+role/cli         -> api + dao + process + parser + source + backfill + cfgtree (cli.Role + stdin/数据/回填 面)
 role/daemon      -> process + parser + dao + source + cfgtree + logging (daemon.Role + Service)
 process          -> process/(core/single/batch/pipeline) + source + dao + parser + cfgtree
 process/<子包>   -> dao + parser + source + (core)                  (经 dao/parser 根包门面，不碰 dao/store、parser/talog|filter)
@@ -159,6 +174,7 @@ dao/ejson        -> dao/mongo（+ bson/mongo/options 驱动）           (dao �
 dao/sql          -> dao/mongo + mongosql（外部依赖，注入 db）         (dao 子包；mongosql.New(db) 注入式，SQL→MongoDB)
 source           -> httpbody + stdin + tailer + file + cfgtree (根包整合，对外暴露 Source + New{Lines,Reader,Tailer,File})
 source/file -> logging                                          (显式文件路径，无 glob/目录，不依赖 tailer；无 dao 依赖)
+backfill         -> dao + parser/filter + process + cfgtree + logging (v1.7 回填领域；event 路经注入回调复用 Engine.Upload 避免 api↔backfill 环；user 路写快照)
 cfgtree          -> mapstructure   (叶子载体，不依赖 viper)
 config           -> cfgtree + 各模块（仅用其 RegisterDefaults 注册键）；viper 只在 config
 各模块通过 cfgtree.Tree 解码（FromTree）；各叶子模块 ↛ config；领域之间只经根包，不跨领域 import 兄弟子包
@@ -203,6 +219,7 @@ config           -> cfgtree + 各模块（仅用其 RegisterDefaults 注册键�
 | `parser/filter/filter.go` | `Filter`：expr-lang 编译与 `Keep` |
 | `parser/filter/holder.go` | `Holder`：原子可热替换的 filter 持有者 |
 | `parser/filter/config.go` | `filter.Config`（include/exclude）+ `Build()` |
+| `parser/filter/sql.go` | **v1.7** `CompileToSQL(include, exclude)`：把 expr-lang include/exclude 编译成 Presto WHERE 体 `(inc1 OR inc2) AND NOT (exc1 OR exc2)`；`#field` → `"field"` 双引号列；支持 `==`/`!=`/`<`/`<=`/`>`/`>=`/`&&`(`and`)/`||`(`or`)/`in`/`!`(`not`) + 字面量；不支持的节点（函数调用等）报错。供 backfill 把选择 filter 下推到 TA SQL |
 
 #### 来源层 `internal/source`
 
@@ -267,6 +284,21 @@ config           -> cfgtree + 各模块（仅用其 RegisterDefaults 注册键�
 | `process/pipeline/dispatch.go` | `Dispatch`：按亲和键路由到各 worker channel |
 | `process/pipeline/routing.go` | `ExtractRoutingKey`/`RouteIndex`：用户亲和性 hash 路由 |
 
+#### TA OpenAPI 历史回填 `internal/backfill`（**v1.7** 顶层领域，非角色；被 `role/api` 经 `Engine.RunBackfill` 内嵌）
+
+| 文件 | 职责 |
+|---|---|
+| `backfill/client.go` | **包文档（package 注释在此）** + TA OpenAPI 客户端：`submit-sql`（提交 Presto SQL，返回 taskId）→ `sql-task-info`（按 `pollInterval` 轮询至完成，超 `pollTimeout` 报错）→ `sql-result-page`（按 `pageId` 分页拉 NDJSON）；token 作为 query param 拼入 URL；状态常量 `StatusRunning/Finished/Failed`、`APIError`、`ErrTaskExpired` 也在此 |
+| `backfill/httpclient.go` | 底层 HTTP：`net/http` + `golang.org/x/net/proxy`（http/https/socks5，DIRECT 依赖）+ `backoff/v4`（按 `pageRetries` 重试） |
+| `backfill/ndjson.go` | 结果页 NDJSON 流式解码：逐行 `json.Decode` → `map[string]any` row，边解边交回填驱动（不全量驻留） |
+| `backfill/rowdecode.go` | `EncodeRowAsJSONLine(row)`：event 行 → TA JSON 日志行——`#`/`_`/`$` 前缀列升到顶层信封，其余列收进 `"properties"`，nil 值丢弃；产出喂给 `Engine.Upload` 复用 parse→filter→identity→写 |
+| `backfill/sqlbuilder.go` | `buildDaySQL`：`SELECT * FROM [schema.]v_event_<pid> WHERE "$part_date"='<day>' [AND "#event_time">='...'][AND "#event_time"<='...'][AND <filterWhere>][LIMIT n]`；user 表 = `SELECT * FROM v_user_<pid>`（无分区/事件时间），`filterWhere` 来自 `filter.CompileToSQL` |
+| `backfill/checkpoint.go` | `_backfill_progress` 状态机：每 `RunID` 一文档（`_id=RunID`），event 按天 chunk / user 单 `UserChunkKey`；**每 page flush** `DayProgress`（status/taskId/pageId/pageCount/rows/error），中断后从下一页续；`SQLSignature`（table/projectID/filterWhere/eventTimeRange，**不含 partDateRange**）守卫漂移，同 RunID 签名变 → `ErrSignatureMismatch` 拒续；`FindOne` 读 + `ReplaceOne` upsert，均 DocumentDB 安全（绝不 pipeline update） |
+| `backfill/runner.go` | `NewRunner` + `Run`：按 `table` 分支——event 按 `partDateRange` 逐日、user 全表单块；读 checkpoint 续跑 → 调 client submit/poll/paginate → 逐页交 executor → 每页写回 checkpoint；汇总 `UploadStats`（`Result()`） |
+| `backfill/executor.go` | 两路写入：**event** 逐页把行 `EncodeRowAsJSONLine` → 注入的 upload 回调（= `Engine.Upload`，经本地 `UploadStats` 桥避免 api↔backfill 环），Engine 上报 filter（`parser.filter.*`）在此路生效；backfill 选择 filter（include/exclude）**仅经 SQL 下推**，event 路不再本地重复过滤；**user** 行绕过 parser，每行 → `dao.UserSnapshotWriteModel(#user_id, doc, forceSkipExisting)`（纯 `$set`/`$setOnInsert`，无聚合管线），经 `Store.BulkWriteOrdered` 批写；backfill 本地兜底 filter **仅在 user 路**内联应用（除非 `skipLocalFilter`） |
+| `backfill/stats.go` | 回填统计：内嵌 `process.Counters`（十项逐行指标）+ `Pages`/`HTTPErrors`/`DaysCompleted`/`DaysFailed`；跨层结果 `UploadStats`（Lines/UserWrites/EventWrites/DeadLetters/Filtered），由 `Runner.Result()` 汇出、Engine 映射成 `api.Result` |
+| `backfill/config.go` | `backfill.Config`（`backfill.*`）+ `FromTree`/`RegisterDefaults`/`ApplyDefaults`/`Validate` + 助手 `ForceSkip`/`ShouldPaginate`/`EffectivePageSize`/`IncludeExprs`/`BackfillWhere`（见 §10.6） |
+
 #### 运行时动态配置同步 `internal/cfgsync`（顶层领域，非角色；被 daemon/gateway 内嵌）
 
 | 文件 | 职责 |
@@ -291,7 +323,7 @@ config           -> cfgtree + 各模块（仅用其 RegisterDefaults 注册键�
 |---|---|
 | `role/role.go` | `Role` 接口（`Run(ctx, cfgtree.Tree) error`）+ `Get(mode) (Role,error)` 派发 + 角色名常量（`API`/`CLI`/`Daemon`/`Gateway`） |
 | `role/config.go` | `role.Config`：聚合 `daemon`/`gateway`/`cli` + `ApplyDefaults`/`Validate`/`RegisterDefaults` + `FromTree` |
-| `role/api/api.go` | 可复用引擎库 `api.Engine`：`New(ctx, *dao.Config, *process.Config, *parser.Config, *cfgsync.Config)` / `NewFromTree(ctx, tree)`（切 dao/process/parser/cfgsync 子树）/`Upload(lines)`（经 `source.NewLines`）/`File(ctx, cfg)`（**v1.6.0**：先拒空 `Paths`（`"api: file paths is required"`，先于任何 source/库操作）再 `Run(source.NewFile(cfg))`；`api.FileConfig` = `source.FileConfig`（经 source 门面、最终 = `file.Config`，在 `role/api/config.go`——role 层不 import source 子包）/`Run(src)`/`EJSON(req)`（Mongo Data API）/`SQL(query)`（SQL Data API）/`EnsureIndexes`/`Close`/`StartCfgsync(ctx)`（仅 `cfgsync.enabled` 时起 Watcher goroutine）/`PublishConfig(ctx, doc)`（中转 `cfgsync.Publish`）+ `Result`（非可派发角色） |
+| `role/api/api.go` | 可复用引擎库 `api.Engine`：`New(ctx, *dao.Config, *process.Config, *parser.Config, *cfgsync.Config)` / `NewFromTree(ctx, tree)`（切 dao/process/parser/cfgsync 子树）/`Upload(lines)`（经 `source.NewLines`）/`File(ctx, cfg)`（**v1.6.0**：先拒空 `Paths`（`"api: file paths is required"`，先于任何 source/库操作）再 `Run(source.NewFile(cfg))`；`api.FileConfig` = `source.FileConfig`（经 source 门面、最终 = `file.Config`，在 `role/api/config.go`——role 层不 import source 子包）/`RunBackfill(ctx, *api.BackfillConfig) (Result, error)`（**v1.7**：先 `Validate` 再借引擎已有 Mongo/dao 跑 `backfill.NewRunner`，event 路经本地 `UploadStats` 适配 `Engine.Upload` 以避 api↔backfill 环；`api.BackfillConfig` = `backfill.Config` 别名，在 `role/api/config.go`）/`Run(src)`/`EJSON(req)`（Mongo Data API）/`SQL(query)`（SQL Data API）/`EnsureIndexes`/`Close`/`StartCfgsync(ctx)`（仅 `cfgsync.enabled` 时起 Watcher goroutine）/`PublishConfig(ctx, doc)`（中转 `cfgsync.Publish`）+ `Result`（非可派发角色） |
 | `role/daemon/role.go` | `daemon.Role.Run`：`signal.NotifyContext(SIGINT/SIGTERM)` → `NewFromTree`（切 dao/parser/source/process/cfgsync + **fail-fast 校验 logPattern，先于连 Mongo** + 启动 banner，含 `maskURI`）→ `EnsureIndexes` → `Run` |
 | `role/daemon/report.go` | `daemon.Service`（`New`/`NewFromTree`）：经 `source.NewTailer` 建源 → 强制 pipeline `process.New(cfg).Run(runCtx, tailer)` → MongoDB；内嵌 cfgsync Watcher（`startCfgsync`）；`reportStats` 每 60s 打 interval/cumulative/**runtime（goroutines/open_fds/tailed_files）** 三条日志 + **fd 看门狗**（`maxOpenFDs>0 && open_fds>阈` → `cancelRun` 优雅 drain+flush+退出，交编排器重启）；`logFinalStats` 收尾摘要 |
 | `role/daemon/procstats.go` | `openFDCount()`：Linux 经 `/proc/self/fd`（-1 修正 ReadDir 自身 fd）；非 Linux 返回 -1（看门狗 inert） |
@@ -299,9 +331,9 @@ config           -> cfgtree + 各模块（仅用其 RegisterDefaults 注册键�
 | `role/gateway/role.go` | `gateway.Role.Run`：从 Tree 取 dao/process/parser + `role.gateway` → `New` → `EnsureIndexes` → `Run(addr)` |
 | `role/gateway/server.go` | gateway `Server`：内嵌 `*api.Engine` + HTTP 面；`New`/`NewFromTree`/`Upload`/`EJSON`/`SQL`/`PublishConfig`/`EnsureIndexes`/`Close`/`Handler`/`Run`；路由 `/healthz` + `/upload`（按 `process.mode` 选策略）+ `/ejson`（Mongo Data API）+ `/sql`（SQL Data API）+ `/config`（cfgsync 发布，`{version}`）；`Run` 起服务前先 `StartCfgsync`，ctx 取消时 10s 优雅 `Shutdown`；`writeEJSON` 经 `ejsonMarshaler` 接口同服务 EJSON/SQL 响应 |
 | `role/gateway/config.go` | `gateway.Config`（仅 `role.gateway.addr`）+ `ApplyDefaults`/`Validate`/`RegisterDefaults` |
-| `role/cli/role.go` | `cli.Role.Run`：取 dao + `role.cli`；`function=upload` 走 stdin 上报（统计 JSON → stdout），`=file`（**v1.6.0**）切 `source.FromTree` 并 **fail-fast 校验 `source.file.paths`（`"cli: function=file requires source.file.paths"`，先于连 Mongo）** 后走 `RunFile`，`=ejson` 走 `RunEJSON`，`=sql` 走 `RunSQL` |
-| `role/cli/cli.go` | `cli.RunUpload(...)`：内嵌 `api.Engine` + `source.NewReader(in)` 一次性上报；`cli.RunFile(ctx, daoCfg, procCfg, parserCfg, srcCfg.File)`：`api.New` + `EnsureIndexes` + `eng.File`，统计 JSON → stdout（与 `function=upload` 同形，**不读 stdin**）；`cli.RunEJSON(...)`：stdin EJSON 请求 → `engine.EJSON` → out EJSON；`cli.RunSQL(...)`：stdin SQL → `engine.SQL` → out EJSON |
-| `role/cli/config.go` | `cli.Config`（`role.cli.function`=upload\|file\|ejson\|sql\|config\|configget，常量 `FunctionFile`）+ `ApplyDefaults`/`Validate`/`RegisterDefaults` |
+| `role/cli/role.go` | `cli.Role.Run`：取 dao + `role.cli`；`function=upload` 走 stdin 上报（统计 JSON → stdout），`=file`（**v1.6.0**）切 `source.FromTree` 并 **fail-fast 校验 `source.file.paths`（`"cli: function=file requires source.file.paths"`，先于连 Mongo）** 后走 `RunFile`，`=backfill`（**v1.7**）切 `backfill.FromTree` 并在连 Mongo **之前** `Validate` 后走 `RunBackfill`（不读 stdin），`=ejson` 走 `RunEJSON`，`=sql` 走 `RunSQL` |
+| `role/cli/cli.go` | `cli.RunUpload(...)`：内嵌 `api.Engine` + `source.NewReader(in)` 一次性上报；`cli.RunFile(ctx, daoCfg, procCfg, parserCfg, srcCfg.File)`：`api.New` + `EnsureIndexes` + `eng.File`，统计 JSON → stdout（与 `function=upload` 同形，**不读 stdin**）；`cli.RunBackfill(ctx, daoCfg, procCfg, parserCfg, bfCfg)`（**v1.7**）：`api.New` + `EnsureIndexes` + `eng.RunBackfill`，`api.Result` JSON → stdout（**不读 stdin**）；`cli.RunEJSON(...)`：stdin EJSON 请求 → `engine.EJSON` → out EJSON；`cli.RunSQL(...)`：stdin SQL → `engine.SQL` → out EJSON |
+| `role/cli/config.go` | `cli.Config`（`role.cli.function`=upload\|file\|backfill\|ejson\|sql\|config\|configget，常量 `FunctionFile`/`FunctionBackfill`）+ `ApplyDefaults`/`Validate`/`RegisterDefaults` |
 
 ## 4. Daemon Service（daemon 模式）
 
@@ -472,13 +504,18 @@ Elastic Cluster 不支持）；standalone mongod 无 change stream → 启动时
 | `role/api` | **dao** | `dao.New(ctx, *dao.Config) → *dao.Dao`；`(*Dao).Store`；`(*Dao).Mongo.Close()`；`(*Store).EnsureIndexes(ctx)` | 连接 MongoDB、建索引、收尾 |
 | `role/api` | **parser** | `(*parser.Config).Build() → *parser.Parser` | 装配解析器（含 filter） |
 | `role/api` | **process** | `process.New(cfg, *dao.Dao, *parser.Parser, *Counters) → Uploader`；`(Uploader).Run(ctx, Source)`；`process.Counters`/`Snapshot`；`(*process.Config).ModeValue()` | 选策略并驱动上传 |
-| `role/{gateway,cli}` | **role/api** | `api.New(ctx, *dao.Config, *process.Config, *parser.Config, *cfgsync.Config) → *Engine` / `api.NewFromTree(ctx, tree)`；`(*Engine).Upload`/`File`/`Run`/`EJSON`/`SQL`/`EnsureIndexes`/`Close`/`StartCfgsync`/`PublishConfig`；`api.Result`；`api.FileConfig`（=`source.FileConfig`，经 source 门面、最终 =`file.Config`） | 内嵌同一引擎（上报 + file 导入 + Data API + cfgsync） |
+| `role/{gateway,cli}` | **role/api** | `api.New(ctx, *dao.Config, *process.Config, *parser.Config, *cfgsync.Config) → *Engine` / `api.NewFromTree(ctx, tree)`；`(*Engine).Upload`/`File`/`RunBackfill`/`Run`/`EJSON`/`SQL`/`EnsureIndexes`/`Close`/`StartCfgsync`/`PublishConfig`；`api.Result`；`api.FileConfig`（=`source.FileConfig`，经 source 门面、最终 =`file.Config`）；`api.BackfillConfig`（=`backfill.Config`） | 内嵌同一引擎（上报 + file 导入 + backfill 回填 + Data API + cfgsync） |
 | `role/api` | **dao** | `(*Dao).EJSON(ctx, *EJSONRequest) → *EJSONResponse`；`dao.EJSONRequest`/`EJSONResponse` | Mongo Data API 中转（实现在 dao/ejson，经 dao 门面；dao/ejson 内部依赖 dao/mongo） |
 | `role/{gateway,cli}` | **dao** | `dao.DecodeEJSONRequest(body) → *EJSONRequest`；`(*EJSONResponse).MarshalEJSON()` | HTTP / stdin 的 EJSON 请求解析与响应编码 |
 | `role/api` | **dao** | `(*Dao).SQL(ctx, query) → *SQLResult`；`dao.SQLResult` | SQL Data API 中转（实现在 dao/sql，经 dao 门面；dao/sql 内部依赖 dao/mongo + vitess） |
 | `role/{gateway,cli}` | **dao** | `(*SQLResult).MarshalEJSON()` | HTTP / stdin 的 SQL 结果 EJSON 编码 |
 | `role/daemon` | **dao/parser/source/process** | `dao.New`；`(*parser.Config).Build`；`source.NewTailer(srcCfg.Tailer)`；`process.New(pipelineCfg, …).Run(ctx, tailerSrc)` | 编排长驻流水线 |
-| `client`（公共 SDK） | **role/api** | `api.New(o.ctx, &o.dao, &o.proc, &o.parser, &o.cfgsync)`（持 cfgsync 配置但**不起 Watcher**）；`(*Engine).Upload`/`File`/`EnsureIndexes`/`PublishConfig`/`AppendConfig`/`FetchConfig`/`EJSONBytes`/`SQLBytes`/`Close` | redis-go 风格门面，复用真实 config 结构体（`Client.File` 经引擎中转，client 不 import `internal/source`；查询面走 bytes-in/bytes-out，不触 dao 类型） |
+| `role/api` | **backfill** | `backfill.NewRunner(...)`；`(*Runner).Run(ctx) → Result`；`backfill.Config`（经 `api.BackfillConfig` 别名）；event 路注入 `func(lines) → UploadStats`（适配 `Engine.Upload`） | `RunBackfill` 借引擎已有 Mongo/dao 跑回填（event 路经回调复用上报管线，避免 api↔backfill import 环） |
+| `role/cli` | **backfill** | `backfill.FromTree(t) → *backfill.Config`；`(*Config).Validate()` | `function=backfill` 时裁剪 `backfill` 子树、连 Mongo **前** 校验后交 `RunBackfill` |
+| `backfill` | **dao** | `dao.UserSnapshotWriteModel(userID, doc, forceSkipExisting) → mongo.WriteModel`；`(*Store).BulkWriteOrdered`；`(*Store).UserCollection`；findOne/replaceOne（`_backfill_progress` checkpoint） | user 路写快照 + 进度 checkpoint（实现在 dao/store，经 dao 门面；均 DocumentDB 安全，无 pipeline update） |
+| `backfill` | **parser/filter** | `filter.CompileToSQL(include, exclude) → whereBody`；本地 `filter.New`（user 路内联过滤，除非 `skipLocalFilter`） | 选择 filter 下推 TA SQL + user 路本地过滤（这是领域**直接** import `parser/filter` 的少数例外，回填非上报数据路径，不经 `parser` 根包门面） |
+| `backfill` | **process**（间接，经回调） | event 路写入回调 = `Engine.Upload`（最终 `process.Uploader`） | event 行编码成 TA JSON 行后逐页复用上报管线（注入式，backfill 不直接 import `role/api`） |
+| `client`（公共 SDK） | **role/api** | `api.New(o.ctx, &o.dao, &o.proc, &o.parser, &o.cfgsync)`（持 cfgsync 配置但**不起 Watcher**）；`(*Engine).Upload`/`File`/`RunBackfill`/`EnsureIndexes`/`PublishConfig`/`AppendConfig`/`FetchConfig`/`EJSONBytes`/`SQLBytes`/`Close`；`api.BackfillConfig`（由 `WithBackfill*` 选项填充） | redis-go 风格门面，复用真实 config 结构体（`Client.File`/`Client.RunBackfill` 经引擎中转，client **不 import** `internal/source`/`internal/backfill`——backfill 走 `api.BackfillConfig` 别名，importboundary 测试强制；查询面走 bytes-in/bytes-out，不触 dao 类型） |
 | `cfgsync` | **dao** | `(*Dao).EJSON(ctx, *EJSONRequest)`（findOne 读 / updateOne `$set`+`$inc` upsert 写）；`(*Dao).Watch(ctx, coll, pipeline, opts) → *mongo.ChangeStream` | 读中心文档 + 订阅 change stream + 原子发布（实现在 dao/ejson + dao/mongo，经 dao 门面） |
 | `cfgsync` | **parser** | `(*Parser).SwapFilter(include, exclude)` | 编译后再原子热替换 live filter（实现在 parser/filter，经 parser 门面；由内嵌角色注入回调调用） |
 | `role/{daemon,gateway}` | **cfgsync** | `cfgsync.FromTree(t)`；`cfgsync.New(d, cfg, reg.Apply)`；`(*Watcher).Run(ctx)`；`cfgsync.NewRegistry`/`RegisterFilter` | 内嵌读侧 Watcher（goroutine，panic recover），热替换自身 live filter |
@@ -565,6 +602,41 @@ cli.Role.Run（role.cli.function=file）                       [role/cli/role.go
 库与 SDK 走同一引擎面：`(*api.Engine).File(ctx, cfg)` 直接调用；
 `client.Client.File(ctx, paths...)` 把调用期文件路径列表交给引擎中转（client 不 import `internal/source`）。
 源是**有限**的：channel 关闭即 `Run` 返回、统计落定，无需 `Stop()`/信号编排。
+
+#### 7.2.3 backfill TA OpenAPI 历史回填的函数调用链（v1.7）
+
+`function=backfill` **不走 `source.Source` 抽象**（回填有 submit/poll/paginate 的多端点编排与分页 checkpoint，
+不是单纯的 line channel）。它自带 `backfill.Runner`，event 路把每页行编码成 TA JSON 行后**逐页**复用上报管线
+（注入 `Engine.Upload` 回调，避免 api↔backfill import 环），user 路直写 user 快照：
+
+```text
+cli.Role.Run（role.cli.function=backfill）                          [role/cli/role.go]
+ ├─ backfill.FromTree(tree) → *backfill.Config                       [裁剪 backfill 子树]
+ │    （(*Config).Validate() 失败即报错——先于连 Mongo）
+ └─ cli.RunBackfill(ctx, daoCfg, procCfg, parserCfg, bfCfg)          [role/cli/cli.go]
+      ├─ api.New(...) → *Engine（连 MongoDB）
+      ├─ (*Engine).EnsureIndexes(ctx)
+      └─ (*Engine).RunBackfill(ctx, bfCfg) (Result, error)           [role/api/api.go]
+           ├─ bfCfg.Validate()
+           └─ backfill.NewRunner(bfCfg, eng.dao, uploadFn).Run(ctx)  [借引擎已有 Mongo/dao，不自开/关连接]
+                ├─ checkpoint 载入（_backfill_progress，FindOne by RunID）+ SQLSignature 漂移守卫
+                ├─ event 表：按 partDateRange 逐日 chunk → 每日
+                │    buildDaySQL（+ filter.CompileToSQL 下推选择 filter）
+                │    → client: submit-sql → poll sql-task-info → paginate sql-result-page（NDJSON）
+                │    → 每页：rowdecode.EncodeRowAsJSONLine(row) → uploadFn(lines)
+                │       （= Engine.Upload，复用 parse→filter(parser.filter.*)→identity→DocumentDB 安全写）
+                │    → 每页写回 checkpoint（DayProgress：status/taskId/pageId/pageCount/rows）
+                └─ user 表：单 UserChunkKey、全表 SELECT * FROM v_user_<pid>（无分区/事件时间）
+                     → 每页：行绕过 parser，应用 backfill 本地 filter（除非 skipLocalFilter）
+                       → dao.UserSnapshotWriteModel(#user_id, doc, forceSkipExisting) → Store.BulkWriteOrdered
+                     → 每页写回 checkpoint
+ stdout ← api.Result 统计 JSON（不读 stdin；中断后同 RunID 重跑从下一页续）
+```
+
+库与 SDK 同核：`(*api.Engine).RunBackfill(ctx, cfg)` 直接调用；
+`client.Client.RunBackfill(ctx)`（由 `WithBackfill*` 选项配置）经引擎中转——client 不 import `internal/backfill`
+（走 `api.BackfillConfig` 别名，importboundary 测试强制，见 §10.3）。**不**在 gateway/daemon 暴露
+（无同步 `POST /backfill`，见 §10.1）。
 
 ### 7.3 配置装配的函数链
 
@@ -747,3 +819,136 @@ v1.0 时代的文件导入是带状态的：`_tango_fileupload` 集合记录每�
 该集合与任何进度记录——file 是**纯有限 Source**：零持久状态、零新集合、零恢复协议，
 "断点续传"被"重跑 + 写模型幂等收敛"（§9.2）取代。这与 v1.4 移除 fileupload/filebatch 的方向一致：
 能力以最薄的 source + 既有四层接线回归，而不是把旧的有状态子系统搬回来。
+
+## 10. v1.7 backfill TA OpenAPI 历史回填（源自 v1.6.1）
+
+> v1.7 的增量（源自 v1.6.1）：从 **ThinkingData（TA）OpenAPI** 按日期范围（event 表）或全表（user 表）拉历史数据
+> 回填进既有上报/写入链路。新代码集中在 `internal/backfill`（自 v1.0 tag `8bc899b` 迁回、按 mongo driver v2
+> + DocumentDB 安全重建）+ `internal/parser/filter/sql.go`（`CompileToSQL`），其余是 dao/api/cli/client 四层接线。
+> 需求见 [`requirements.md`](requirements.md) §4（同步 `POST /backfill` 的「不做」决策在 §7 不在本轮范围）。
+
+### 10.1 需求与边界
+
+回填是**有界一次性任务**，入口面与 v1.6.0 file 同形——**只在 cli（`function=backfill`）+ api 库
+（`Engine.RunBackfill`）+ client SDK（`Client.RunBackfill`）三处暴露，不在 gateway / daemon 暴露**。按
+[`requirements.md`](requirements.md) §7，**不提供同步 `POST /backfill`**：gateway 是亚秒级请求-响应面，回填动辄
+分钟到小时级、按页流式落库，挂在 HTTP 同步面既无意义也违背"有界任务用一致快照、不订阅 cfgsync"的消费者边界
+（§5.4 表末行）。daemon 是常驻 tailer，与一次性回填无关。
+
+### 10.2 三端点流程（submit → poll → paginate）
+
+`backfill/client.go` 按 TA OpenAPI 三端点串行驱动，全程经 `httpclient.go`（`net/http` + `x/net/proxy` +
+`backoff/v4`）：
+
+1. **submit-sql**：提交一条 Presto SQL（见 §10.5），返回 `taskId`。
+2. **sql-task-info**：按 `pollInterval`（默认 3s）轮询任务状态至完成；超 `pollTimeout`（默认 30m）报错。
+3. **sql-result-page**：按 `pageId` 分页拉结果，每页是 **NDJSON**（`ndjson.go` 逐行解码成 row，边解边交回填驱动、
+   不全量驻留）；按 `pageCount` 翻页直至取完，单页失败按 `pageRetries`（默认 3）重试。
+
+**token 作为 query param** 拼进每个端点 URL。**代理**支持 http / https / socks5（`proxy` 键，`x/net/proxy`
+现为 DIRECT 依赖）。`paginate=false` 时提交不带 pageSize，TA 把整个结果集作为**单页**一次返回（`pageCount=1`，
+全量仍取回，只是不切成可逐页断点的页）。
+
+### 10.3 两路写入（按表分档）
+
+`backfill/executor.go` 按 `table` 分两条互不相同的写入路径：
+
+| 路径 | 表 | 写入方式 | filter |
+|---|---|---|---|
+| **event** | `v_event_<projectID>` | 每页行经 `rowdecode.EncodeRowAsJSONLine`（`#`/`_`/`$` 前缀列升顶层信封、其余进 `"properties"`、nil 丢弃）→ TA JSON 日志行 → 注入的 `Engine.Upload` 回调，**完整复用** parse → filter → identity → DocumentDB 安全写 | backfill 选择 filter（include/exclude）**仅下推 TA SQL**（§10.5），event 路不再本地重复过滤；此路另受 Engine 自身的上报 filter（`parser.filter.*`，一套独立配置）约束 |
+| **user** | `v_user_<projectID>` | 行**绕过 parser**，每行 → `dao.UserSnapshotWriteModel(#user_id, doc, forceSkipExisting)`（纯 `$set` 或 `$setOnInsert`，**无聚合管线**——DocumentDB 安全）→ 经 `Store.BulkWriteOrdered` 批写 | user 路**内联应用 backfill 本地 filter**（`filter.New`），除非 `skipLocalFilter=true` |
+
+event 路的回调注入（而非直接 import `role/api`）是为避免 `api ↔ backfill` 的 import 环：`Engine.RunBackfill`
+传入一个把 `lines` 喂给 `Engine.Upload` 的本地 `UploadStats` 闭包，backfill 只认回调签名、不认 `role/api`。
+client 侧 importboundary 测试同时强制 **client 不 import `internal/backfill`**（经 `api.BackfillConfig` 别名）。
+
+### 10.4 checkpoint 状态机（`_backfill_progress`）
+
+进度落在集合 `_backfill_progress`（`progressCollection` 可配），**每 `RunID` 一文档**（`_id=RunID`）：
+
+- **分块**：event 表按天（`partDateRange` 内逐日一个 chunk）；user 表单个 `UserChunkKey`。
+- **每 PAGE flush**：`DayProgress` 记 `status` / `taskId` / `pageId` / `pageCount` / `rows` / `error`，所以
+  中断的 run 从**下一页**续跑，不重拉已落库的页。
+- **续跑**：`FindOne` 载入 + `ReplaceOne` upsert（**均 DocumentDB 安全，绝不 pipeline update**）。同 `RunID` 重跑
+  自动从 checkpoint 续，最终收敛。
+- **SQLSignature 漂移守卫**：签名 = `table` / `projectID` / `filterWhere` / `eventTimeRange`——**故意不含
+  `partDateRange`**，所以日期范围可以**扩展后续跑**（把 start 往前 / end 往后挪，旧已完成的天跳过、新天接着拉）。
+  同 `RunID` 上签名变了（改了表 / projectID / filter / 事件时间窗）→ `ErrSignatureMismatch`，**拒绝续跑**
+  （防止把不同口径的数据混进同一 run）。
+
+### 10.5 SQL 下推（`buildDaySQL` + `filter.CompileToSQL`）
+
+`backfill/sqlbuilder.go`：
+
+```text
+event：SELECT * FROM [schema.]v_event_<pid>
+        WHERE "$part_date"='<day>'
+          [AND "#event_time">='<eventTimeRange.start>']
+          [AND "#event_time"<='<eventTimeRange.end>']
+          [AND <filterWhere>]
+          [LIMIT n]
+user ：SELECT * FROM v_user_<pid>            （无分区、无事件时间）
+```
+
+`schemaPrefix` 非空时前缀 schema。`filterWhere` 由 **`parser/filter/sql.go` 的 `CompileToSQL(include, exclude)`**
+生成：把 expr-lang include/exclude 编译成 Presto WHERE 体 `(inc1 OR inc2) AND NOT (exc1 OR exc2)`；`#field` →
+`"field"` 双引号列名；支持 `==` / `!=` / `<` / `<=` / `>` / `>=` / `&&`(`and`) / `||`(`or`) / `in` / `!`(`not`)
++ 字面量；**不支持的节点（函数调用等）报错**（不静默吞——避免下推一个语义不全的 WHERE 导致漏/多拉）。
+选择 filter 下推到 TA 侧，减少传输与本地解析量；Engine 上报 filter 仍在 event 写入路兜底。
+
+### 10.6 配置键概览（键 = 包路径，§2 约定 2；前缀 `backfill.`）
+
+| 键 | 必填 | 默认 | 说明 |
+|---|---|---|---|
+| `backfill.apiBaseURL` | ✓ | — | TA OpenAPI 根地址（须 `http(s)://`） |
+| `backfill.token` | ✓ | — | OpenAPI token（query param 注入） |
+| `backfill.proxy` | | — | 代理 URL（http/https/socks5） |
+| `backfill.projectID` | ✓ | — | TA 项目 ID（`>0`），拼 `v_event_<pid>`/`v_user_<pid>` |
+| `backfill.table` | | `event` | `event`（按日期）或 `user`（全表） |
+| `backfill.events` | | `[]` | 事件名过滤（event 表） |
+| `backfill.include` / `exclude` | | `[]` | expr-lang 选择 filter，下推 SQL（§10.5） |
+| `backfill.schemaPrefix` | | — | SQL schema 前缀 |
+| `backfill.partDateRange.{start,end}` | event 必填 | — | `YYYY-MM-DD`，event 表逐日分块边界 |
+| `backfill.eventTimeRange.{start,end}` | | — | `YYYY-MM-DD HH:MM:SS`，细化事件时间窗 |
+| `backfill.limit` | | `0` | 每日 LIMIT（`0`=不限） |
+| `backfill.pageSize` | | `10000` | 结果页大小（`min 1000`） |
+| `backfill.paginate` | | `true`（`*bool`） | 翻页；`false`=不分页，整个结果集作为单页一次取回（全量仍取，不切成可断点的页） |
+| `backfill.pageRetries` | | `3` | 单页重试次数 |
+| `backfill.pollInterval` | | `3s` | sql-task-info 轮询间隔 |
+| `backfill.pollTimeout` | | `30m` | 任务完成等待上限 |
+| `backfill.runID` | ✓ | — | 续跑键（checkpoint `_id`） |
+| `backfill.progressCollection` | | `_backfill_progress` | checkpoint 集合 |
+| `backfill.forceSkipExisting` | | `true`（`*bool`） | `true`→user 路 `$setOnInsert`，历史**永不覆盖**线上数据 |
+| `backfill.skipLocalFilter` | | `false` | user 路是否跳过本地 filter |
+
+`backfill.Config` 经 `FromTree`/`RegisterDefaults`/`ApplyDefaults`/`Validate`（同各模块约定），助手
+`ForceSkip`/`ShouldPaginate`/`EffectivePageSize`/`IncludeExprs`/`BackfillWhere` 收敛 `*bool` 解引用与 SQL where 拼装。
+
+示例配置：[`examples/config/cli/cli.backfill.{min,max}.{yaml,json}`](../../examples/config/cli/)——
+min = `role.mode=cli` + `role.cli.function=backfill` + `dao.mongo.uri` +
+`backfill.apiBaseURL`/`token`/`projectID`/`runID`/`partDateRange.{start,end}`；max 另带
+proxy/events/include/exclude/eventTimeRange/pageSize/limit/forceSkipExisting/skipLocalFilter 等。运行：
+`tango --config cli.backfill.max.yaml`（**无 stdin 管道**）。
+
+### 10.7 幂等 / 重跑与 DocumentDB 安全
+
+- **event 路**按 `#uuid` 去重（`forceSkipExisting` 时 `$setOnInsert`），重跑**零新增**；
+- **user 路**按 `#user_id` 快照写，重跑**收敛**到同一终态；
+- 同 `RunID` 重跑从 checkpoint 续、最终一致；`forceSkipExisting=true` 保证**历史数据永不覆盖线上数据**。
+- **DocumentDB 安全要点**：所有写入（user 快照、checkpoint upsert）都是**普通 `$set`/`$setOnInsert` + 文档替换，
+  绝无 aggregation-pipeline update**（DocumentDB 不支持，§5.2/§5.4 同一约束）；错误判定只用**数字 error code**
+  （不依赖 DocumentDB 缺失的 `codeName`，与 riskadmin 同一坑）。
+
+### 10.8 与 v1.0 backfill 的差异
+
+| 维度 | v1.0（`8bc899b`） | v1.7 |
+|---|---|---|
+| Mongo 驱动 | driver v1 | **driver v2**（写模型/选项 API 重写） |
+| 进度反馈 | `ProgressBar`（TTY 进度条） | **结构化日志**（无 TTY 依赖，适配容器/CI） |
+| event 写入 | 自带 `RunWorkers` 并发池 | **复用 `Engine.Upload`**（与上报同核，注入回调避 import 环） |
+| checkpoint 集合 | `_backfill_progress`（v1.4 曾移除） | **恢复** `_backfill_progress`（按 page flush + SQLSignature 守卫） |
+| user 写入 | 聚合管线更新 | **`UserSnapshotWriteModel` 纯 `$set`/`$setOnInsert`**（DocumentDB 安全） |
+| filter 下推 | 无 | **`filter.CompileToSQL` 下推 TA SQL** + Engine 上报 filter 兜底 |
+
+回填以独立领域 `internal/backfill` 回归、经 `Engine.RunBackfill` 内嵌，而非把旧的 worker/taskqueue 子系统搬回来
+（与 §9.5 file 同样的"最薄回归"取向）。

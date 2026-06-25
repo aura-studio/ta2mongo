@@ -14,6 +14,11 @@ const (
 	// everything (events and user_set-style ops converge; accumulating
 	// user_add/user_append re-apply).
 	FunctionFile = "file"
+	// FunctionBackfill pulls historical data from the ThinkingData OpenAPI per
+	// backfill.* (submit → poll → paginate), ingesting the event table through
+	// the upload pipeline and the user table as snapshot upserts, with per-page
+	// checkpoint resume in _backfill_progress.
+	FunctionBackfill = "backfill"
 	// FunctionEJSON reads a single Extended-JSON Mongo Data API request from stdin,
 	// executes it, and writes the Extended-JSON response to stdout (the console
 	// equivalent of the gateway POST /ejson endpoint).
@@ -42,9 +47,9 @@ const DefaultFunction = FunctionUpload
 type Config struct {
 	// Function selects what the cli role does (file key role.cli.function):
 	// upload (stdin log ingest), file (one-shot import of the explicit files in
-	// source.file.paths), ejson (stdin Mongo Data API request), sql (stdin SQL
-	// statement), config (stdin config publish), or configget (fetch the central
-	// config document).
+	// source.file.paths), backfill (TA OpenAPI history backfill per backfill.*),
+	// ejson (stdin Mongo Data API request), sql (stdin SQL statement), config
+	// (stdin config publish), or configget (fetch the central config document).
 	Function string `mapstructure:"function"`
 	// ConfigMode selects the publish mode for function=config (file key
 	// role.cli.configMode): set (default, replace the stored subtrees) or
@@ -62,10 +67,10 @@ func (c *Config) ApplyDefaults() {
 // Validate checks cli-specific config.
 func (c *Config) Validate() error {
 	switch c.Function {
-	case FunctionUpload, FunctionFile, FunctionEJSON, FunctionSQL, FunctionConfig, FunctionConfigGet:
+	case FunctionUpload, FunctionFile, FunctionBackfill, FunctionEJSON, FunctionSQL, FunctionConfig, FunctionConfigGet:
 	default:
-		return fmt.Errorf("function %q is invalid (want %q / %q / %q / %q / %q / %q)",
-			c.Function, FunctionUpload, FunctionFile, FunctionEJSON, FunctionSQL, FunctionConfig, FunctionConfigGet)
+		return fmt.Errorf("function %q is invalid (want %q / %q / %q / %q / %q / %q / %q)",
+			c.Function, FunctionUpload, FunctionFile, FunctionBackfill, FunctionEJSON, FunctionSQL, FunctionConfig, FunctionConfigGet)
 	}
 	switch c.ConfigMode {
 	case "", "set", "append":

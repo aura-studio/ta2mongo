@@ -34,11 +34,12 @@ type Option func(*options)
 type options struct {
 	ctx context.Context
 
-	dao     api.DaoConfig
-	parser  api.ParserConfig
-	proc    api.ProcessConfig
-	cfgsync api.CfgsyncConfig
-	file    api.FileConfig
+	dao      api.DaoConfig
+	parser   api.ParserConfig
+	proc     api.ProcessConfig
+	cfgsync  api.CfgsyncConfig
+	file     api.FileConfig
+	backfill api.BackfillConfig
 
 	// err records the first failure from a config-loading option
 	// (WithConfigFile / WithConfigBytes); New surfaces it instead of building a
@@ -56,6 +57,7 @@ func defaultOptions() *options {
 	o.proc.ApplyDefaults()
 	o.cfgsync.ApplyDefaults()
 	o.file.ApplyDefaults()
+	o.backfill.ApplyDefaults()
 	return o
 }
 
@@ -173,6 +175,117 @@ func WithDaoMongoServerSelectionTimeout(d time.Duration) Option {
 // files still import.
 func WithSourceFileMaxLineBytes(n int) Option {
 	return func(o *options) { o.file.MaxLineBytes = n }
+}
+
+// ----------------------------------------------------------------- backfill
+// These configure the RunBackfill face (backfill.*). apiBaseURL, token,
+// projectID and runID are required; the rest carry the engine's defaults.
+
+// WithBackfillAPIBaseURL sets backfill.apiBaseURL: the ThinkingData OpenAPI base
+// URL (required, must start http:// or https://).
+func WithBackfillAPIBaseURL(url string) Option {
+	return func(o *options) { o.backfill.APIBaseURL = url }
+}
+
+// WithBackfillToken sets backfill.token: the TA OpenAPI token (required).
+func WithBackfillToken(token string) Option {
+	return func(o *options) { o.backfill.Token = token }
+}
+
+// WithBackfillProxy sets backfill.proxy: an optional outbound proxy URL
+// (http/https/socks5) for reaching the TA OpenAPI.
+func WithBackfillProxy(proxy string) Option {
+	return func(o *options) { o.backfill.Proxy = proxy }
+}
+
+// WithBackfillProjectID sets backfill.projectID: the TA project id (required,
+// >0) selecting v_event_<id> / v_user_<id>.
+func WithBackfillProjectID(id int) Option {
+	return func(o *options) { o.backfill.ProjectID = id }
+}
+
+// WithBackfillRunID sets backfill.runID: the resume key (required). Re-running
+// with the same RunID resumes from the per-page checkpoint.
+func WithBackfillRunID(id string) Option {
+	return func(o *options) { o.backfill.RunID = id }
+}
+
+// WithBackfillTable sets backfill.table: "event" (default) or "user".
+func WithBackfillTable(table string) Option {
+	return func(o *options) { o.backfill.Table = table }
+}
+
+// WithBackfillPartDateRange sets backfill.partDateRange: the inclusive
+// [start,end] partition-date range (YYYY-MM-DD), required for the event table.
+func WithBackfillPartDateRange(start, end string) Option {
+	return func(o *options) {
+		o.backfill.PartDateRange.Start = start
+		o.backfill.PartDateRange.End = end
+	}
+}
+
+// WithBackfillEventTimeRange sets backfill.eventTimeRange: optional event-time
+// bounds (YYYY-MM-DD HH:MM:SS) narrowing the event-table selection.
+func WithBackfillEventTimeRange(start, end string) Option {
+	return func(o *options) {
+		o.backfill.EventTimeRange.Start = start
+		o.backfill.EventTimeRange.End = end
+	}
+}
+
+// WithBackfillEvents sets backfill.events: event names to keep (event table);
+// compiled into the SQL pushdown as #event_name IN (...). Repeated calls append.
+func WithBackfillEvents(events ...string) Option {
+	return func(o *options) { o.backfill.Events = append(o.backfill.Events, events...) }
+}
+
+// WithBackfillInclude sets backfill.include: expr-lang include rules pushed down
+// to the TA SQL. Repeated calls append.
+func WithBackfillInclude(exprs ...string) Option {
+	return func(o *options) { o.backfill.Include = append(o.backfill.Include, exprs...) }
+}
+
+// WithBackfillExclude sets backfill.exclude: expr-lang exclude rules pushed down
+// to the TA SQL. Repeated calls append.
+func WithBackfillExclude(exprs ...string) Option {
+	return func(o *options) { o.backfill.Exclude = append(o.backfill.Exclude, exprs...) }
+}
+
+// WithBackfillSchemaPrefix sets backfill.schemaPrefix: an optional schema
+// qualifier prepended to the table name in the generated SQL.
+func WithBackfillSchemaPrefix(prefix string) Option {
+	return func(o *options) { o.backfill.SchemaPrefix = prefix }
+}
+
+// WithBackfillPageSize sets backfill.pageSize: the server-side page size
+// (default 10000, minimum 1000).
+func WithBackfillPageSize(n int) Option {
+	return func(o *options) { o.backfill.PageSize = n }
+}
+
+// WithBackfillLimit sets backfill.limit: an absolute row cap per day (0 = no
+// cap), intended for smoke tests.
+func WithBackfillLimit(n int) Option {
+	return func(o *options) { o.backfill.Limit = n }
+}
+
+// WithBackfillProgressCollection sets backfill.progressCollection: the checkpoint
+// collection name (default _backfill_progress).
+func WithBackfillProgressCollection(name string) Option {
+	return func(o *options) { o.backfill.ProgressCollection = name }
+}
+
+// WithBackfillForceSkipExisting sets backfill.forceSkipExisting: when true
+// (default), historical writes use $setOnInsert so they never overwrite live
+// data.
+func WithBackfillForceSkipExisting(v bool) Option {
+	return func(o *options) { o.backfill.ForceSkipExisting = &v }
+}
+
+// WithBackfillSkipLocalFilter sets backfill.skipLocalFilter: skip the in-process
+// safety-net filter on the user path (the SQL pushdown still applies).
+func WithBackfillSkipLocalFilter(v bool) Option {
+	return func(o *options) { o.backfill.SkipLocalFilter = v }
 }
 
 // -------------------------------------------------------------------- dao.store

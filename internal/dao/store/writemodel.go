@@ -185,6 +185,33 @@ func UserWriteModel(typ string, userID int64, doc bson.M) mongo.WriteModel {
 	}
 }
 
+// UserSnapshotWriteModel builds an upsert keyed by #user_id for a single row of
+// the TA user-state virtual table (v_user_<projectID>), used by the backfill
+// domain. Unlike UserWriteModel — which interprets #type and applies
+// user_set / user_add / ... semantics — this treats each row as a one-shot
+// snapshot: every field in doc is $set on the matching #user_id document, or
+// written once via $setOnInsert when skipExisting is true. It is a plain
+// document-form update (no aggregation pipeline) so Amazon DocumentDB accepts
+// it. userID is left as-is (any) because the TA columnar result carries it
+// untyped; #user_id and _ts are injected when absent.
+func UserSnapshotWriteModel(userID any, doc bson.M, skipExisting bool) mongo.WriteModel {
+	if doc == nil {
+		doc = bson.M{}
+	}
+	doc["#user_id"] = userID
+	if _, ok := doc["_ts"]; !ok {
+		doc["_ts"] = time.Now().UnixNano()
+	}
+	op := "$set"
+	if skipExisting {
+		op = "$setOnInsert"
+	}
+	return mongo.NewUpdateOneModel().
+		SetFilter(bson.M{"#user_id": userID}).
+		SetUpdate(bson.M{op: doc}).
+		SetUpsert(true)
+}
+
 // toEachFields wraps values in $each for $push/$addToSet operations.
 func toEachFields(data bson.M) bson.M {
 	result := make(bson.M, len(data))

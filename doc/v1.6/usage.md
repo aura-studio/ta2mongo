@@ -17,7 +17,7 @@ tango --role.mode gateway       # 角色也可用 flag / 环境变量覆盖（�
   - 文件键：`dao.mongo.uri`
   - 环境变量：嵌套键 `.` 转 `_` 并大写加 `TANGO_` 前缀 → `TANGO_DAO_MONGO_URI`
   - 命令行：flag 名即键路径 → `--dao.mongo.uri`
-  - **配置键路径 = 包路径**（`internal/` 下）：`logging.*`、`dao.mongo.*`、`dao.store.*`、`parser.filter.*`、`source.tailer.*`、`source.file.*`、`process.*`、`role.gateway.*`。
+  - **配置键路径 = 包路径**（`internal/` 下）：`logging.*`、`dao.mongo.*`、`dao.store.*`、`parser.filter.*`、`source.tailer.*`、`source.file.*`、`backfill.*`、`process.*`、`role.gateway.*`。
 - **唯一的例外**：`--config <path>`（配置文件路径，`.yaml`/`.yml`/`.json`）只有命令行这一种途径；它不是配置键。留空时在二进制同级目录查找 `tango.{yaml,yml,json}`，缺失则静默回退到默认值 + 环境变量 + flag。
 - 不要混淆两个 `mode`：`role.mode` 选**运行角色**（daemon/gateway/cli）；`process.mode` 选**上传策略**（`single`/`batch`/`pipeline`，默认 `batch`，CLI/gateway/api 共用）。
 
@@ -25,7 +25,7 @@ tango --role.mode gateway       # 角色也可用 flag / 环境变量覆盖（�
 |---|---|
 | `daemon`（默认） | `logging` · `dao` · `parser` · `source` · `process` |
 | `gateway` | `logging` · `dao` · `parser` · `process` · `role.gateway` |
-| `cli` | `logging` · `dao` · `parser` · `process` · `role.cli`（`function=file` 时另加 `source.file`；`function=ejson`/`sql` 时仅 `logging` · `dao` · `role.cli`） |
+| `cli` | `logging` · `dao` · `parser` · `process` · `role.cli`（`function=file` 时另加 `source.file`；`function=backfill` 时另加 `backfill`；`function=ejson`/`sql` 时仅 `logging` · `dao` · `role.cli`） |
 
 ## Daemon Service
 
@@ -152,9 +152,10 @@ cat events.ndjson | tango --role.mode cli --process.mode batch --dao.mongo.uri m
 `role.mode=cli` 是 gateway `POST /upload` 的控制台等价入口（从 stdin 读取）。
 
 cli 角色由 `role.cli.function` 选功能：`upload`（默认，上面这种日志上报）、`file`（存量文件一次性导入，
-**不读 stdin**，见下节）、`ejson`（Mongo Data API，读一个 EJSON 请求、输出 EJSON 响应，等价 `POST /ejson`）或
-`sql`（SQL Data API，读一条 SQL、输出 EJSON 结果，等价 `POST /sql`）或 `config`（cfgsync 配置发布，
-读一个配置文档、输出 `{version}`，等价 `POST /config`；见 §cfgsync 一节）。
+**不读 stdin**，见下节）、`backfill`（TA OpenAPI 历史回填，**不读 stdin**，见下节）、`ejson`（Mongo Data API，
+读一个 EJSON 请求、输出 EJSON 响应，等价 `POST /ejson`）或 `sql`（SQL Data API，读一条 SQL、输出 EJSON 结果，
+等价 `POST /sql`）或 `config`（cfgsync 配置发布，读一个配置文档、输出 `{version}`，等价 `POST /config`；
+见 §cfgsync 一节）。
 
 ## CLI File（存量文件一次性导入）
 
@@ -185,6 +186,59 @@ tango --config cli.file.max.yaml
   其余匹配文件继续导入。
 - **边界**：`source.tailer`（daemon）= 常驻追**新增**；`cli upload` = stdin 喂行；`file` = **存量**文件、
   有限运行（读完即止）。gateway / daemon **不设** file 入口（v1.6 需求 §7），也没有新增集合。
+
+## CLI Backfill（TA OpenAPI 历史回填）
+
+```bash
+# 从 ThinkingData OpenAPI 拉取历史数据回填进上报链路，打印统计 JSON
+# 注意：不读 stdin，没有管道——数据来自 TA OpenAPI（按 backfill.* 配置拉取）
+tango --config cli.backfill.max.yaml
+```
+
+`role.cli.function=backfill`（v1.7 起，源自 v1.6.1）拉取 ThinkingData（TA）OpenAPI 的历史数据回填进库，**不读 stdin**，
+配置全部来自 `backfill.*`。两种表：
+
+- **event 表**（`v_event_<projectID>`）：按 `partDateRange` 逐天（可选叠加 `eventTimeRange`）拉取。每天一段
+  TA SQL（`submit-sql` → 轮询 `sql-task-info` → 分页拉 `sql-result-page` NDJSON），每页行编码成 TA JSON 日志行
+  喂给引擎的 `Upload`——**完整复用 parse → filter → identity → DocumentDB-safe 写**那条链路。引擎的上报 filter
+  （`parser.filter.*`）在这条路径上照常生效；**回填的选择性 filter（`include`/`exclude`）被下推到 TA SQL 的
+  `WHERE`**（`(inc1 OR inc2) AND NOT (exc1 OR exc2)`），减少回拉的数据量。
+- **user 表**（`v_user_<projectID>`，`table=user`）：整表同步（无分区 / event-time）。行**绕过 parser**，每行
+  直接走 `#user_id` 快照写（普通 `$set` / `$setOnInsert`，**无 aggregation pipeline，DocumentDB-safe**），
+  经 `BulkWriteOrdered` 批量落库。user 路径就地套用回填本地 filter（除非 `skipLocalFilter=true`）。
+
+```bash
+# 也可纯 flag / 环境变量驱动（键名即 backfill.*）
+tango --role.mode cli --role.cli.function backfill \
+  --dao.mongo.uri mongodb://localhost:27017/tango \
+  --backfill.apiBaseURL https://ta.example.com --backfill.token "$TA_TOKEN" \
+  --backfill.projectID 3 --backfill.runID 2026q1-events \
+  --backfill.partDateRange.start 2026-01-01 --backfill.partDateRange.end 2026-03-31
+```
+
+完整可运行样例见 [`examples/config/cli/`](../../examples/config/cli) 的 `cli.backfill.{min,max}.{yaml,json}`
+（min = `role.mode=cli` + `role.cli.function=backfill` + `dao.mongo.uri` + `backfill.apiBaseURL`/`token`/`projectID`/`runID`
++ `backfill.partDateRange.{start,end}` 这几个 required 键；max 含 `table`/`events`/`include`/`exclude`/`eventTimeRange`/
+`pageSize`/`limit`/`paginate`/`pollInterval`/`pollTimeout`/`forceSkipExisting`/`skipLocalFilter`/`progressCollection`/`proxy`
+逐字段说明）。配置在**连 Mongo 之前**就做 `FromTree` 校验（缺 `apiBaseURL`/`token`/`projectID`/`runID`，或 event 表缺
+`partDateRange` 即 fail-fast）；跑完把统计 JSON（`api.Result`：行数 / user / event / 死信等，同 `upload` 形）写 stdout。
+
+- **断点续传（同 `runID` 续跑）**：进度落在集合 `_backfill_progress`（可配 `backfill.progressCollection`），
+  一个 `runID` 一篇文档（`_id=runID`）。event 表按**天**分块、user 表单块（`UserChunkKey`），**每页 flush 一次**
+  进度（`DayProgress`：status / taskId / pageId / pageCount / rows / error）。中断后用**同一个 `runID`** 重跑，
+  会**从下一页**接着拉，不重头来。
+- **配置漂移拒绝续跑**：续跑前校验 `SQLSignature`（table / projectID / filterWhere / **eventTimeRange**——
+  **不含 `partDateRange`**，所以日期范围可以延长后续跑，已跑过的天不重拉）。同一 `runID` 上 signature 变了
+  →`ErrSignatureMismatch`，**拒绝续跑**（防止把不一致的两份配置混进同一个 run）。进度读写都是
+  `FindOne` + `ReplaceOne` upsert，**全程不用 pipeline update，DocumentDB-safe**。
+- **`forceSkipExisting`（默认 true）永不覆盖线上数据**：event 路径按 `#uuid` 去重（`$setOnInsert`）、user 路径
+  按 `#user_id` 快照去重；`true` 时历史数据只会**补空、绝不覆写**已有的线上字段（`$setOnInsert`）。因此同一
+  `runID` 重跑是**幂等收敛**的——从 checkpoint 续上、补齐缺页，最终一致。
+- **代理 / filter 下推**：`backfill.proxy` 支持 `http`/`https`/`socks5`（经 `golang.org/x/net/proxy`）；
+  token 作为 query 参数随请求带上。event 表的 `include`/`exclude` 下推进 TA SQL（少回拉），user 表的本地 filter
+  在写之前就地过滤。
+- **边界**：backfill 是 **cli-only** 的有限运行入口；gateway / daemon **不设** backfill 入口，也**没有同步
+  `POST /backfill`**（v1.6 需求 §7）。它借用引擎已开的 Mongo + dao 连接（**不自开自关**）。
 
 ## cfgsync 配置发布与运行时热替换（`/config` · cli `config` · `api.PublishConfig`）
 
@@ -270,6 +324,44 @@ c, _ := client.New(
 defer c.Close()
 
 res, _ := c.File(ctx, "/var/log/app/ta.2024-01-01.log", "/var/log/app/ta.2024-01-02.log") // 显式路径（无 glob/目录）；无 checkpoint：重跑全量重导（event/user_set 类收敛；含 user_add/user_append 的文件勿盲目重跑）
+```
+
+v1.7 起（源自 v1.6.1）同一引擎再多一个 TA OpenAPI 历史回填面：嵌入方直接调 `eng.RunBackfill(ctx, &api.BackfillConfig{...})`
+（`api.BackfillConfig` 是 `internal/backfill` 配置的类型别名；先 `Validate` 再跑，**借用引擎已开的 Mongo + dao
+连接、不自开自关**；event 路径经局部 adapter 复用 `eng.Upload`，回填带 checkpoint，同 `RunID` 续跑从
+`_backfill_progress` 逐页接力）：
+
+```go
+cfg := &api.BackfillConfig{
+    APIBaseURL: "https://ta.example.com",
+    Token:      "...",
+    ProjectID:  3,
+    RunID:      "2026q1-events",                 // 续跑键：同 RunID 从 checkpoint 接力
+    Include:    []string{`#event_name == "login"`}, // 下推进 TA SQL WHERE
+}
+cfg.PartDateRange.Start, cfg.PartDateRange.End = "2026-01-01", "2026-03-31"
+res, _ := eng.RunBackfill(ctx, cfg)
+// res 同 Upload 形（行数 / user / event / 死信）
+```
+
+仓库外的使用方走**公开 `client` 包**（同样**从不 import `internal/backfill`**——经 `api.BackfillConfig` 中转，
+有 importboundary 测试守着），配置经 `WithBackfill*` options 传，调 `c.RunBackfill(ctx)`：
+
+```go
+c, _ := client.New(
+    client.WithDaoMongoURI("mongodb://localhost:27017/tango"),
+    client.WithBackfillAPIBaseURL("https://ta.example.com"),
+    client.WithBackfillToken("..."),
+    client.WithBackfillProjectID(3),
+    client.WithBackfillRunID("2026q1-events"),
+    client.WithBackfillPartDateRange("2026-01-01", "2026-03-31"),
+    client.WithBackfillInclude(`#event_name == "login"`), // 还有 WithBackfillTable/EventTimeRange/
+                                                          // Events/Exclude/SchemaPrefix/Proxy/PageSize/
+                                                          // Limit/ProgressCollection/ForceSkipExisting/SkipLocalFilter
+)
+defer c.Close()
+
+res, _ := c.RunBackfill(ctx) // forceSkipExisting 默认 true：历史数据补空不覆写线上；同 RunID 重跑幂等收敛
 ```
 
 同一引擎也暴露 Mongo Data API（与上报共用连接，不需要 process/parser 配置；类型经 `dao` 根包中转）：

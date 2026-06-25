@@ -80,6 +80,13 @@ func EventWriteModel(typ, uuid string, doc map[string]any) mongo.WriteModel {
 	return store.EventWriteModel(typ, uuid, doc)
 }
 
+// UserSnapshotWriteModel builds the snapshot upsert for one TA user-state row,
+// keyed by #user_id, used by the backfill domain. See
+// store.UserSnapshotWriteModel.
+func UserSnapshotWriteModel(userID any, doc map[string]any, skipExisting bool) mongo.WriteModel {
+	return store.UserSnapshotWriteModel(userID, doc, skipExisting)
+}
+
 // DeadLetterModel builds an insert model for a line that failed to parse or
 // resolve identity. See store.DeadLetterModel.
 func DeadLetterModel(line string, parseErr error) mongo.WriteModel {

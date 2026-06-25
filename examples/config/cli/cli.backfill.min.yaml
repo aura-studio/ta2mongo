@@ -1,0 +1,20 @@
+# cli.backfill.min.yaml — `tango --config cli.backfill.min.yaml` 最精简配置：只含 required 字段。
+# 其余字段全部走默认值（详见同目录 cli.backfill.max.yaml 的逐字段说明）。
+# 运行角色由 role.mode 选择；cli 必须显式指定。role.cli.function 默认是 upload，跑 backfill 必须显式设为 backfill。
+# backfill = 从 ThinkingData OpenAPI 按日期范围拉历史数据（submit→poll→paginate），事件表经上报链路写入。
+# 不读 stdin。断点可续：同 runID 重跑从 _backfill_progress 的逐页 checkpoint 恢复。
+role:
+  mode: cli                                # [required] daemon / gateway / cli
+  cli:
+    function: backfill                     # [required] 切到 TA OpenAPI 历史回填（不写则默认 upload）
+dao:
+  mongo:
+    uri: mongodb://localhost:27017/tango   # [required] 写入目标库
+backfill:
+  apiBaseURL: https://ta.example.com       # [required] TA OpenAPI 基址（http:// 或 https://）
+  token: your-ta-openapi-token             # [required] TA OpenAPI token（作为查询参数）
+  projectID: 35                            # [required] TA 项目 id（>0），选 v_event_<id> / v_user_<id>
+  runID: backfill-2026-05                  # [required] 断点续传键（同 runID 续跑）
+  partDateRange:                           # [required]（event 表）分区日期闭区间 YYYY-MM-DD
+    start: "2026-05-01"
+    end: "2026-05-03"

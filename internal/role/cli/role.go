@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/aura-studio/tango/internal/backfill"
 	"github.com/aura-studio/tango/internal/cfgsync"
 	"github.com/aura-studio/tango/internal/cfgtree"
 	"github.com/aura-studio/tango/internal/dao"
@@ -85,6 +86,22 @@ func (Role) Run(ctx context.Context, cfg cfgtree.Tree) error {
 			return fmt.Errorf("cli: function=file requires source.file.paths")
 		}
 		res, err := RunFile(ctx, daoCfg, procCfg, parserCfg, srcCfg.File)
+		if err != nil {
+			return err
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(res)
+	}
+
+	if cliCfg.Function == FunctionBackfill {
+		// backfill.FromTree validates (apiBaseURL/token/projectID/runID/...)
+		// before connecting Mongo — fail fast on misconfiguration.
+		bfCfg, err := backfill.FromTree(cfg)
+		if err != nil {
+			return err
+		}
+		res, err := RunBackfill(ctx, daoCfg, procCfg, parserCfg, bfCfg)
 		if err != nil {
 			return err
 		}

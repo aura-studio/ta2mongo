@@ -9,6 +9,7 @@
 package api
 
 import (
+	"github.com/aura-studio/tango/internal/backfill"
 	"github.com/aura-studio/tango/internal/cfgsync"
 	"github.com/aura-studio/tango/internal/cfgtree"
 	"github.com/aura-studio/tango/internal/dao"
@@ -39,6 +40,12 @@ type CfgsyncConfig = cfgsync.Config
 // source types through the facade only), so an embedder hands a populated value
 // to Engine.File without importing the source domain.
 type FileConfig = source.FileConfig
+
+// BackfillConfig is the backfill.* module config (TA OpenAPI history backfill).
+// Alias for backfill.Config, so an embedder (notably the public client) hands a
+// populated value to Engine.RunBackfill while depending on the api package
+// alone.
+type BackfillConfig = backfill.Config
 
 // Tree is the resolved unified-config tree NewFromTree slices its module
 // branches from. Alias for cfgtree.Tree.
