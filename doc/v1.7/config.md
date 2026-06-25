@@ -58,14 +58,13 @@
 | `backfill.apiBaseURL` | `TANGO_BACKFILL_APIBASEURL` |
 | `backfill.token` | `TANGO_BACKFILL_TOKEN` |
 | `backfill.projectID` | `TANGO_BACKFILL_PROJECTID` |
-| `backfill.runID` | `TANGO_BACKFILL_RUNID` |
 | `backfill.events` | `TANGO_BACKFILL_EVENTS`（逗号分隔，见下） |
 | `role.gateway.addr` | `TANGO_ROLE_GATEWAY_ADDR` |
 | `role.cli.function` | `TANGO_ROLE_CLI_FUNCTION` |
 
 #### 切片（`[]string`）字段的 env 写法：逗号分隔
 
-`logPattern`（`source.tailer` 与 `source.file` 各有一个，以及 `parser.filter.include`/`exclude`，还有 `backfill.events`/`include`/`exclude`）是 `[]string`。配置文件里用 YAML 列表，env 里则用**逗号分隔的单个字符串**，由 `StringToSliceHookFunc(",")` 在解码阶段切回 `[]string`。
+`logPattern`（`source.tailer` 与 `source.file` 各有一个，以及 `parser.filter.include`/`exclude`，还有 `backfill.events`）是 `[]string`。配置文件里用 YAML 列表，env 里则用**逗号分隔的单个字符串**，由 `StringToSliceHookFunc(",")` 在解码阶段切回 `[]string`。
 
 实例——一个 env 变量给出多元素 `[]string`（同时追尾两类日志、跨多个挂载点）：
 
@@ -247,7 +246,7 @@ mongodb://user:pass@<cluster-endpoint>:27017/tango?tls=true&tlsCAFile=/path/glob
 
 ### backfill（cli `function=backfill`） → `internal/backfill`
 
-历史数据回灌 Source（v1.7 起，源自 v1.6.1；自 v1.0 tag `8bc899b` 移植、按 mongo driver v2 + DocumentDB-safe 重建）。从 ThinkingData（TA）OpenAPI 按**日期区间**（事件表）或**整表**（用户表）拉取历史：`submit-sql`（提交查询）→ 轮询 `sql-task-info`（等任务就绪）→ 翻页拉 `sql-result-page`（NDJSON）逐页处理。token 走 query 参数；代理支持 http/https/socks5。仅 cli `function=backfill` 一面消费，**不在 gateway/daemon 上暴露**（v1.6 需求 §7：无同步 `POST /backfill`）。字段见 `internal/backfill/config.go`（约定 `FromTree`/`RegisterDefaults`/`ApplyDefaults`/`Validate`）。
+历史数据回灌（v1.7 起，源自 v1.6.1）。从 ThinkingData（TA）OpenAPI 按**日期区间**（事件表）或**整表**（用户表）拉取历史：`submit-sql`（提交查询）→ 轮询 `sql-task-info`（等任务就绪）→ 翻页拉 `sql-result-page`（NDJSON）逐页处理。每行经 `rowdecode.EncodeRowAsJSONLine` 编成一条 TA JSON 日志行（缺 `#type` 时按表注入：事件表 → `track`，用户表 → `user_setOnce`/`user_set`），推入**内存中转源** `internal/source/mem`，由 Engine **强制 pipeline** 的上传管线并发抽干——回灌行因此走**与线上摄入完全相同的** parse → filter → identity → write 路径，无自定义写模型、无回灌内置 filter、无 checkpoint。`internal/backfill` 只 import `internal/logging` + `internal/cfgtree`（近叶子，不依赖 dao / parser / process / source）。token 走 query 参数；代理支持 http/https/socks5。仅 cli `function=backfill` 一面消费，**不在 gateway/daemon 上暴露**（v1.6 需求 §7：无同步 `POST /backfill`）。字段见 `internal/backfill/config.go`（约定 `FromTree`/`RegisterDefaults`/`ApplyDefaults`/`Validate`）。
 
 | 键 | required/optional | 默认 | 说明 |
 |----|----|----|----|
@@ -256,9 +255,7 @@ mongodb://user:pass@<cluster-endpoint>:27017/tango?tls=true&tlsCAFile=/path/glob
 | `backfill.proxy` | optional | `""` | 出站代理，支持 `http`/`https`/`socks5`（socks5 经 `golang.org/x/net/proxy`） |
 | `backfill.projectID` | **required** | `0`（占位） | TA 项目 ID，须 `>0`；拼出表名 `v_event_<projectID>` / `v_user_<projectID>` |
 | `backfill.table` | optional | `event` | 目标表：`event`（事件表，按日期分区）/ `user`（用户表，整表快照） |
-| `backfill.events` | optional | `[]` | `[]string`，限定要回灌的事件名（事件表）。env 逗号分隔 |
-| `backfill.include` | optional | `[]` | `[]string`，回灌**选取** filter（expr-lang，OR 语义），下推到 TA SQL；见下 |
-| `backfill.exclude` | optional | `[]` | `[]string`，回灌排除 filter（expr-lang），下推到 TA SQL（在 include 之后） |
+| `backfill.events` | optional | `[]` | `[]string`，限定要回灌的事件名（事件表），编进 SQL 的 `"#event_name" IN (...)`。env 逗号分隔。超出事件名的选取交给 Engine 上报 filter（`parser.filter.*`） |
 | `backfill.schemaPrefix` | optional | `""` | TA SQL 表名 schema 前缀（`[schema.]v_event_<pid>`），留空则不加 |
 | `backfill.partDateRange.start` | **required（event 表）** | `""` | 分区日期起（含），`YYYY-MM-DD`；事件表必填、用户表忽略 |
 | `backfill.partDateRange.end` | **required（event 表）** | `""` | 分区日期止（含），`YYYY-MM-DD` |
@@ -266,39 +263,34 @@ mongodb://user:pass@<cluster-endpoint>:27017/tango?tls=true&tlsCAFile=/path/glob
 | `backfill.eventTimeRange.end` | optional | `""` | 事件时间窗止（含），`YYYY-MM-DD HH:MM:SS` |
 | `backfill.limit` | optional | `0`（不限） | SQL 的 `LIMIT n`（event / user **两表均施加**），`0` 表示不加 |
 | `backfill.pageSize` | optional | `10000` | 单页拉取条数，最小 `1000`（低于则按下限处理） |
-| `backfill.paginate` | optional（tri-state `*bool`） | `true` | 是否服务端分页；注册默认 `true`，置 `false` 时提交不带 pageSize、整个结果集作为单页一次取回（全量仍取，只是不切成可逐页断点的页） |
+| `backfill.paginate` | optional（tri-state `*bool`） | `true` | 是否服务端分页；注册默认 `true`，置 `false` 时提交不带 pageSize、整个结果集作为单页一次取回（全量仍取，只是不切成多页） |
 | `backfill.pageRetries` | optional | `3` | 单页拉取失败重试次数（backoff/v4） |
 | `backfill.pollInterval` | optional | `3s` | 轮询 `sql-task-info` 的节奏 |
 | `backfill.pollTimeout` | optional | `30m` | 单个任务从提交到就绪的轮询总超时 |
-| `backfill.runID` | **required** | `""`（占位） | 续跑键，`_backfill_progress` 中每个 RunID 一份 checkpoint（`_id=RunID`） |
-| `backfill.progressCollection` | optional | `_backfill_progress` | checkpoint 集合名 |
-| `backfill.forceSkipExisting` | optional（tri-state `*bool`） | `true` | **仅作用于 user 路**：`true` → `$setOnInsert`（历史数据**永不覆盖**线上）；`false` → `$set`。注册默认 `true`。（event 路恒按 `#uuid` `$setOnInsert`，与本项无关） |
-| `backfill.skipLocalFilter` | optional | `false` | 用户表路径是否跳过本地 filter（事件表 filter 走下推、不受此项影响） |
+| `backfill.forceSkipExisting` | optional（tri-state `*bool`） | `true` | **仅决定用户表行注入的 `#type`**：`true`（默认）→ `user_setOnce`（历史数据**永不覆盖**线上已有字段）；`false` → `user_set`（覆盖）。注册默认 `true`。**对事件表无影响**——事件行恒注入 `track`、按 `#uuid` `$setOnInsert` 去重 |
 
 #### submit → poll → paginate 流程
 
-每个待回灌单元（事件表的每天，或用户表的整表单块）走同一三步：`submit-sql` 提交一条 TA SQL（`buildDaySQL` 生成，见下）拿到 taskId → 按 `pollInterval` 轮询 `sql-task-info` 直到就绪或 `pollTimeout` 超时 → 翻页拉 `sql-result-page`（NDJSON），每页失败按 `pageRetries` 退避重试；`paginate=false` 时只取首页。
+每个待回灌单元（事件表的每天，或用户表的整表单块 `UserChunkKey`）走同一三步：`submit-sql` 提交一条 TA SQL（`BuildSQL` 生成，见下）拿到 taskId → 按 `pollInterval` 轮询 `sql-task-info` 直到就绪或 `pollTimeout` 超时 → 翻页拉 `sql-result-page`（NDJSON），每页失败按 `pageRetries` 退避重试；`paginate=false` 时提交不带 pageSize、整个结果集作为单页一次取回。每行就地编成 TA JSON 日志行后 `Push` 进内存中转源（`source/mem`），由强制 pipeline 的上传管线抽干——producer（fetcher）与 consumer（管线写）并发；管线失败时派生 ctx 被取消，解开 producer 阻塞的 `Push`。**无 checkpoint、无续跑**：重跑直接重新拉取，幂等由写模型保证（事件按 `#uuid` `$setOnInsert`、用户按 `#user_id` `user_setOnce`）。
 
-#### SQL 生成与 filter 下推
+#### SQL 生成（无 filter 下推）
 
-事件表 `buildDaySQL`：`SELECT * FROM [schema.]v_event_<pid> WHERE "$part_date"='<day>' [AND "#event_time">='...'][AND "#event_time"<='...'][AND <filterWhere>][LIMIT n]`；用户表 = `SELECT * FROM v_user_<pid> [WHERE <filterWhere>][LIMIT n]`（无分区、无 event-time）。`include`/`exclude` 经 `filter.CompileToSQL`（`internal/parser/filter/sql.go`）编成 Presto WHERE 体：`(inc1 OR inc2) AND NOT (exc1 OR exc2)`，`#field` → `"field"` 双引号列名；支持 `==,!=,<,<=,>,>=,&&/and,||/or,in,!/not` 及字面量，函数调用等不支持的节点会报错。选取 filter（`BackfillWhere` helper）与 `LIMIT` **对 event / user 两表都下推**（只有 `$part_date` 分区与 `#event_time` 窗口是 event 专属）；Engine 自身的上报 filter（`parser.filter.*`）另外作用在 event 写入路径上。
+事件表 `BuildSQL`：`SELECT * FROM [schema.]v_event_<pid> WHERE "$part_date"='<day>' [AND "#event_time">='...'][AND "#event_time"<='...'][AND "#event_name" IN ('a','b')] [LIMIT n]`；用户表 = `SELECT * FROM [schema.]v_user_<pid> [LIMIT n]`（无分区、无 event-time、无 event-name）。**没有任何 include/exclude filter 下推**——SQL 端的选取仅限事件名（`backfill.events` → `"#event_name" IN`）；超出事件名的过滤是 Engine 上报 filter（`parser.filter.*`），在管线里统一作用于事件与用户两路。因此 `internal/backfill` 无需依赖 `parser/filter`。
 
-#### 事件表 vs 用户表写入路径
+#### 事件表 vs 用户表（同一条管线）
 
-- **事件表**（`v_event_<pid>`）：每页行经 `rowdecode.EncodeRowAsJSONLine` 编成 TA JSON 日志行（`#`/`_`/`$` 前缀列 → 顶层，其余 → `properties`，nil 丢弃），喂给 `Engine.Upload`——**完整复用** parse → filter → identity → DocumentDB-safe 写。
-- **用户表**（`v_user_<pid>`）：行**绕过 parser**，每行 → `dao.UserSnapshotWriteModel(#user_id, doc, forceSkipExisting)`（纯 `$set` 或 `$setOnInsert`，**无聚合管道**，DocumentDB-safe），经 `Store.BulkWriteOrdered` 批量写。用户路径就地套用回灌本地 filter，除非 `skipLocalFilter`。
+事件表与用户表的行**走同一条普通上传管线**，无自定义写模型、无两路分叉：
 
-#### checkpoint / 续跑 / SQLSignature 守卫
-
-checkpoint 落在集合 `_backfill_progress`（可配），每个 RunID 一份文档（`_id=RunID`）：事件表按天分块、用户表为单块（`UserChunkKey`）。**逐页 flush**（`DayProgress`：status/taskId/pageId/pageCount/rows/error），中断的运行从下一页续起。`SQLSignature`（table/projectID/filterWhere/eventTimeRange——**不含** partDateRange，故可延展日期区间后续跑）守护配置漂移：同一 RunID 上 signature 变了 → `ErrSignatureMismatch`（拒绝续跑）。加载用 `FindOne`、写回用 `ReplaceOne` upsert，二者均 DocumentDB-safe（**绝不**用管道式 update）。
+- **事件表**（`v_event_<pid>`）：每行编成 TA JSON 日志行后（`#`/`_`/`$` 前缀列 → 顶层，其余 → `properties`，nil 丢弃），缺 `#type` 注入 `track`，经 parse → filter → identity → DocumentDB-safe 写（按 `#uuid` `$setOnInsert` 去重）。
+- **用户表**（`v_user_<pid>`）：行同样进管线（**不再绕过 parser**），缺 `#type` 注入 `user_setOnce`（默认，永不覆盖）或 `user_set`（`forceSkipExisting=false` 时）；身份从 `#account_id`/`#distinct_id` 解析，用户文档按 tango **解析后的 `#user_id`** 落库（与事件一致，**而非源表的 `#user_id`**）。这要求 `v_user` 携带身份列。
 
 #### forceSkipExisting 与幂等
 
-`forceSkipExisting` **仅作用于 user 路**：`true`（默认）走 `$setOnInsert`——历史数据**永不覆盖**线上已有用户记录，`false` 走 `$set`（覆盖）。**event 路**与本项无关——它走上报管线的 `track`、**恒 `$setOnInsert`**，按 `#uuid` 去重、重导零新增。重跑同一 RunID 从 checkpoint 续起并收敛（event 按 `#uuid`、user 按 `#user_id`）。整条写路径不含任何聚合管道式 update，对 DocumentDB 安全。
+`forceSkipExisting` **只决定用户表行注入的 `#type`**：`true`（默认）→ `user_setOnce`（`$setOnInsert` 语义，历史数据**永不覆盖**线上已有字段）；`false` → `user_set`（`$set` 覆盖）。**事件表与本项无关**——事件行恒为 `track`、按 `#uuid` `$setOnInsert` 去重、重导零新增。整条路径就是线上摄入的写模型，重跑收敛（事件按 `#uuid`、用户按解析后的 `#user_id`），无需 checkpoint。
 
 #### tri-state `*bool` 默认值
 
-`paginate` 与 `forceSkipExisting` 是三态指针布尔（`*bool`），`RegisterDefaults` 注册的默认即 `true`：不在配置里出现时取 `true`，显式写 `false` 才关闭。配套 helper：`ForceSkip`/`ShouldPaginate`/`EffectivePageSize`/`IncludeExprs`/`BackfillWhere`。
+`paginate` 与 `forceSkipExisting` 是三态指针布尔（`*bool`），`RegisterDefaults` 注册的默认即 `true`：不在配置里出现时取 `true`，显式写 `false` 才关闭。配套 helper：`ForceSkip`/`ShouldPaginate`/`EffectivePageSize`。
 
 ### process（daemon / cli） → `internal/process{,/pipeline}`
 
@@ -421,8 +413,6 @@ gateway 同时暴露三个独立路径（与 `/upload` 互不影响，无额外�
 | `backfill.projectID` | **required `>0`**（无默认） | `internal/backfill`（`Validate`） |
 | `backfill.table` | `event` | `internal/backfill` |
 | `backfill.events` | `[]` | `internal/backfill` |
-| `backfill.include` | `[]` | `internal/backfill` |
-| `backfill.exclude` | `[]` | `internal/backfill` |
 | `backfill.schemaPrefix` | `""` | `internal/backfill` |
 | `backfill.partDateRange.start` | **required:event 表**（无默认） | `internal/backfill`（`Validate`） |
 | `backfill.partDateRange.end` | **required:event 表**（无默认） | `internal/backfill`（`Validate`） |
@@ -434,10 +424,7 @@ gateway 同时暴露三个独立路径（与 `/upload` 互不影响，无额外�
 | `backfill.pageRetries` | `3` | `internal/backfill` |
 | `backfill.pollInterval` | `3s` | `internal/backfill` |
 | `backfill.pollTimeout` | `30m` | `internal/backfill` |
-| `backfill.runID` | **required**（无默认） | `internal/backfill`（`Validate`） |
-| `backfill.progressCollection` | `_backfill_progress` | `internal/backfill` |
 | `backfill.forceSkipExisting` | `true`（tri-state `*bool`） | `internal/backfill`（`RegisterDefaults`） |
-| `backfill.skipLocalFilter` | `false` | `internal/backfill` |
 | `process.mode` | `batch`（daemon 忽略，固定 pipeline） | `internal/process` |
 | `process.batchSize` | `1000` | `internal/process` |
 | `process.pipeline.batchSize` | `1000` | `internal/process/pipeline` |

@@ -7,8 +7,8 @@ import (
 
 // EncodeRowAsJSONLine zips a header row with one data row and renders a JSON
 // object shaped identically to the file-tail TA log lines the parser already
-// expects, so the output string can be fed straight into the engine's Upload
-// face (which consumes a slice of log-line strings).
+// expects, so the output string can be fed straight through the normal upload
+// pipeline (parse → filter → identity → write) — no custom write model needed.
 //
 //   - Null values (Go nil) are dropped entirely rather than serialized as
 //     null, so the parser never sees literal nulls in identity fields.
@@ -16,7 +16,11 @@ import (
 //     promoted to the top level.
 //   - All other columns are grouped under "properties" (the shape
 //     talog.Parser flattens), omitted entirely when empty.
-func EncodeRowAsJSONLine(headers []string, row []interface{}) (string, error) {
+//   - When the row carries no "#type" (the user-state table has none; an event
+//     row normally does), defaultType is injected so the parser routes the line
+//     correctly: "track" for events, "user_setOnce"/"user_set" for user rows. A
+//     defaultType of "" leaves #type absent.
+func EncodeRowAsJSONLine(headers []string, row []interface{}, defaultType string) (string, error) {
 	if len(headers) != len(row) {
 		return "", fmt.Errorf("backfill: row width %d does not match headers %d", len(row), len(headers))
 	}
@@ -37,6 +41,11 @@ func EncodeRowAsJSONLine(headers []string, row []interface{}) (string, error) {
 	}
 	if len(props) > 0 {
 		obj["properties"] = props
+	}
+	if defaultType != "" {
+		if t, ok := obj["#type"].(string); !ok || t == "" {
+			obj["#type"] = defaultType
+		}
 	}
 
 	buf, err := json.Marshal(obj)

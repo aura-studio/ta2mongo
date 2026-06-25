@@ -62,13 +62,14 @@ type Client interface {
 	// non-nil error indicates a bulk-write failure or an unknown mode.
 	Upload(ctx context.Context, lines ...string) (Result, error)
 	// RunBackfill pulls historical data from the ThinkingData OpenAPI and
-	// ingests it: the event table streams through the configured upload
-	// strategy, the user table writes snapshot upserts, and progress is
-	// checkpointed per page in _backfill_progress so an interrupted run
-	// resumes (same backfill RunID). Configure it via the WithBackfill*
-	// options (apiBaseURL/token/projectID/runID are required; an invalid
-	// config errors before any network or database work). Returns the run's
-	// aggregate ingestion statistics.
+	// ingests it through the normal upload pipeline: fetched rows are encoded as
+	// TA log lines (events as track, user rows as user_setOnce/user_set) and
+	// streamed via an in-memory relay through the pipeline (parse → filter →
+	// identity → write). There is no checkpoint — a re-run re-fetches and the
+	// write models dedup by #uuid / #user_id. Configure it via the WithBackfill*
+	// options (apiBaseURL/token/projectID are required, plus partDateRange for
+	// the event table; an invalid config errors before any network or database
+	// work). Returns the run's aggregate ingestion statistics.
 	RunBackfill(ctx context.Context) (Result, error)
 	// File bulk imports the explicitly-listed on-disk TA log files once — every
 	// file is read start to EOF through the configured strategy, then the run

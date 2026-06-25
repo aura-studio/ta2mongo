@@ -95,7 +95,7 @@ func (Role) Run(ctx context.Context, cfg cfgtree.Tree) error {
 	}
 
 	if cliCfg.Function == FunctionBackfill {
-		// backfill.FromTree validates (apiBaseURL/token/projectID/runID/...)
+		// backfill.FromTree validates (apiBaseURL/token/projectID/partDateRange/...)
 		// before connecting Mongo — fail fast on misconfiguration.
 		bfCfg, err := backfill.FromTree(cfg)
 		if err != nil {

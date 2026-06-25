@@ -1,22 +1,22 @@
-// Package backfill pulls historical data from ThinkingData's OpenAPI and routes
-// it through tango's regular ingestion path. It is the v1.6.1 reincarnation of
-// the v1.0 backfill service, rebuilt for mongo driver v2 and DocumentDB-safe
-// writes: the event table streams page-by-page into the engine's Upload face
-// (parse → filter → identity → document-form write), the user table writes
-// snapshot upserts via dao.UserSnapshotWriteModel, and progress is checkpointed
-// per page in the _backfill_progress collection so an interrupted run resumes.
+// Package backfill pulls historical data from ThinkingData's OpenAPI and feeds
+// it through tango's normal upload pipeline. It is dao-free, parser-free and
+// engine-free: it only fetches rows and encodes them as TA JSON log lines,
+// which an injected sink carries to an in-memory relay source (source/mem) that
+// the pipeline drains — so backfilled rows take the exact same parse → filter →
+// identity → write path as live ingestion, needing no custom write model,
+// selection filter, or checkpoint.
 //
-// The package centres on three components:
+// The package centres on two components:
 //
 //   - Client: a thin HTTP client for the three async SQL endpoints
 //     (/open/submit-sql, /open/sql-task-info, /open/sql-result-page) plus
 //     /open/cancel-sql-task. It deals with TA's envelope shape
 //     ({"return_code", "return_message", "data": ...}) and the
 //     token-as-query-param auth scheme.
-//   - Checkpoint: a Mongo-backed progress store keyed by RunID that remembers
-//     which days finished and where pagination is inside the in-flight day.
-//   - Runner: a per-day loop that submits → polls → paginates, feeding each
-//     page into the configured write path.
+//   - Fetcher: a per-day loop that submits → polls → paginates, encoding each
+//     row (events as track, user rows as user_setOnce/user_set) and emitting it
+//     through the caller's sink. There is no checkpoint — a re-run re-fetches
+//     and the write models dedup by #uuid / #user_id.
 package backfill
 
 import (

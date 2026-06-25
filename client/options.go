@@ -178,8 +178,11 @@ func WithSourceFileMaxLineBytes(n int) Option {
 }
 
 // ----------------------------------------------------------------- backfill
-// These configure the RunBackfill face (backfill.*). apiBaseURL, token,
-// projectID and runID are required; the rest carry the engine's defaults.
+// These configure the RunBackfill face (backfill.*): how to fetch historical
+// rows from the TA OpenAPI. apiBaseURL, token and projectID are required (plus
+// partDateRange for the event table); fetched rows flow through the engine's
+// normal upload pipeline, so selection beyond event-name is the engine's own
+// reporting filter (WithParserFilter*), and there is no checkpoint.
 
 // WithBackfillAPIBaseURL sets backfill.apiBaseURL: the ThinkingData OpenAPI base
 // URL (required, must start http:// or https://).
@@ -202,12 +205,6 @@ func WithBackfillProxy(proxy string) Option {
 // >0) selecting v_event_<id> / v_user_<id>.
 func WithBackfillProjectID(id int) Option {
 	return func(o *options) { o.backfill.ProjectID = id }
-}
-
-// WithBackfillRunID sets backfill.runID: the resume key (required). Re-running
-// with the same RunID resumes from the per-page checkpoint.
-func WithBackfillRunID(id string) Option {
-	return func(o *options) { o.backfill.RunID = id }
 }
 
 // WithBackfillTable sets backfill.table: "event" (default) or "user".
@@ -233,22 +230,10 @@ func WithBackfillEventTimeRange(start, end string) Option {
 	}
 }
 
-// WithBackfillEvents sets backfill.events: event names to keep (event table);
-// compiled into the SQL pushdown as #event_name IN (...). Repeated calls append.
+// WithBackfillEvents sets backfill.events: event names to keep (event table),
+// rendered into the SQL as #event_name IN (...). Repeated calls append.
 func WithBackfillEvents(events ...string) Option {
 	return func(o *options) { o.backfill.Events = append(o.backfill.Events, events...) }
-}
-
-// WithBackfillInclude sets backfill.include: expr-lang include rules pushed down
-// to the TA SQL. Repeated calls append.
-func WithBackfillInclude(exprs ...string) Option {
-	return func(o *options) { o.backfill.Include = append(o.backfill.Include, exprs...) }
-}
-
-// WithBackfillExclude sets backfill.exclude: expr-lang exclude rules pushed down
-// to the TA SQL. Repeated calls append.
-func WithBackfillExclude(exprs ...string) Option {
-	return func(o *options) { o.backfill.Exclude = append(o.backfill.Exclude, exprs...) }
 }
 
 // WithBackfillSchemaPrefix sets backfill.schemaPrefix: an optional schema
@@ -269,23 +254,12 @@ func WithBackfillLimit(n int) Option {
 	return func(o *options) { o.backfill.Limit = n }
 }
 
-// WithBackfillProgressCollection sets backfill.progressCollection: the checkpoint
-// collection name (default _backfill_progress).
-func WithBackfillProgressCollection(name string) Option {
-	return func(o *options) { o.backfill.ProgressCollection = name }
-}
-
 // WithBackfillForceSkipExisting sets backfill.forceSkipExisting: when true
-// (default), historical writes use $setOnInsert so they never overwrite live
-// data.
+// (default) user-table rows are written as user_setOnce ($setOnInsert, never
+// overwriting live state); false writes them as user_set ($set). It does not
+// affect the event table (always #uuid $setOnInsert via track).
 func WithBackfillForceSkipExisting(v bool) Option {
 	return func(o *options) { o.backfill.ForceSkipExisting = &v }
-}
-
-// WithBackfillSkipLocalFilter sets backfill.skipLocalFilter: skip the in-process
-// safety-net filter on the user path (the SQL pushdown still applies).
-func WithBackfillSkipLocalFilter(v bool) Option {
-	return func(o *options) { o.backfill.SkipLocalFilter = v }
 }
 
 // -------------------------------------------------------------------- dao.store

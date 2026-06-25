@@ -231,13 +231,15 @@ func (c *Engine) File(ctx context.Context, cfg *FileConfig) (Result, error) {
 }
 
 // RunBackfill pulls historical data from the ThinkingData OpenAPI per cfg
-// (backfill.*) and ingests it: the event table streams each result page through
-// this engine's Upload pipeline (parse → filter → identity → document-form
-// write), while the user table writes snapshot upserts via the dao. Progress is
-// checkpointed per page in the _backfill_progress collection so an interrupted
-// run resumes (same RunID). It borrows this engine's existing Mongo connection
-// and dao; it does not open or close its own. The returned Result aggregates
-// the run's ingestion counters.
+// (backfill.*) and ingests it through this engine's normal upload pipeline. The
+// fetcher streams each result page's rows encoded as TA JSON log lines into an
+// in-memory relay source (source/mem); a forced-pipeline uploader drains the
+// relay concurrently, so backfilled rows take the exact same parse → filter →
+// identity → write path as live ingestion (events as #uuid track upserts, user
+// rows as user_setOnce/user_set). It borrows this engine's existing Mongo
+// connection; it adds no custom write model, selection filter or checkpoint —
+// re-runs re-fetch and the write models dedup. The returned Result aggregates
+// the pipeline's ingestion counters.
 func (c *Engine) RunBackfill(ctx context.Context, cfg *BackfillConfig) (Result, error) {
 	if cfg == nil {
 		return Result{}, fmt.Errorf("api: backfill config is required")
@@ -247,29 +249,68 @@ func (c *Engine) RunBackfill(ctx context.Context, cfg *BackfillConfig) (Result, 
 		return Result{}, fmt.Errorf("api: %w", err)
 	}
 
-	// The event path reuses Upload; adapt its Result to the cross-layer shape
-	// so internal/backfill never imports this package (which would be a cycle).
-	uploader := func(ctx context.Context, lines []string) (backfill.UploadStats, error) {
-		res, err := c.Upload(ctx, lines)
-		return backfill.UploadStats{
-			Lines:       res.Lines,
-			UserWrites:  res.UserWrites,
-			EventWrites: res.EventWrites,
-			DeadLetters: res.DeadLetters,
-			Filtered:    res.Filtered,
-		}, err
+	fetcher, err := backfill.New(cfg)
+	if err != nil {
+		return Result{}, fmt.Errorf("api: %w", err)
 	}
 
-	runner, err := backfill.NewRunner(ctx, cfg, c.dao, uploader)
+	// runCtx lets the consumer cancel the producer: if the pipeline fails, it
+	// cancels so the fetcher's blocked Push returns instead of deadlocking on a
+	// full, no-longer-drained relay buffer.
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	relay := source.NewMem(0)
+
+	type runOut struct {
+		res Result
+		err error
+	}
+	done := make(chan runOut, 1)
+	go func() {
+		defer logging.Recover("backfill pipeline")
+		res, rerr := c.runPipeline(runCtx, relay)
+		if rerr != nil {
+			cancel()
+		}
+		done <- runOut{res, rerr}
+	}()
+
+	// Producer: fetch → encode → push. Closing the relay ends the stream so the
+	// pipeline drains the remainder and returns.
+	fetchErr := fetcher.Run(runCtx, func(line string) error { return relay.Push(runCtx, line) })
+	relay.Close()
+	out := <-done
+
+	// The pipeline error (a write failure) is the root cause and wins over a
+	// fetch error that is merely the cancellation we triggered to unblock Push.
+	if out.err != nil {
+		return Result{}, fmt.Errorf("api: backfill upload: %w", out.err)
+	}
+	if fetchErr != nil && !errors.Is(fetchErr, context.Canceled) {
+		return Result{}, fmt.Errorf("api: backfill fetch: %w", fetchErr)
+	}
+	return out.res, nil
+}
+
+// runPipeline drains src through a pipeline uploader, regardless of the engine's
+// configured process.mode. Backfill forces pipeline so the fetch producer and
+// the write consumer run concurrently over the in-memory relay.
+func (c *Engine) runPipeline(ctx context.Context, src source.Source) (Result, error) {
+	pc := *c.procCfg
+	pc.Mode = string(process.ModePipeline)
+	pc.ApplyDefaults()
+	stats := &process.Counters{}
+	up, err := process.New(&pc, c.dao, c.parser, stats)
 	if err != nil {
 		return Result{}, err
 	}
-	if err := runner.Run(ctx); err != nil {
+	if err := up.Run(ctx, src); err != nil {
 		return Result{}, err
 	}
-	s := runner.Result()
+	s := stats.Snapshot()
 	return Result{
-		Lines:       s.Lines,
+		Lines:       s.TotalLines,
 		UserWrites:  s.UserWrites,
 		EventWrites: s.EventWrites,
 		DeadLetters: s.DeadLetters,

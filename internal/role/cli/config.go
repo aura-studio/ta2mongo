@@ -15,9 +15,9 @@ const (
 	// user_add/user_append re-apply).
 	FunctionFile = "file"
 	// FunctionBackfill pulls historical data from the ThinkingData OpenAPI per
-	// backfill.* (submit → poll → paginate), ingesting the event table through
-	// the upload pipeline and the user table as snapshot upserts, with per-page
-	// checkpoint resume in _backfill_progress.
+	// backfill.* (submit → poll → paginate), encoding each row as a TA log line
+	// (events as track, user rows as user_setOnce/user_set) and feeding it
+	// through the normal upload pipeline via an in-memory relay (no checkpoint).
 	FunctionBackfill = "backfill"
 	// FunctionEJSON reads a single Extended-JSON Mongo Data API request from stdin,
 	// executes it, and writes the Extended-JSON response to stdout (the console

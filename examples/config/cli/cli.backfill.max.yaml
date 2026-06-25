@@ -2,12 +2,15 @@
 #
 # 启动：tango --config cli.backfill.max.yaml   （不读 stdin，数据来自 TA OpenAPI）
 #
-# backfill = 从 ThinkingData OpenAPI 按日期范围（或 user 表整表）拉历史数据：submit→poll→paginate，
-# 逐页处理。事件表（v_event_<projectID>）每页编码成 TA JSON 行喂 Engine 上报链路（解析/过滤/identity/
-# DocumentDB 安全写全复用）；用户表（v_user_<projectID>）每行走 UserSnapshotWriteModel 快照 upsert。
-# 断点可续：逐页写 _backfill_progress checkpoint，同 runID 重跑从断点恢复；SQL 签名变化拒绝续跑。
-# 选择 filter 经 SQL WHERE 下推到 TA（events/include/exclude）。统计 JSON 写 stdout。
-# 实际用到：logging · dao · process · backfill · role.cli；不读 source、parser.filter、gateway、daemon —— 故此处不列。
+# backfill = 从 ThinkingData OpenAPI 按日期范围（或 user 表整表）拉历史数据：submit→poll→paginate，逐页处理。
+# 每行（事件 v_event_<projectID> / 用户 v_user_<projectID>）编码成 TA JSON 行，推入内存中转源（source/mem），
+# 由 Engine 上报链路消费：解析/过滤/identity/安全写全复用，与实时上报完全同路。事件注入 #type=track（#uuid $setOnInsert）；
+# 用户行注入 #type=user_setOnce（默认，绝不覆盖）或 user_set，并由 #account_id/#distinct_id 解析出 tango 的 #user_id 落库。
+# backfill 内部强制 process.mode=pipeline（fetch 生产 + pipeline 消费并发跑中转源），故此处 process.mode 仅为信息性。
+# 无 checkpoint / 无断点续传：重跑直接重新拉取，幂等由写模型保证。
+# 选择性：event 名走 backfill.events → SQL #event_name IN (...)；超出事件名的过滤用引擎的上报过滤器 parser.filter.include/exclude
+# （expr-lang 表达式，作用在解析后的扁平记录上）——backfill 不再做 SQL WHERE 下推，也不再有 include/exclude 键。
+# 实际用到：logging · dao · process · parser.filter · backfill · role.cli；不读 source、gateway、daemon —— 故此处不列。
 # 环境变量覆盖：键 . → _ 加 TANGO_ 前缀（backfill.token → TANGO_BACKFILL_TOKEN；[]string 用逗号分隔）。
 
 logging:                          # internal/logging
@@ -22,23 +25,26 @@ dao:                              # internal/dao
   store:                          # internal/dao/store
     maxElapsedTime: 10s           # [optional]（默认 10s）单次 bulk-write 退避重试总时长上限
 
-process:                          # internal/process（事件路径的上传策略；用户路径直走 BulkWrite 不读此段）
-  mode: batch                     # [optional]（默认 batch）single / batch / pipeline
+parser:                           # internal/parser
+  filter:                         # internal/parser/filter（引擎上报过滤器；backfill 行与实时行同样经过这里）
+    include:                      # [optional] expr-lang include 规则（OR）；空=全放行。超出 backfill.events 的选择性放这里
+      - '#type == "track"'
+    exclude:                      # [optional] expr-lang exclude 规则；命中即丢。作用在解析后扁平记录（#type/#event_name/properties.*）
+      - 'debug == true'
+
+process:                          # internal/process（上传策略；backfill 内部强制 pipeline，此处为信息性）
+  mode: pipeline                  # [optional]（默认 batch）single / batch / pipeline；backfill 运行时强制 pipeline
   batchSize: 1000                 # [optional]（默认 1000）single/batch 模式 bulk-write 批大小
 
-backfill:                         # internal/backfill
+backfill:                         # internal/backfill（仅依赖 logging + cfgtree；不碰 dao/parser/process/source）
   apiBaseURL: https://ta.example.com   # [required] TA OpenAPI 基址（http:// 或 https://）
   token: your-ta-openapi-token         # [required] TA OpenAPI token（查询参数 token）
   proxy: ""                            # [optional]（默认直连）出网代理 http/https/socks5（含 user:pass）
   projectID: 35                        # [required] TA 项目 id（>0）
   table: event                         # [optional]（默认 event）event / user
-  events:                              # [optional] 事件名白名单（event 表）→ SQL 下推 #event_name IN (...)
+  events:                              # [optional] 事件名白名单（event 表）→ SQL #event_name IN (...)
     - login
     - pay
-  include:                             # [optional] expr-lang include 规则 → SQL WHERE 下推
-    - '#type == "track"'
-  exclude:                             # [optional] expr-lang exclude 规则 → SQL WHERE 下推
-    - 'debug == true'
   schemaPrefix: ""                     # [optional]（默认空）表名前的 schema 限定（如 ta.）
   partDateRange:                       # [required]（event 表）分区日期闭区间 YYYY-MM-DD
     start: "2026-05-01"
@@ -52,10 +58,7 @@ backfill:                         # internal/backfill
   pageRetries: 3                       # [optional]（默认 3）单页失败重试次数
   pollInterval: 3s                     # [optional]（默认 3s）轮询任务状态间隔
   pollTimeout: 30m                     # [optional]（默认 30m）单任务轮询超时
-  runID: backfill-2026-05              # [required] 断点续传键（同 runID 续跑；改 filter/table/范围会变 SQL 签名）
-  progressCollection: _backfill_progress  # [optional]（默认 _backfill_progress）checkpoint 集合
-  forceSkipExisting: true              # [optional]（默认 true）历史写用 $setOnInsert，绝不覆盖线上数据
-  skipLocalFilter: false               # [optional]（默认 false）跳过用户路径的本地兜底 filter（SQL 下推仍生效）
+  forceSkipExisting: true              # [optional]（默认 true）仅选 user 表 #type：true→user_setOnce（绝不覆盖），false→user_set；不影响事件表
 
 role:                             # internal/role
   mode: cli                       # [required] 选择 cli 角色（默认是 daemon）

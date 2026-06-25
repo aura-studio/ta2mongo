@@ -86,7 +86,6 @@ func TestRunBackfillFacade(t *testing.T) {
 		WithBackfillAPIBaseURL(srv.URL),
 		WithBackfillToken("tok"),
 		WithBackfillProjectID(35),
-		WithBackfillRunID("cf-run"),
 		WithBackfillPartDateRange("2026-05-01", "2026-05-01"),
 		WithBackfillPageSize(1000),
 	)

@@ -15,6 +15,7 @@ import (
 
 	"github.com/aura-studio/tango/internal/source/file"
 	"github.com/aura-studio/tango/internal/source/httpbody"
+	"github.com/aura-studio/tango/internal/source/mem"
 	"github.com/aura-studio/tango/internal/source/stdin"
 	"github.com/aura-studio/tango/internal/source/tailer"
 )
@@ -76,3 +77,13 @@ func NewFile(cfg *FileConfig) Source {
 	}
 	return file.New(cfg.Paths, cfg.MaxLineBytes)
 }
+
+// NewMem returns an in-memory relay Source: a single producer pushes already-
+// formed TA log lines into it via Push and ends the stream with Close, while
+// the process pipeline drains them concurrently. buf bounds how far the
+// producer may run ahead (Push blocks when full). It is the in-memory analogue
+// of NewFile and is used by the backfill domain to feed fetched ThinkingData
+// rows through the normal upload pipeline without its own write path. The
+// concrete *mem.Source is returned (not the Source interface) so the caller can
+// Push/Close; it also satisfies Source for the uploader.
+func NewMem(buf int) *mem.Source { return mem.New(buf) }

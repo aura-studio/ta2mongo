@@ -3,27 +3,33 @@ package backfill
 import (
 	"fmt"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/aura-studio/tango/internal/cfgtree"
-	"github.com/aura-studio/tango/internal/parser/filter"
 )
 
-// Table identifiers and defaults for the backfill domain.
+// Table identifiers and pagination bounds for the backfill source.
 const (
 	// TableEvent selects the partitioned event table v_event_<projectID>.
 	TableEvent = "event"
 	// TableUser selects the unpartitioned user-state table v_user_<projectID>.
 	TableUser = "user"
-	// DefaultProgressCollection is the Mongo collection that holds per-run
-	// checkpoint documents.
-	DefaultProgressCollection = "_backfill_progress"
+	// UserChunkKey is the single virtual "day" used for the user table, which is
+	// unpartitioned and fetched as one task.
+	UserChunkKey = "user-full"
 	// minPageSize is the TA OpenAPI's minimum server-side page size.
 	minPageSize = 1000
 	// defaultPageSize is the page size used when none is configured.
 	defaultPageSize = 10000
+
+	// typeEvent / typeUserSet / typeUserSetOnce are the TA record #type values
+	// injected when a fetched row lacks one, so the row flows through the normal
+	// parse → identity → write pipeline (events as track upserts; user-state
+	// rows as user_set / user_setOnce updates — no custom write model needed).
+	typeEvent       = "track"
+	typeUserSet     = "user_set"
+	typeUserSetOnce = "user_setOnce"
 )
 
 // DateRange is an inclusive [Start, End] partition-date range (YYYY-MM-DD).
@@ -41,12 +47,11 @@ type TimeRange struct {
 // Empty reports whether neither bound is set.
 func (r TimeRange) Empty() bool { return r.Start == "" && r.End == "" }
 
-// Config is the backfill domain's own configuration (file key backfill.*). It
-// folds the v1.0 BackfillConfig and BackfillFilterConfig into one module config
-// following the per-module convention (FromTree / RegisterDefaults /
-// ApplyDefaults / Validate). It is consumed by Engine.RunBackfill and cli
-// function=backfill; the client SDK reaches it through the api.BackfillConfig
-// alias.
+// Config is the backfill domain's configuration (file key backfill.*). It
+// describes how to FETCH historical rows from the ThinkingData OpenAPI — the
+// rows are then encoded as TA log lines and ingested through the engine's
+// normal upload pipeline (so no custom write model, checkpoint, or selection
+// filter lives here: the reporting filter is the engine's parser.filter.*).
 type Config struct {
 	// --- TA OpenAPI connection ---
 	APIBaseURL string `mapstructure:"apiBaseURL"`
@@ -57,8 +62,6 @@ type Config struct {
 	// --- query selection ---
 	Table          string    `mapstructure:"table"` // "event" (default) or "user"
 	Events         []string  `mapstructure:"events"`
-	Include        []string  `mapstructure:"include"`
-	Exclude        []string  `mapstructure:"exclude"`
 	SchemaPrefix   string    `mapstructure:"schemaPrefix"`
 	PartDateRange  DateRange `mapstructure:"partDateRange"`
 	EventTimeRange TimeRange `mapstructure:"eventTimeRange"`
@@ -71,11 +74,12 @@ type Config struct {
 	PollInterval time.Duration `mapstructure:"pollInterval"`
 	PollTimeout  time.Duration `mapstructure:"pollTimeout"`
 
-	// --- run identity / write semantics ---
-	RunID              string `mapstructure:"runID"`
-	ProgressCollection string `mapstructure:"progressCollection"`
-	ForceSkipExisting  *bool  `mapstructure:"forceSkipExisting"` // nil/true = $setOnInsert
-	SkipLocalFilter    bool   `mapstructure:"skipLocalFilter"`
+	// --- write semantics ---
+	// ForceSkipExisting selects the user-table record type so historical data
+	// never overwrites live state: true (default) → user_setOnce ($setOnInsert),
+	// false → user_set ($set). It does not affect the event table (events are
+	// always #uuid $setOnInsert via the track write model).
+	ForceSkipExisting *bool `mapstructure:"forceSkipExisting"`
 }
 
 // FromTree decodes the backfill.* branch of t into a Config, applies defaults
@@ -93,8 +97,7 @@ func FromTree(t cfgtree.Tree) (*Config, error) {
 }
 
 // RegisterDefaults registers this module's config keys (under prefix) so env
-// binding works. The *bool tri-state fields default to true (the safe value,
-// equivalent to their nil semantics): paginate on, skip-existing on.
+// binding works. The *bool tri-state fields default to true.
 func (c *Config) RegisterDefaults(set func(key string, value any), prefix string) {
 	set(prefix+".apiBaseURL", "")
 	set(prefix+".token", "")
@@ -102,8 +105,6 @@ func (c *Config) RegisterDefaults(set func(key string, value any), prefix string
 	set(prefix+".projectID", 0)
 	set(prefix+".table", "")
 	set(prefix+".events", []string{})
-	set(prefix+".include", []string{})
-	set(prefix+".exclude", []string{})
 	set(prefix+".schemaPrefix", "")
 	set(prefix+".partDateRange.start", "")
 	set(prefix+".partDateRange.end", "")
@@ -115,10 +116,7 @@ func (c *Config) RegisterDefaults(set func(key string, value any), prefix string
 	set(prefix+".pageRetries", 0)
 	set(prefix+".pollInterval", "0s")
 	set(prefix+".pollTimeout", "0s")
-	set(prefix+".runID", "")
-	set(prefix+".progressCollection", "")
 	set(prefix+".forceSkipExisting", true)
-	set(prefix+".skipLocalFilter", false)
 }
 
 // ApplyDefaults fills unset backfill options.
@@ -138,13 +136,9 @@ func (c *Config) ApplyDefaults() {
 	if c.PollTimeout <= 0 {
 		c.PollTimeout = 30 * time.Minute
 	}
-	if c.ProgressCollection == "" {
-		c.ProgressCollection = DefaultProgressCollection
-	}
 }
 
-// Validate checks the backfill config. It is exported (no longer takes the
-// table as a parameter, since table lives in the same struct now).
+// Validate checks the backfill config.
 func (c *Config) Validate() error {
 	switch c.Table {
 	case TableEvent, TableUser:
@@ -162,9 +156,6 @@ func (c *Config) Validate() error {
 	}
 	if c.ProjectID <= 0 {
 		return fmt.Errorf("projectID must be > 0, got %d", c.ProjectID)
-	}
-	if c.RunID == "" {
-		return fmt.Errorf("runID is required (used as resume key)")
 	}
 	if c.PageSize < minPageSize {
 		return fmt.Errorf("pageSize must be >= %d (TA OpenAPI minimum), got %d", minPageSize, c.PageSize)
@@ -200,23 +191,31 @@ func (c *Config) Validate() error {
 			}
 		}
 	}
-	// The selection filter must compile both to a local filter and to SQL.
-	if _, err := filter.New(c.IncludeExprs(), c.Exclude); err != nil {
-		return fmt.Errorf("filter does not compile: %w", err)
-	}
-	if _, err := c.BackfillWhere(); err != nil {
-		return fmt.Errorf("filter does not compile to SQL pushdown: %w", err)
-	}
 	return nil
 }
 
-// ForceSkip reports whether historical writes use $setOnInsert (skip existing).
-// Defaults to true when unset, so backfill never overwrites live data.
+// ForceSkip reports whether the user table writes use $setOnInsert (user_setOnce
+// → never overwrite live state). Defaults to true when unset.
 func (c *Config) ForceSkip() bool {
-	if c.ForceSkipExisting == nil {
-		return true
+	return c.ForceSkipExisting == nil || *c.ForceSkipExisting
+}
+
+// userType is the #type injected for user-table rows: user_setOnce when
+// ForceSkip (never overwrite) else user_set.
+func (c *Config) userType() string {
+	if c.ForceSkip() {
+		return typeUserSetOnce
 	}
-	return *c.ForceSkipExisting
+	return typeUserSet
+}
+
+// defaultType is the #type injected for a fetched row that carries none: track
+// for the event table, user_setOnce/user_set for the user table.
+func (c *Config) defaultType() string {
+	if c.Table == TableUser {
+		return c.userType()
+	}
+	return typeEvent
 }
 
 // ShouldPaginate reports whether server-side pagination is requested. Defaults
@@ -234,28 +233,71 @@ func (c *Config) EffectivePageSize() int {
 	return 0
 }
 
-// IncludeExprs returns the include expression list with the event-name filter
-// derived from Events appended (event table only).
-func (c *Config) IncludeExprs() []string {
-	out := append([]string(nil), c.Include...)
-	if c.Table != TableUser && len(c.Events) > 0 {
-		quoted := make([]string, 0, len(c.Events))
-		for _, e := range c.Events {
-			quoted = append(quoted, strconv.Quote(e))
-		}
-		out = append(out, `#event_name in [`+strings.Join(quoted, ", ")+`]`)
+// Days enumerates the fetch units: one per partition date in the inclusive
+// [start, end] range for the event table, or a single UserChunkKey for the
+// user table.
+func (c *Config) Days() ([]string, error) {
+	if c.Table == TableUser {
+		return []string{UserChunkKey}, nil
 	}
-	return out
+	startT, err := time.Parse("2006-01-02", c.PartDateRange.Start)
+	if err != nil {
+		return nil, fmt.Errorf("partDateRange.start: %w", err)
+	}
+	endT, err := time.Parse("2006-01-02", c.PartDateRange.End)
+	if err != nil {
+		return nil, fmt.Errorf("partDateRange.end: %w", err)
+	}
+	if endT.Before(startT) {
+		return nil, fmt.Errorf("partDateRange.end %s is before start %s", c.PartDateRange.End, c.PartDateRange.Start)
+	}
+	var out []string
+	for d := startT; !d.After(endT); d = d.AddDate(0, 0, 1) {
+		out = append(out, d.Format("2006-01-02"))
+	}
+	return out, nil
 }
 
-// BackfillWhere renders the selection filter as a Presto WHERE-clause body (no
-// leading WHERE), pushing the predicate down to the TA OpenAPI.
-func (c *Config) BackfillWhere() (string, error) {
-	return filter.CompileToSQL(c.IncludeExprs(), c.Exclude)
-}
+// BuildSQL renders the TA OpenAPI SQL for one partition date. For the event
+// table it pins "$part_date", optional event-time bounds and an optional
+// event-name IN-list; for the user table the date is ignored (the table is
+// unpartitioned). There is NO include/exclude filter push-down — selectivity
+// beyond event-name lives in the engine's reporting filter (parser.filter.*),
+// so this module needs no dependency on parser/filter.
+func (c *Config) BuildSQL(day string) string {
+	var b strings.Builder
+	b.WriteString(`SELECT * FROM `)
+	if c.SchemaPrefix != "" {
+		fmt.Fprintf(&b, "%s.", c.SchemaPrefix)
+	}
+	if c.Table == TableUser {
+		fmt.Fprintf(&b, "v_user_%d", c.ProjectID)
+	} else {
+		fmt.Fprintf(&b, "v_event_%d", c.ProjectID)
+	}
 
-// BuildFilter compiles the in-process safety-net filter used by the user-table
-// path behind the SQL pushdown.
-func (c *Config) BuildFilter() (*filter.Filter, error) {
-	return filter.New(c.IncludeExprs(), c.Exclude)
+	var predicates []string
+	if c.Table == TableEvent {
+		predicates = append(predicates, fmt.Sprintf(`"$part_date" = '%s'`, day))
+		if s := c.EventTimeRange.Start; s != "" {
+			predicates = append(predicates, fmt.Sprintf(`"#event_time" >= '%s'`, s))
+		}
+		if e := c.EventTimeRange.End; e != "" {
+			predicates = append(predicates, fmt.Sprintf(`"#event_time" <= '%s'`, e))
+		}
+		if len(c.Events) > 0 {
+			quoted := make([]string, 0, len(c.Events))
+			for _, ev := range c.Events {
+				quoted = append(quoted, "'"+strings.ReplaceAll(ev, "'", "''")+"'")
+			}
+			predicates = append(predicates, fmt.Sprintf(`"#event_name" IN (%s)`, strings.Join(quoted, ", ")))
+		}
+	}
+	if len(predicates) > 0 {
+		fmt.Fprintf(&b, " WHERE %s", strings.Join(predicates, " AND "))
+	}
+	if c.Limit > 0 {
+		fmt.Fprintf(&b, " LIMIT %d", c.Limit)
+	}
+	return b.String()
 }

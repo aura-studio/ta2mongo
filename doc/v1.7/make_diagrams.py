@@ -201,8 +201,8 @@ def overview():
         tpx=14, spx=10)
     box(d, GX0, 364, GW, 72, C_BF,
         title="backfill — TA OpenAPI 历史回填（v1.7 新增；有界一次性：cli function=backfill · api.RunBackfill · client.RunBackfill；不经 gateway/daemon）", title_color="#4b2e7a",
-        subs=["event 表：submit-sql → poll → paginate(NDJSON) → 逐页 rowdecode → 复用 Engine.Upload（parse→filter→identity→DocumentDB 安全写）",
-              "user 表：行 → dao.UserSnapshotWriteModel（$set/$setOnInsert，无管道）→ BulkWrite；checkpoint _backfill_progress 逐页 flush + 同 runID 续跑"],
+        subs=["fetch：submit-sql → poll → paginate(NDJSON) → rowdecode 编码成 TA 日志行（注入 #type：event=track / user=user_setOnce|set）",
+              "→ push 进 source/mem 内存中转 → 引擎强制 pipeline 走【正常上报管线】(parse→filter→identity→写)；无 checkpoint，重跑靠 #uuid/#user_id 幂等"],
         tpx=14, spx=10)
 
     # 引擎根包
@@ -217,8 +217,8 @@ def overview():
     rowlabel(518, "子包", "领域内部实现")
     subs_rows = [
         ["single · batch", "pipeline · core"],
-        ["talog · filter", "filter/sql.go(下推·v1.7)"],
-        ["httpbody · stdin · tailer", "file（存量·v1.6）· taapi(占位)"],
+        ["talog · filter", "(Holder 原子热替换)"],
+        ["httpbody · stdin · tailer", "file(存量) · mem(中转·v1.7) · taapi"],
         ["store · mongo", "ejson · sql"],
     ]
     for i, lines in enumerate(subs_rows):
@@ -243,7 +243,7 @@ def overview():
     # collections band
     box(d, GX0, 644, GW, 38, ("#fbf0d9", "#d6b656"),
         title=None,
-        subs=["MongoDB 集合：user · event · dead_letter · id_mapping · id_counter · _tango_config（cfgsync）· _backfill_progress（backfill checkpoint，v1.7）"],
+        subs=["MongoDB 集合：user · event · dead_letter · id_mapping · id_counter · _tango_config（cfgsync）—— backfill 复用上报管线，不新增集合"],
         spx=10.5)
 
     # legend
@@ -258,11 +258,11 @@ def overview():
         ltext(d, kx + 28, ly + 13, t, 10, SUBINK)
         kx += 28 + 9 * len(t) + 22
     ltext(d, GX0 + 18, ly + 42,
-          "· 依赖向下：上层只经根包门面（process/parser/source/dao）调下层，领域之间不跨界 import 兄弟子包（唯一例外：backfill→parser/filter 的 CompileToSQL 下推，见 dependency-graph.md）。", 10.5, SUBINK)
+          "· 依赖向下：上层只经根包门面（process/parser/source/dao）调下层，领域之间不跨界 import 兄弟子包（全仓无例外；backfill 现仅依赖 logging+cfgtree）。", 10.5, SUBINK)
     ltext(d, GX0 + 18, ly + 60,
           "· 橙色虚线箭头 = cfgsync 把中心文档的 filter 子树热替换进 daemon/gateway 的 live parser.filter（原子 Holder swap）。", 10.5, SUBINK)
     ltext(d, GX0 + 18, ly + 78,
-          "· 相对 v1.6：新增顶层域 backfill（TA OpenAPI 历史回填）+ RunBackfill 三面入口（cli/api/client）；event 复用上报管线、user 写 UserSnapshotWriteModel，checkpoint _backfill_progress；不含 worker/taskqueue（见图 D）。", 10.5, "#4b2e7a")
+          "· 相对 v1.6：新增顶层域 backfill + RunBackfill 三面入口（cli/api/client）；回填行经 source/mem 内存中转 + 强制 pipeline 走【正常上报管线】，不改 parser/dao、无 checkpoint（见图 D）。", 10.5, "#4b2e7a")
     ltext(d, GX0 + 18, ly + 96,
           "· 相对 v1.5：新增 source/file 存量文件一次性导入源 + 四层入口（见图 C）。", 10.5, "#1b6f5c")
     ltext(d, GX0 + 18, ly + 114,
@@ -433,58 +433,52 @@ def file_flow():
 # Diagram 5: backfill-flow  (v1.7 新增：TA OpenAPI 历史回填)
 # ===========================================================================
 def backfill_flow():
-    W, H = 1400, 560
+    W, H = 1400, 566
     img, d = new_canvas(W, H)
     ctext(d, W / 2, 22, "图 D · backfill TA OpenAPI 历史回填（v1.7 新增）", 20, INK, bold=True)
-    ctext(d, W / 2, 50, "submit→poll→paginate 拉历史 → event 逐页复用 Engine.Upload / user 写快照 → _backfill_progress 逐页 checkpoint，同 runID 续跑", 12, SUBINK)
+    ctext(d, W / 2, 50, "fetch(submit→poll→paginate) → 编码 TA 日志行(注入 #type) → source/mem 内存中转 → 引擎强制 pipeline 走【正常上报管线】 → 同一批集合；无 checkpoint", 12, SUBINK)
 
     # 三面入口
-    box(d, 36, 104, 222, 40, C_ROLE, title="cli function=backfill", subs=["读 backfill.*（不读 stdin）"], tpx=12.5, spx=8.4)
-    box(d, 36, 150, 222, 40, C_ENGINE_NOTE, title="api.Engine.RunBackfill(ctx)", subs=["库直接调用"], tpx=12.5, spx=8.4)
-    box(d, 36, 196, 222, 40, C_ENGINE_NOTE, title="client.RunBackfill(ctx)", subs=["公开 SDK · WithBackfill*"], tpx=12.5, spx=8.4)
+    box(d, 36, 104, 216, 40, C_ROLE, title="cli function=backfill", subs=["读 backfill.*（不读 stdin）"], tpx=12.5, spx=8.2)
+    box(d, 36, 150, 216, 40, C_ENGINE_NOTE, title="api.Engine.RunBackfill(ctx)", subs=["库直接调用"], tpx=12.5, spx=8.2)
+    box(d, 36, 196, 216, 40, C_ENGINE_NOTE, title="client.RunBackfill(ctx)", subs=["公开 SDK · WithBackfill*"], tpx=12.5, spx=8.2)
 
-    # Runner
-    box(d, 286, 110, 196, 124, C_BF, title="backfill.Runner", title_color="#4b2e7a",
-        subs=["借引擎已开 Mongo/dao", "（不自开/关连接）", "按 table 分块：", "event 按 partDateRange 逐日", "user 全表单块(UserChunkKey)"], tpx=13.5, spx=8.4)
+    # backfill.Fetcher (fetch + encode, dao-free)
+    box(d, 274, 104, 220, 128, C_BF, title="backfill.Fetcher", title_color="#4b2e7a",
+        subs=["submit-sql → poll sql-task-info", "→ paginate sql-result-page(NDJSON)", "rowdecode 编码成 TA 日志行 + 注入 #type：", "  event=track / user=user_setOnce|set", "token=query；proxy http/https/socks5"], tpx=13.5, spx=8.0)
     for yy in (124, 170, 216):
-        arrow(d, 259, yy, 285, 172, width=1.7)
+        arrow(d, 252, yy, 273, 168, width=1.7)
 
-    # TA OpenAPI client
-    box(d, 510, 110, 232, 124, C_BLUE, title="TA OpenAPI client", title_color="#2f5a78",
-        subs=["submit-sql（提交 Presto SQL）", "→ poll sql-task-info（至完成/超时）", "→ paginate sql-result-page(NDJSON)", "token=query 参数；proxy http/https/socks5", "include/exclude 经 CompileToSQL 下推 WHERE"], tpx=13, spx=8.2)
-    arrow(d, 482, 172, 509, 172, width=2.2)
+    # source/mem relay
+    box(d, 516, 122, 176, 96, C_FILE, title="source/mem 内存中转", title_color="#1b6f5c",
+        subs=["Push(行) / Close()", "channel 缓冲(backpressure)", "满足 source.Source 契约"], tpx=12.5, spx=8.6)
+    arrow(d, 494, 168, 515, 170, width=2.2)
+    ltext(d, 498, 150, "emit", 8.5, "#1b6f5c")
 
-    # 两路写入
-    box(d, 786, 90, 320, 70, C_GREEN, title="event：rowdecode → Engine.Upload", title_color="#3a6a28",
-        subs=["EncodeRowAsJSONLine → 逐页喂 Engine.Upload", "复用 parse→filter→identity→写（与图 A 同核）"], tpx=12.5, spx=8.8)
-    box(d, 786, 184, 320, 70, C_GREEN, title="user：UserSnapshotWriteModel", title_color="#3a6a28",
-        subs=["$set / $setOnInsert（无聚合管道）", "→ Store.BulkWriteOrdered"], tpx=12.5, spx=8.8)
-    arrow(d, 742, 150, 785, 125, width=2.0)
-    arrow(d, 742, 194, 785, 219, width=2.0)
+    # forced pipeline = the normal upload pipeline
+    box(d, 716, 110, 252, 120, C_BLUE, title="强制 pipeline · core.Processor", title_color="#2f5a78",
+        subs=["与【正常上报】完全同核", "parse → filter(parser.filter.*)", "→ identity → 写模型 → BulkWrite", "后台消费 mem / 前台 fetcher 生产"], tpx=13, spx=8.4)
+    arrow(d, 692, 170, 715, 170, width=2.2)
 
-    # collections
-    box(d, 1146, 96, 214, 58, ("#fbf0d9", "#d6b656"), title="event（#uuid）", tpx=13)
-    box(d, 1146, 190, 214, 58, ("#fbf0d9", "#d6b656"), title="user（#user_id）", tpx=13)
-    arrow(d, 1106, 125, 1145, 125, width=2.0)
-    arrow(d, 1106, 219, 1145, 219, width=2.0)
-
-    # checkpoint
-    box(d, 286, 252, 456, 60, ("#fbf0d9", "#d6b656"), title="_backfill_progress（逐页 checkpoint）", title_color="#7a4a10",
-        subs=["每 runID 一文档 · 每页 flush(DayProgress: status/taskId/pageId/pageCount/rows/error)", "同 runID 从下一页续跑 · SQLSignature 漂移守卫 · FindOne + ReplaceOne upsert（无 pipeline update，DocumentDB 安全）"], tpx=12.5, spx=8.6)
-    arrow(d, 384, 252, 384, 234, width=1.8, dashed=True)
-    arrow(d, 600, 234, 600, 252, width=1.8, dashed=True)
-    ltext(d, 392, 238, "读续跑位点 / 每页写回", 8.6, "#7a4a10")
+    # collections (same as live ingestion)
+    box(d, 992, 100, 188, 58, ("#fbf0d9", "#d6b656"), title="event（#uuid · track）", tpx=12.5)
+    box(d, 992, 186, 188, 58, ("#fbf0d9", "#d6b656"), title="user（#user_id · user_setOnce）", tpx=11.5)
+    arrow(d, 968, 140, 991, 129, width=2.0)
+    arrow(d, 968, 200, 991, 215, width=2.0)
 
     # bottom band
-    box(d, 36, 330, 1324, 198, ("#f7f4fc", "#7e6bbf"), radius=10)
-    ltext(d, 54, 342, "回填语义 · 幂等 · 边界（与上报同核，但带 submit/poll/paginate 编排与分页 checkpoint，故不走 source.Source 抽象）", 13, "#4b2e7a", bold=True)
-    ltext(d, 54, 370, "· 两路写入：event 行编码成 TA JSON 行后逐页喂 Engine.Upload（上报 filter parser.filter.* 仍生效）；user 行绕过 parser，直走 #user_id 快照写。", 11, SUBINK)
-    ltext(d, 54, 392, "· filter 下推：include/exclude 经 parser/filter 的 CompileToSQL 编成 Presto WHERE 下推 TA SQL（少回拉）；user 路另就地套用本地 filter（除非 skipLocalFilter）。", 11, SUBINK)
-    ltext(d, 54, 414, "· 幂等：event 路 track 恒按 #uuid $setOnInsert（与 forceSkipExisting 无关，重导零新增）；user 路 forceSkipExisting 默认 true→$setOnInsert【永不覆盖】线上、false→$set；同 runID 续跑收敛。", 11, "#4b2e7a")
-    ltext(d, 54, 436, "· DocumentDB 安全：所有写（user 快照 / checkpoint upsert）均普通 $set/$setOnInsert + 文档替换，绝无聚合管道 update；判错只认数字 code。", 11, SUBINK)
-    ltext(d, 54, 458, "· 避环：backfill 不 import role/api；event 上传经注入的 Engine.Upload 回调（本地 UploadStats 适配），打破 api↔backfill import 环（见 dependency-graph.md §4）。", 11, "#4b2e7a")
-    ltext(d, 54, 480, "· 边界：仅 cli function=backfill / api.RunBackfill / client.RunBackfill 三面；gateway / daemon 不设入口、无同步 POST /backfill；不含 worker / taskqueue。", 11, "#a05a1a")
-    ltext(d, 54, 502, "· 续跑守卫：SQLSignature = table/projectID/filterWhere/eventTimeRange（不含 partDateRange，故日期范围可延展后续跑）；签名变 → ErrSignatureMismatch 拒续。", 11, SUBINK)
+    box(d, 36, 262, 1328, 296, ("#f7f4fc", "#7e6bbf"), radius=10)
+    ltext(d, 54, 274, "回填语义 · 不改 parser/dao · 无 checkpoint（编码即路由，复用正常上报管线）", 13, "#4b2e7a", bold=True)
+    ltext(d, 54, 302, "· 编码即路由：fetcher 把每行编码成 TA 日志行并注入 #type → 走【正常管线】；event→track，user→user_setOnce（默认）/ user_set（forceSkipExisting=false）。", 11, SUBINK)
+    ltext(d, 54, 324, "· 复用既有写模型（不改 dao）：event 按 #uuid `$setOnInsert`（幂等）；user 按【解析出的 #user_id】user_setOnce（`$setOnInsert`，历史永不覆盖线上）。", 11, "#4b2e7a")
+    ltext(d, 54, 346, "· 身份统一（走管线）：user 行也经 identity 由 #account_id/#distinct_id 解析 → 落 tango 的 #user_id（与 event 一致）；这要求 v_user 表带身份列。", 11, "#a05a1a")
+    ltext(d, 54, 368, "· 选择过滤用引擎 parser.filter.*（管线内，不改 parser）；events → SQL `#event_name IN (...)`；不做 SQL filter 下推、无 CompileToSQL。", 11, SUBINK)
+    ltext(d, 54, 390, "· 无 checkpoint：fetcher 只 fetch→encode→push；重跑重新拉取，靠 #uuid / #user_id 幂等收敛（与 file 同哲学）。", 11, "#4b2e7a")
+    ltext(d, 54, 412, "· 强制 pipeline：Engine.RunBackfill 后台 pipeline 消费 mem、前台 fetcher 生产；派生 ctx 在管线失败时解阻 Push，避免死锁。", 11, SUBINK)
+    ltext(d, 54, 434, "· 依赖极简：internal/backfill 仅 import logging + cfgtree（不碰 dao/parser/process/source/role）；Engine 经 source.NewMem 接 mem、经 emit 回调推行。", 11, "#4b2e7a")
+    ltext(d, 54, 456, "· DocumentDB 安全：全程复用上报写模型（普通 $set/$setOnInsert，无聚合管道 update，判错只认数字 code）。", 11, SUBINK)
+    ltext(d, 54, 478, "· 边界：仅 cli function=backfill / api.RunBackfill / client.RunBackfill 三面；gateway / daemon 不设入口、无同步 POST /backfill；不含 worker / taskqueue。", 11, "#a05a1a")
+    ltext(d, 54, 500, "· 重构要点：删 checkpoint/executor 两路写、删 dao.UserSnapshotWriteModel、删 parser/filter 的 CompileToSQL —— parser 与 dao 回到与 v1.6 完全一致。", 11, SUBINK)
 
     finish(img, os.path.join(HERE, "backfill-flow.png"))
 
