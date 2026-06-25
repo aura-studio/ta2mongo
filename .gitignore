@@ -56,6 +56,10 @@ go.work.sum
 *.swp
 *~
 
+# Python bytecode cache (from doc/*/make_diagrams.py diagram generation)
+__pycache__/
+*.pyc
+
 # OS noise
 .DS_Store
 Thumbs.db

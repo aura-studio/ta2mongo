@@ -2,7 +2,7 @@
 
 > 本图描述 **v1.7 分支**（`internal/` 各包之间的 import 依赖）。依赖边是用
 > `go list -f '{{.ImportPath}} {{.Imports}}'` 从编译器视角抽取的**真实直接 import**（非文档推断），
-> 只保留模块内（`github.com/aura-studio/tango/...`）的边。架构总览见 [`../v1.6/arch.md`](../v1.6/arch.md) §2/§3/§7。
+> 只保留模块内（`github.com/aura-studio/tango/...`）的边。架构总览见 [`arch.md`](arch.md) §2/§3/§7（§10 为 backfill 专章）。
 >
 > 一句话结构：**严格单向分层、无环**——角色层 → 编排领域 → 数据领域（根包）→ 子包 → 基础层 → `cfgtree` 叶子；
 > 领域之间只经**根包**互引（root-fronts-subpackages），全仓**唯一**跨域进子包的例外是 `backfill → parser/filter`
