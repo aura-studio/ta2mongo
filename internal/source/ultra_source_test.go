@@ -11,14 +11,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aura-studio/tango/internal/source/file"
 	"github.com/aura-studio/tango/internal/source/tailer"
-	"github.com/aura-studio/tango/internal/source/uploadfile"
 )
 
 // ultra_source_test.go covers the source facade (SRC-1..SRC-5; SRC-1..4 from
 // doc/ultra_test.md, since archived): the NewLines (httpbody) and NewReader
 // (stdin) finite sources, NewTailer's nil/zero config defaulting, the
-// NewUploadFile (v1.6.0) finite file import, and the panic-isolation contract
+// NewFile finite explicit-file import, and the panic-isolation contract
 // of the source goroutines.
 
 // drain collects every value a Source emits until its channel closes, returning the
@@ -232,52 +232,53 @@ func TestUltraSource_NewTailer_ZeroConfigUsesTuningDefaults(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// SRC-5: NewUploadFile (one-shot file import) — nil/zero config must not
-// panic and emits nothing; a configured pattern imports the matched files to
-// EOF then closes (the finite-source contract through the facade).
+// SRC-5: NewFile (one-shot file import) — nil/zero config must not panic and
+// emits nothing; configured explicit paths import each file to EOF then close
+// (the finite-source contract through the facade). No glob, no directories.
 // ---------------------------------------------------------------------------
 
-func TestUltraSource_NewUploadFile_NilConfigDoesNotPanic(t *testing.T) {
+func TestUltraSource_NewFile_NilConfigDoesNotPanic(t *testing.T) {
 	defer func() {
 		if r := recover(); r != nil {
-			t.Fatalf("NewUploadFile(nil) panicked: %v", r)
+			t.Fatalf("NewFile(nil) panicked: %v", r)
 		}
 	}()
-	src := NewUploadFile(nil)
+	src := NewFile(nil)
 	if src == nil {
-		t.Fatal("NewUploadFile(nil) returned nil Source")
+		t.Fatal("NewFile(nil) returned nil Source")
 	}
-	if _, ok := src.(*uploadfile.Source); !ok {
-		t.Fatalf("NewUploadFile(nil) returned %T, want *uploadfile.Source", src)
+	if _, ok := src.(*file.Source); !ok {
+		t.Fatalf("NewFile(nil) returned %T, want *file.Source", src)
 	}
-	// A nil config has no patterns: the source closes immediately, emitting
-	// nothing.
+	// A nil config has no paths: the source closes immediately, emitting nothing.
 	got, closed := drain(t, src.Run(context.Background()), 2*time.Second)
 	if !closed {
-		t.Fatal("NewUploadFile(nil) channel did not close")
+		t.Fatal("NewFile(nil) channel did not close")
 	}
 	if len(got) != 0 {
-		t.Fatalf("NewUploadFile(nil) emitted %q, want nothing", got)
+		t.Fatalf("NewFile(nil) emitted %q, want nothing", got)
 	}
 }
 
-func TestUltraSource_NewUploadFile_ImportsMatchedFilesThenCloses(t *testing.T) {
+func TestUltraSource_NewFile_ImportsListedFilesThenCloses(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "a.log"), []byte("a1\na2\n"), 0o644); err != nil {
+	a := filepath.Join(dir, "a.log")
+	if err := os.WriteFile(a, []byte("a1\na2\n"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
+	// An unlisted file must not import (explicit paths only).
 	if err := os.WriteFile(filepath.Join(dir, "b.txt"), []byte("never\n"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
-	src := NewUploadFile(&uploadfile.Config{LogPattern: []string{filepath.Join(dir, "*.log")}})
+	src := NewFile(&file.Config{Paths: []string{a}})
 	got, closed := drain(t, src.Run(context.Background()), 5*time.Second)
 	if !closed {
-		t.Fatal("NewUploadFile channel did not close after the finite import")
+		t.Fatal("NewFile channel did not close after the finite import")
 	}
 	want := []string{"a1", "a2"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
-		t.Fatalf("NewUploadFile emitted %q, want %q", got, want)
+		t.Fatalf("NewFile emitted %q, want %q", got, want)
 	}
 }
 

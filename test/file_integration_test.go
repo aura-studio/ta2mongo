@@ -1,8 +1,8 @@
-// Repo-level integration tests for the v1.6.0 uploadfile face: the one-shot
-// file-import source feeding the real engine against a real MongoDB/DocumentDB
-// (TANGO_TEST_MONGO_URI), through both entry points (Engine.UploadFile and the
-// cli role's RunUploadFile). The second halves are the v1.6.0 acceptance's
-// idempotency assertion: uploadfile has no checkpoint, so a re-run re-imports
+// Repo-level integration tests for the file face: the one-shot file-import
+// source (explicit paths, no glob, no directories) feeding the real engine
+// against a real MongoDB/DocumentDB (TANGO_TEST_MONGO_URI), through both entry
+// points (Engine.File and the cli role's RunFile). The second halves are the
+// idempotency assertion: file import has no checkpoint, so a re-run re-imports
 // every line, and the event/user write models must converge — identical
 // counts, byte-identical event docs ($setOnInsert), identical user data fields
 // (only the $max-guarded _ts ordering meta may advance). Dead letters are
@@ -27,23 +27,26 @@ import (
 	clirole "github.com/aura-studio/tango/internal/role/cli"
 )
 
-// writeSampleLogs splits sampleLines across two matched .log files and plants
-// one unmatched .txt decoy, returning the glob pattern. Expected ingestion
-// result equals verifyCounts: 4 events, 1 user, 1 dead letter.
-func writeSampleLogs(t *testing.T) string {
+// writeSampleLogs splits sampleLines across two .log files and plants one
+// unlisted decoy, returning the explicit paths of the two .log files (the decoy
+// is not returned, so it must not import). Expected ingestion result equals
+// verifyCounts: 4 events, 1 user, 1 dead letter.
+func writeSampleLogs(t *testing.T) []string {
 	t.Helper()
 	dir := t.TempDir()
 	lines := sampleLines()
-	write := func(name string, ls []string) {
+	write := func(name string, ls []string) string {
 		t.Helper()
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(strings.Join(ls, "\n")+"\n"), 0o644); err != nil {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(strings.Join(ls, "\n")+"\n"), 0o644); err != nil {
 			t.Fatalf("write %s: %v", name, err)
 		}
+		return p
 	}
-	write("a.log", lines[:3])
-	write("b.log", lines[3:])
+	a := write("a.log", lines[:3])
+	b := write("b.log", lines[3:])
 	write("decoy.txt", []string{`{"#type":"track","#event_name":"never","#time":"2024-01-01","#uuid":"it-never","#account_id":"acc"}`})
-	return filepath.Join(dir, "*.log")
+	return []string{a, b}
 }
 
 // rawDoc fetches the single document matching filter as raw BSON bytes, the
@@ -57,14 +60,14 @@ func rawDoc(t *testing.T, db *mongo.Database, coll string, filter bson.M) bson.R
 	return raw
 }
 
-// TestUploadFileEngineImportIsIdempotent feeds the engine's UploadFile face
-// from on-disk files and re-imports the same files: counts and documents must
-// come out identical (events upsert by #uuid, user fields are _ts-guarded).
-func TestUploadFileEngineImportIsIdempotent(t *testing.T) {
+// TestFileEngineImportIsIdempotent feeds the engine's File face from on-disk
+// files and re-imports the same files: counts and documents must come out
+// identical (events upsert by #uuid, user fields are _ts-guarded).
+func TestFileEngineImportIsIdempotent(t *testing.T) {
 	daoCfg, db, cleanup := freshDB(t)
 	defer cleanup()
 	ctx := context.Background()
-	pattern := writeSampleLogs(t)
+	paths := writeSampleLogs(t)
 
 	eng, err := api.New(ctx, daoCfg, nil, nil, nil)
 	if err != nil {
@@ -75,14 +78,14 @@ func TestUploadFileEngineImportIsIdempotent(t *testing.T) {
 		t.Fatalf("EnsureIndexes: %v", err)
 	}
 
-	// Pattern-less call: rejected before any source/database work.
-	if _, err := eng.UploadFile(ctx, &api.UploadFileConfig{}); err == nil {
-		t.Fatal("UploadFile with no patterns succeeded, want logPattern-required error")
+	// Path-less call: rejected before any source/database work.
+	if _, err := eng.File(ctx, &api.FileConfig{}); err == nil {
+		t.Fatal("File with no paths succeeded, want paths-required error")
 	}
 
-	res, err := eng.UploadFile(ctx, &api.UploadFileConfig{LogPattern: []string{pattern}})
+	res, err := eng.File(ctx, &api.FileConfig{Paths: paths})
 	if err != nil {
-		t.Fatalf("UploadFile: %v", err)
+		t.Fatalf("File: %v", err)
 	}
 	if res.Lines != 6 || res.EventWrites != 4 || res.UserWrites != 1 || res.DeadLetters != 1 {
 		t.Fatalf("first import result = %+v, want lines=6 event=4 user=1 dead=1", res)
@@ -97,9 +100,9 @@ func TestUploadFileEngineImportIsIdempotent(t *testing.T) {
 	// Re-import: full re-read (no checkpoint). Events and users must not
 	// change; dead letters are append-only diagnostics (an invalid line has no
 	// uuid to converge on), so the re-run adds one more.
-	res2, err := eng.UploadFile(ctx, &api.UploadFileConfig{LogPattern: []string{pattern}})
+	res2, err := eng.File(ctx, &api.FileConfig{Paths: paths})
 	if err != nil {
-		t.Fatalf("UploadFile re-run: %v", err)
+		t.Fatalf("File re-run: %v", err)
 	}
 	if res2.Lines != 6 {
 		t.Fatalf("re-run lines = %d, want 6 (no checkpoint, full re-read)", res2.Lines)
@@ -147,24 +150,24 @@ func splitUserTS(t *testing.T, raw bson.Raw) (bson.M, int64) {
 	return doc, ts
 }
 
-// TestUploadFileCliRoleAcrossModes runs the cli role's uploadfile path (the
-// function=uploadfile core) across the three upload strategies, re-importing
-// under each to pin the idempotent convergence.
-func TestUploadFileCliRoleAcrossModes(t *testing.T) {
+// TestFileCliRoleAcrossModes runs the cli role's file path (the function=file
+// core) across the three upload strategies, re-importing under each to pin the
+// idempotent convergence.
+func TestFileCliRoleAcrossModes(t *testing.T) {
 	for _, mode := range []process.Mode{process.ModeSingle, process.ModeBatch, process.ModePipeline} {
 		mode := mode
 		t.Run(string(mode), func(t *testing.T) {
 			daoCfg, db, cleanup := freshDB(t)
 			defer cleanup()
 			ctx := context.Background()
-			pattern := writeSampleLogs(t)
+			paths := writeSampleLogs(t)
 			procCfg := &process.Config{Mode: string(mode)}
-			ufCfg := &api.UploadFileConfig{LogPattern: []string{pattern}}
+			fCfg := &api.FileConfig{Paths: paths}
 
 			for run := 1; run <= 2; run++ {
-				res, err := clirole.RunUploadFile(ctx, daoCfg, procCfg, nil, ufCfg)
+				res, err := clirole.RunFile(ctx, daoCfg, procCfg, nil, fCfg)
 				if err != nil {
-					t.Fatalf("run %d: RunUploadFile: %v", run, err)
+					t.Fatalf("run %d: RunFile: %v", run, err)
 				}
 				if res.Lines != 6 {
 					t.Fatalf("run %d: lines = %d, want 6", run, res.Lines)

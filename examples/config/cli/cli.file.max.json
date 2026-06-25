@@ -28,13 +28,13 @@
     }
   },
   "source": {
-    "uploadfile": {
-      "logPattern": ["/var/log/app/ta.*.log"],
+    "file": {
+      "paths": ["/var/log/app/ta.2024-01-01.log", "/var/log/app/ta.2024-01-02.log"],
       "maxLineBytes": 10485760
     }
   },
   "role": {
     "mode": "cli",
-    "cli": { "function": "uploadfile" }
+    "cli": { "function": "file" }
   }
 }

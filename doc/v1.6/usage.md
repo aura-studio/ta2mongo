@@ -17,7 +17,7 @@ tango --role.mode gateway       # 角色也可用 flag / 环境变量覆盖（�
   - 文件键：`dao.mongo.uri`
   - 环境变量：嵌套键 `.` 转 `_` 并大写加 `TANGO_` 前缀 → `TANGO_DAO_MONGO_URI`
   - 命令行：flag 名即键路径 → `--dao.mongo.uri`
-  - **配置键路径 = 包路径**（`internal/` 下）：`logging.*`、`dao.mongo.*`、`dao.store.*`、`parser.filter.*`、`source.tailer.*`、`source.uploadfile.*`、`process.*`、`role.gateway.*`。
+  - **配置键路径 = 包路径**（`internal/` 下）：`logging.*`、`dao.mongo.*`、`dao.store.*`、`parser.filter.*`、`source.tailer.*`、`source.file.*`、`process.*`、`role.gateway.*`。
 - **唯一的例外**：`--config <path>`（配置文件路径，`.yaml`/`.yml`/`.json`）只有命令行这一种途径；它不是配置键。留空时在二进制同级目录查找 `tango.{yaml,yml,json}`，缺失则静默回退到默认值 + 环境变量 + flag。
 - 不要混淆两个 `mode`：`role.mode` 选**运行角色**（daemon/gateway/cli）；`process.mode` 选**上传策略**（`single`/`batch`/`pipeline`，默认 `batch`，CLI/gateway/api 共用）。
 
@@ -25,7 +25,7 @@ tango --role.mode gateway       # 角色也可用 flag / 环境变量覆盖（�
 |---|---|
 | `daemon`（默认） | `logging` · `dao` · `parser` · `source` · `process` |
 | `gateway` | `logging` · `dao` · `parser` · `process` · `role.gateway` |
-| `cli` | `logging` · `dao` · `parser` · `process` · `role.cli`（`function=uploadfile` 时另加 `source.uploadfile`；`function=ejson`/`sql` 时仅 `logging` · `dao` · `role.cli`） |
+| `cli` | `logging` · `dao` · `parser` · `process` · `role.cli`（`function=file` 时另加 `source.file`；`function=ejson`/`sql` 时仅 `logging` · `dao` · `role.cli`） |
 
 ## Daemon Service
 
@@ -151,40 +151,40 @@ cat events.ndjson | tango --role.mode cli --process.mode batch --dao.mongo.uri m
 `process.mode` 取 `single` / `batch` / `pipeline`（默认 `batch`），可来自配置文件、`TANGO_PROCESS_MODE` 或 `--process.mode`。
 `role.mode=cli` 是 gateway `POST /upload` 的控制台等价入口（从 stdin 读取）。
 
-cli 角色由 `role.cli.function` 选功能：`upload`（默认，上面这种日志上报）、`uploadfile`（存量文件一次性导入，
+cli 角色由 `role.cli.function` 选功能：`upload`（默认，上面这种日志上报）、`file`（存量文件一次性导入，
 **不读 stdin**，见下节）、`ejson`（Mongo Data API，读一个 EJSON 请求、输出 EJSON 响应，等价 `POST /ejson`）或
 `sql`（SQL Data API，读一条 SQL、输出 EJSON 结果，等价 `POST /sql`）或 `config`（cfgsync 配置发布，
 读一个配置文档、输出 `{version}`，等价 `POST /config`；见 §cfgsync 一节）。
 
-## CLI UploadFile（存量文件一次性导入）
+## CLI File（存量文件一次性导入）
 
 ```bash
-# 把 source.uploadfile.logPattern 匹配到的存量日志文件一次性灌入上报链路，打印统计 JSON
+# 把 source.file.paths 匹配到的存量日志文件一次性灌入上报链路，打印统计 JSON
 # 注意：不读 stdin，没有管道——输入来自 logPattern 匹配的文件
-tango --config cli.uploadfile.max.yaml
+tango --config cli.file.max.yaml
 ```
 
-`role.cli.function=uploadfile`（v1.6 新增）是 `upload` 的**存量文件版**：输入不来自 stdin，而是
-`source.uploadfile.logPattern`（glob 列表，**tailer 同款语法**：`**`、跨平台路径）匹配到的已落盘文件——
-按发现顺序（逐 pattern、字典序）逐文件**从头读到 EOF**（跳过空行），读完即退出，统计 JSON
+`role.cli.function=file`（v1.6 新增）是 `upload` 的**存量文件版**：输入不来自 stdin，而是
+`source.file.paths`（**显式文件路径列表**——无 glob、无目录、不依赖 tailer）列出的已落盘文件——
+按列表顺序逐文件**从头读到 EOF**（跳过空行；目录路径会被跳过、不展开），读完即退出，统计 JSON
 （与 `upload` 同形：行数 / user / event / 死信等）写 stdout。与其它键一样可经
-`TANGO_SOURCE_UPLOADFILE_LOGPATTERN`（**逗号分隔**多 glob）/ `--source.uploadfile.logPattern` 覆盖。
+`TANGO_SOURCE_FILE_PATHS`（**逗号分隔**多个路径）/ `--source.file.paths` 覆盖。
 完整可运行样例见 [`examples/config/cli/`](../../examples/config/cli) 的
-`cli.uploadfile.{min,max}.{yaml,json}`（min = `role.mode` + `role.cli.function` + `dao.mongo.uri` +
-`source.uploadfile.logPattern` 四个 required 键；max 含 `logging`/`parser`/`process`/`maxLineBytes` 逐字段说明）。
+`cli.file.{min,max}.{yaml,json}`（min = `role.mode` + `role.cli.function` + `dao.mongo.uri` +
+`source.file.paths` 四个 required 键；max 含 `logging`/`parser`/`process`/`maxLineBytes` 逐字段说明）。
 
-- **缺 `source.uploadfile.logPattern` 即 fail-fast**：连 Mongo 之前就报
-  `cli: function=uploadfile requires source.uploadfile.logPattern`。
+- **缺 `source.file.paths` 即 fail-fast**：连 Mongo 之前就报
+  `cli: function=file requires source.file.paths`。
 - **无 checkpoint / 断点续传**：重跑全量重导，幂等由写模型**按操作类型**保证——event 按 `#uuid` upsert
   （`$setOnInsert`）重导零新增；`user_set`/`user_setOnce`/`user_uniq_append` 收敛（重导只推进 `$max`
   保护的 `_ts` 元字段）；但 **`user_add`（`$inc`）/`user_append`（`$push`）不幂等**——`_ts` 是摄取时刻、
   `$lte` 守卫只防乱序不防重放，重跑会**重复累加/追加**，含此类操作的存量文件不宜盲目重跑；
   `dead_letter` 是 append-only 诊断集合，**每重跑一遍会再涨一份**。
-- **坏行/坏文件不拖垮整次导入**：单行超 `source.uploadfile.maxLineBytes`（默认 10485760 = 10MB，对齐 tailer）
+- **坏行/坏文件不拖垮整次导入**：单行超 `source.file.maxLineBytes`（默认 10485760 = 10MB，对齐 tailer）
   时记日志（`bufio.ErrTooLong`）并跳过**该文件剩余部分**（超限行不会入库），打不开的文件同样记日志跳过，
   其余匹配文件继续导入。
-- **边界**：`source.tailer`（daemon）= 常驻追**新增**；`cli upload` = stdin 喂行；`uploadfile` = **存量**文件、
-  有限运行（读完即止）。gateway / daemon **不设** uploadfile 入口（v1.6 需求 §7），也没有新增集合。
+- **边界**：`source.tailer`（daemon）= 常驻追**新增**；`cli upload` = stdin 喂行；`file` = **存量**文件、
+  有限运行（读完即止）。gateway / daemon **不设** file 入口（v1.6 需求 §7），也没有新增集合。
 
 ## cfgsync 配置发布与运行时热替换（`/config` · cli `config` · `api.PublishConfig`）
 
@@ -255,21 +255,21 @@ eng.EnsureIndexes(ctx)
 res, _ := eng.Upload(ctx, lines)
 ```
 
-v1.6 起同一引擎多一个存量文件导入面：嵌入方直接调 `eng.UploadFile(ctx, &api.UploadFileConfig{LogPattern: []string{...}})`
-（`api.UploadFileConfig` 是 `source/uploadfile` 配置的类型别名，套路同 `DaoConfig`；空 `LogPattern` 在任何
-source / 数据库动作之前即被拒绝：`api: uploadfile logPattern is required`）。仓库外的使用方走**公开 `client` 包**
-（它只依赖引擎、从不 import `internal/source`），glob 模式在**调用时**传：
+v1.6 起同一引擎多一个存量文件导入面：嵌入方直接调 `eng.File(ctx, &api.FileConfig{Paths: []string{...}})`
+（`api.FileConfig` 是 `source/file` 配置的类型别名，套路同 `DaoConfig`；空 `Paths` 在任何
+source / 数据库动作之前即被拒绝：`api: file paths is required`）。仓库外的使用方走**公开 `client` 包**
+（它只依赖引擎、从不 import `internal/source`），文件路径在**调用时**传：
 
 ```go
 import "github.com/aura-studio/tango/client"
 
 c, _ := client.New(
     client.WithDaoMongoURI("mongodb://localhost:27017/tango"),
-    client.WithSourceUploadFileMaxLineBytes(10485760), // 可选：单行上限（== source.uploadfile.maxLineBytes，默认 10MB）
+    client.WithSourceFileMaxLineBytes(10485760), // 可选：单行上限（== source.file.maxLineBytes，默认 10MB）
 )
 defer c.Close()
 
-res, _ := c.UploadFile(ctx, "/var/log/app/ta.*.log") // 无 checkpoint：重跑全量重导（event/user_set 类收敛；含 user_add/user_append 的文件勿盲目重跑）
+res, _ := c.File(ctx, "/var/log/app/ta.2024-01-01.log", "/var/log/app/ta.2024-01-02.log") // 显式路径（无 glob/目录）；无 checkpoint：重跑全量重导（event/user_set 类收敛；含 user_add/user_append 的文件勿盲目重跑）
 ```
 
 同一引擎也暴露 Mongo Data API（与上报共用连接，不需要 process/parser 配置；类型经 `dao` 根包中转）：

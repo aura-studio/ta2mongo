@@ -37,12 +37,12 @@ func RunUpload(ctx context.Context, daoCfg *dao.Config, procCfg *process.Config,
 	return eng.Run(ctx, source.NewReader(in))
 }
 
-// RunUploadFile bulk imports the already-on-disk log files matching ufCfg's
-// glob patterns (source.uploadfile.*) once and ingests them with procCfg.Mode,
-// returning per-run statistics. It builds an api engine, ensures indexes, runs
-// the finite uploadfile source to completion, and closes the engine. It backs
-// the cli role's function=uploadfile.
-func RunUploadFile(ctx context.Context, daoCfg *dao.Config, procCfg *process.Config, parserCfg *parser.Config, ufCfg *api.UploadFileConfig) (api.Result, error) {
+// RunFile bulk imports the explicitly-listed on-disk log files in fCfg.Paths
+// (source.file.*) once and ingests them with procCfg.Mode, returning per-run
+// statistics. It builds an api engine, ensures indexes, runs the finite file
+// source to completion, and closes the engine. It backs the cli role's
+// function=file.
+func RunFile(ctx context.Context, daoCfg *dao.Config, procCfg *process.Config, parserCfg *parser.Config, fCfg *api.FileConfig) (api.Result, error) {
 	eng, err := api.New(ctx, daoCfg, procCfg, parserCfg, nil)
 	if err != nil {
 		return api.Result{}, err
@@ -52,7 +52,7 @@ func RunUploadFile(ctx context.Context, daoCfg *dao.Config, procCfg *process.Con
 	if err := eng.EnsureIndexes(ctx); err != nil {
 		return api.Result{}, err
 	}
-	return eng.UploadFile(ctx, ufCfg)
+	return eng.File(ctx, fCfg)
 }
 
 // RunEJSON reads a single Extended-JSON Mongo Data API request from in, executes

@@ -33,13 +33,12 @@ type ProcessConfig = process.Config
 // document id / watcher settings). Alias for cfgsync.Config.
 type CfgsyncConfig = cfgsync.Config
 
-// UploadFileConfig is the source.uploadfile.* module config (the one-shot
-// file-import source's glob patterns and line cap). Alias for the source
-// facade's UploadFileConfig (itself an alias for uploadfile.Config — DAO-6:
-// the role layer names source types through the facade only), so an embedder
-// hands a populated value to Engine.UploadFile without importing the source
-// domain.
-type UploadFileConfig = source.UploadFileConfig
+// FileConfig is the source.file.* module config (the one-shot file-import
+// source's explicit paths and line cap). Alias for the source facade's
+// FileConfig (itself an alias for file.Config — DAO-6: the role layer names
+// source types through the facade only), so an embedder hands a populated value
+// to Engine.File without importing the source domain.
+type FileConfig = source.FileConfig
 
 // Tree is the resolved unified-config tree NewFromTree slices its module
 // branches from. Alias for cfgtree.Tree.

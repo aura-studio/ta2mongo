@@ -1,8 +1,8 @@
-// Facade-contract test for the v1.6.0 UploadFile face: the client must bulk
-// import the files matching its call-time glob patterns through the engine
-// (the same parse → filter → identity-resolve → write path as Upload), reject
-// a pattern-less call before any database work, and keep the public surface at
-// plain Go types. Same conventions as query_facade_test.go: real Mongo gated
+// Facade-contract test for the File face: the client must bulk import its
+// call-time explicit file paths through the engine (the same parse → filter →
+// identity-resolve → write path as Upload), reject a path-less call before any
+// database work, and keep the public surface at plain Go types. No glob, no
+// directories. Same conventions as query_facade_test.go: real Mongo gated
 // by ultraPingMongo (TANGO_TEST_MONGO_URI), throwaway database injected into
 // the URI path and dropped via an independent verify connection.
 package client
@@ -21,10 +21,10 @@ import (
 	mopt "go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
-func TestUploadFileFacade(t *testing.T) {
+func TestFileFacade(t *testing.T) {
 	ultraPingMongo(t)
 
-	dbName := fmt.Sprintf("tango_client_uploadfile_%d_%d", time.Now().UnixNano(), rand.Intn(100000))
+	dbName := fmt.Sprintf("tango_client_file_%d_%d", time.Now().UnixNano(), rand.Intn(100000))
 	uri := ultraWithDBName(ultraMongoURI(), dbName)
 
 	vc, err := mongo.Connect(mopt.Client().ApplyURI(uri))
@@ -49,21 +49,23 @@ func TestUploadFileFacade(t *testing.T) {
 		t.Fatalf("EnsureIndexes: %v", err)
 	}
 
-	// A pattern-less call must be rejected by the engine before any source or
+	// A path-less call must be rejected by the engine before any source or
 	// database work.
-	if _, err := c.UploadFile(ctx); err == nil || !strings.Contains(err.Error(), "logPattern") {
-		t.Fatalf("UploadFile() without patterns: err = %v, want logPattern-required error", err)
+	if _, err := c.File(ctx); err == nil || !strings.Contains(err.Error(), "paths") {
+		t.Fatalf("File() without paths: err = %v, want paths-required error", err)
 	}
 
-	// Two matched log files (4 track + 1 user_set + 1 dead letter) and one
-	// unmatched file that must not import.
+	// Two listed log files (4 track + 1 user_set + 1 dead letter) and one
+	// unlisted file that must not import (explicit paths only — no glob).
 	dir := t.TempDir()
-	writeTempLog(t, filepath.Join(dir, "a.log"),
+	a := filepath.Join(dir, "a.log")
+	b := filepath.Join(dir, "b.log")
+	writeTempLog(t, a,
 		`{"#type":"track","#event_name":"e1","#time":"2024-01-01","#uuid":"uf-e1","#account_id":"acc"}`,
 		`{"#type":"track","#event_name":"e2","#time":"2024-01-01","#uuid":"uf-e2","#account_id":"acc"}`,
 		"this is not json",
 	)
-	writeTempLog(t, filepath.Join(dir, "b.log"),
+	writeTempLog(t, b,
 		`{"#type":"track","#event_name":"e3","#time":"2024-01-01","#uuid":"uf-e3","#account_id":"acc"}`,
 		`{"#type":"track","#event_name":"e4","#time":"2024-01-01","#uuid":"uf-e4","#account_id":"acc"}`,
 		`{"#type":"user_set","#time":"2024-01-01","#uuid":"uf-u1","#account_id":"acc","properties":{"name":"Alice"}}`,
@@ -72,12 +74,12 @@ func TestUploadFileFacade(t *testing.T) {
 		`{"#type":"track","#event_name":"never","#time":"2024-01-01","#uuid":"uf-never","#account_id":"acc"}`,
 	)
 
-	res, err := c.UploadFile(ctx, filepath.Join(dir, "*.log"))
+	res, err := c.File(ctx, a, b)
 	if err != nil {
-		t.Fatalf("UploadFile: %v", err)
+		t.Fatalf("File: %v", err)
 	}
 	if res.Lines != 6 || res.EventWrites != 4 || res.UserWrites != 1 || res.DeadLetters != 1 {
-		t.Fatalf("UploadFile result = %+v, want lines=6 event=4 user=1 dead=1", res)
+		t.Fatalf("File result = %+v, want lines=6 event=4 user=1 dead=1", res)
 	}
 	if n := ultraCount(t, db, "event"); n != 4 {
 		t.Fatalf("event count = %d, want 4 (skip.txt must not import)", n)
@@ -88,9 +90,9 @@ func TestUploadFileFacade(t *testing.T) {
 
 	// Re-import: no checkpoint means everything streams again (same line
 	// count), but the idempotent write models keep the database unchanged.
-	res2, err := c.UploadFile(ctx, filepath.Join(dir, "*.log"))
+	res2, err := c.File(ctx, a, b)
 	if err != nil {
-		t.Fatalf("UploadFile re-run: %v", err)
+		t.Fatalf("File re-run: %v", err)
 	}
 	if res2.Lines != 6 {
 		t.Fatalf("re-run lines = %d, want 6 (full re-read, no checkpoint)", res2.Lines)

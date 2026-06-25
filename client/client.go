@@ -1,7 +1,7 @@
 // Package client is the public, redis-go-style client for tango's log-ingestion
 // engine. Construct a Client with New plus functional With* options, then feed
 // it ThinkingData log lines via Upload — or bulk import already-on-disk log
-// files via UploadFile (glob patterns, one-shot, no checkpoint).
+// files via File (explicit file paths, one-shot, no checkpoint).
 //
 // It is a thin, stable facade over the internal ingestion engine
 // (internal/role/api): callers depend only on this interface and never on
@@ -61,18 +61,17 @@ type Client interface {
 	// are routed to dead_letter (counted in Result) rather than erroring; a
 	// non-nil error indicates a bulk-write failure or an unknown mode.
 	Upload(ctx context.Context, lines ...string) (Result, error)
-	// UploadFile bulk imports the already-on-disk TA log files matching the
-	// given glob patterns (the tailer's pattern syntax, including ** and
-	// cross-platform paths) once — every file is read start to EOF through the
-	// configured strategy, then the run ends. At least one pattern is
-	// required; patterns that match no files yield an empty Result. There is
-	// no checkpoint: re-running re-imports everything; events (uuid upsert)
-	// and user_set-style ops converge through the write models, while
-	// accumulating ops (user_add/$inc, user_append/$push) re-apply on every
-	// run — don't blindly re-run files carrying those. The per-line error
+	// File bulk imports the explicitly-listed on-disk TA log files once — every
+	// file is read start to EOF through the configured strategy, then the run
+	// ends. Paths are taken verbatim: NO glob, NO directories (a directory path
+	// is skipped, not expanded), no tailer dependency. At least one path is
+	// required. There is no checkpoint: re-running re-imports everything; events
+	// (uuid upsert) and user_set-style ops converge through the write models,
+	// while accumulating ops (user_add/$inc, user_append/$push) re-apply on
+	// every run — don't blindly re-run files carrying those. The per-line error
 	// contract matches Upload. The line cap defaults to 10 MB; tune it with
-	// WithSourceUploadFileMaxLineBytes.
-	UploadFile(ctx context.Context, patterns ...string) (Result, error)
+	// WithSourceFileMaxLineBytes.
+	File(ctx context.Context, paths ...string) (Result, error)
 	// EnsureIndexes creates all required MongoDB indexes (idempotent).
 	EnsureIndexes(ctx context.Context) error
 	// PublishConfig validates and publishes a runtime config document to the
@@ -112,11 +111,11 @@ type Client interface {
 
 type client struct {
 	engine *api.Engine
-	// uploadfile carries the source.uploadfile.* tuning (maxLineBytes) the
-	// UploadFile face combines with its call-time patterns; the engine
+	// file carries the source.file.* tuning (maxLineBytes) the
+	// File face combines with its call-time paths; the engine
 	// constructs the source from it (the client never touches the source
 	// domain).
-	uploadfile api.UploadFileConfig
+	file api.FileConfig
 }
 
 // New connects to MongoDB and builds a Client from the given options.
@@ -140,7 +139,7 @@ func New(opts ...Option) (Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &client{engine: engine, uploadfile: o.uploadfile}, nil
+	return &client{engine: engine, file: o.file}, nil
 }
 
 func (c *client) Upload(ctx context.Context, lines ...string) (Result, error) {
@@ -157,10 +156,10 @@ func (c *client) Upload(ctx context.Context, lines ...string) (Result, error) {
 	}, nil
 }
 
-func (c *client) UploadFile(ctx context.Context, patterns ...string) (Result, error) {
-	cfg := c.uploadfile // copy: the call-time patterns never mutate the client
-	cfg.LogPattern = patterns
-	res, err := c.engine.UploadFile(ctx, &cfg)
+func (c *client) File(ctx context.Context, paths ...string) (Result, error) {
+	cfg := c.file // copy: the call-time paths never mutate the client
+	cfg.Paths = paths
+	res, err := c.engine.File(ctx, &cfg)
 	if err != nil {
 		return Result{}, err
 	}

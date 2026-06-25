@@ -22,4 +22,4 @@ dao:                              # internal/dao
 role:                             # internal/role
   mode: cli                       # [required] 选择 cli 角色（默认是 daemon）
   cli:                            # internal/role/cli
-    function: sql                 # [required(本样例)]（默认 upload）upload / uploadfile / ejson / sql / config / configget
+    function: sql                 # [required(本样例)]（默认 upload）upload / file / ejson / sql / config / configget

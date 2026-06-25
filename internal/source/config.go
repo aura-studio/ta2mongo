@@ -4,8 +4,8 @@ import (
 	"fmt"
 
 	"github.com/aura-studio/tango/internal/cfgtree"
+	"github.com/aura-studio/tango/internal/source/file"
 	"github.com/aura-studio/tango/internal/source/tailer"
-	"github.com/aura-studio/tango/internal/source/uploadfile"
 )
 
 // FromTree decodes the source.* branch of t into a Config, applies defaults and
@@ -29,9 +29,9 @@ func FromTree(t cfgtree.Tree) (*Config, error) {
 type Config struct {
 	// Tailer configures the file-tailing source (file key source.tailer.*).
 	Tailer *tailer.Config `mapstructure:"tailer"`
-	// UploadFile configures the one-shot file-import source (file key
-	// source.uploadfile.*).
-	UploadFile *uploadfile.Config `mapstructure:"uploadfile"`
+	// File configures the one-shot file-import source (config key
+	// source.file.*): explicit file paths, no glob, no directories.
+	File *file.Config `mapstructure:"file"`
 }
 
 // Validate delegates to the configured source sub-configs.
@@ -47,7 +47,7 @@ func (c *Config) Validate() error {
 // RegisterDefaults cascades default-key registration to the source sub-configs.
 func (c *Config) RegisterDefaults(set func(key string, value any), prefix string) {
 	new(tailer.Config).RegisterDefaults(set, prefix+".tailer")
-	new(uploadfile.Config).RegisterDefaults(set, prefix+".uploadfile")
+	new(file.Config).RegisterDefaults(set, prefix+".file")
 }
 
 // ApplyDefaults allocates child configs and lets them own their defaults.
@@ -56,8 +56,8 @@ func (c *Config) ApplyDefaults() {
 		c.Tailer = &tailer.Config{}
 	}
 	c.Tailer.ApplyDefaults()
-	if c.UploadFile == nil {
-		c.UploadFile = &uploadfile.Config{}
+	if c.File == nil {
+		c.File = &file.Config{}
 	}
-	c.UploadFile.ApplyDefaults()
+	c.File.ApplyDefaults()
 }

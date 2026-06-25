@@ -17,10 +17,11 @@ import (
 // Role is the cli runtime role (role.mode = cli). With role.cli.function=upload
 // (the default) it is the console equivalent of the gateway /upload — read TA log
 // lines from stdin, ingest them with the configured process.mode, and print the
-// run statistics as JSON to stdout. With role.cli.function=uploadfile it bulk
-// imports the already-on-disk files matching source.uploadfile.logPattern once
-// (no checkpoint; re-runs re-import everything — events and user_set-style ops
-// converge, accumulating user_add/user_append re-apply) and prints the same
+// run statistics as JSON to stdout. With role.cli.function=file it bulk
+// imports the explicitly-listed on-disk files in source.file.paths once
+// (no glob, no directories, no checkpoint; re-runs re-import everything — events
+// and user_set-style ops converge, accumulating user_add/user_append re-apply)
+// and prints the same
 // statistics. With role.cli.function=ejson it is the console
 // equivalent of POST /ejson — read one Extended-JSON Mongo Data API request from
 // stdin and write the Extended-JSON response to stdout. With
@@ -74,16 +75,16 @@ func (Role) Run(ctx context.Context, cfg cfgtree.Tree) error {
 		return err
 	}
 
-	if cliCfg.Function == FunctionUploadFile {
+	if cliCfg.Function == FunctionFile {
 		srcCfg, err := source.FromTree(cfg)
 		if err != nil {
 			return err
 		}
-		// Fail fast before connecting Mongo (the daemon's logPattern precedent).
-		if len(srcCfg.UploadFile.LogPattern) == 0 {
-			return fmt.Errorf("cli: function=uploadfile requires source.uploadfile.logPattern")
+		// Fail fast before connecting Mongo.
+		if len(srcCfg.File.Paths) == 0 {
+			return fmt.Errorf("cli: function=file requires source.file.paths")
 		}
-		res, err := RunUploadFile(ctx, daoCfg, procCfg, parserCfg, srcCfg.UploadFile)
+		res, err := RunFile(ctx, daoCfg, procCfg, parserCfg, srcCfg.File)
 		if err != nil {
 			return err
 		}

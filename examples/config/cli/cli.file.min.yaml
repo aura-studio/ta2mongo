@@ -1,0 +1,18 @@
+# cli.file.min.yaml — `tango --config cli.file.min.yaml` 最精简配置：只含 required 字段。
+# 其余字段全部走默认值（详见同目录 cli.file.max.yaml 的逐字段说明）。
+# 运行角色由 role.mode 选择；cli 必须显式指定。role.cli.function 默认是 upload，跑 file 必须显式设为 file。
+# file = 把 source.file.paths 列出的存量日志文件一次性灌入上报链路（读到 EOF 即止，不读 stdin）。
+# 仅接收显式文件路径：不支持 glob、不支持目录、不依赖 tailer。
+# 无 checkpoint/断点续传：重跑全量重导，幂等由写模型保证（event 按 uuid upsert、user 按 _ts 守卫）。
+role:
+  mode: cli                                # [required] daemon / gateway / cli
+  cli:
+    function: file                         # [required] 切到存量文件导入（不写则默认 upload）
+dao:
+  mongo:
+    uri: mongodb://localhost:27017/tango   # [required]
+source:
+  file:
+    paths:                                 # [required] 显式文件路径列表（不支持 glob/目录）
+      - /var/log/app/ta.2024-01-01.log
+      - /var/log/app/ta.2024-01-02.log

@@ -214,20 +214,19 @@ func (c *Engine) Upload(ctx context.Context, lines []string) (Result, error) {
 	return c.Run(ctx, source.NewLines(lines))
 }
 
-// UploadFile imports the already-on-disk log files matching cfg's glob
-// patterns once (the finite uploadfile source) and runs them with
-// c.procCfg.Mode — the file-backed convenience over Run, backing cli
-// function=uploadfile and the public client facade (the source construction
-// sinks into the engine, so the client never touches the source domain).
-// There is no checkpoint: re-running re-imports everything; events and
-// user_set-style ops converge through the write models, while accumulating
-// ops (user_add/user_append) re-apply per run. cfg must carry at least one
-// pattern; patterns that match no files yield an empty Result.
-func (c *Engine) UploadFile(ctx context.Context, cfg *UploadFileConfig) (Result, error) {
-	if cfg == nil || len(cfg.LogPattern) == 0 {
-		return Result{}, fmt.Errorf("api: uploadfile logPattern is required")
+// File imports the explicitly-listed on-disk log files once (the finite file
+// source: no glob, no directories) and runs them with c.procCfg.Mode — the
+// file-backed convenience over Run, backing cli function=file and the public
+// client facade (the source construction sinks into the engine, so the client
+// never touches the source domain). There is no checkpoint: re-running
+// re-imports everything; events and user_set-style ops converge through the
+// write models, while accumulating ops (user_add/user_append) re-apply per run.
+// cfg must carry at least one path; directory paths are skipped, not expanded.
+func (c *Engine) File(ctx context.Context, cfg *FileConfig) (Result, error) {
+	if cfg == nil || len(cfg.Paths) == 0 {
+		return Result{}, fmt.Errorf("api: file paths is required")
 	}
-	return c.Run(ctx, source.NewUploadFile(cfg))
+	return c.Run(ctx, source.NewFile(cfg))
 }
 
 // EJSON executes a Mongo Data API request against the engine's MongoDB

@@ -8,7 +8,7 @@
 
 v1.0→v1.1 的大收敛把 tango 从"全功能数据接入/控制平台"砍成纯上报引擎，删除了：
 公开 SDK、operator 命令树、taskqueue+worker、TA-OpenAPI backfill、临时 SQL 导入、
-remote config、文件单次上传+断点续传（`UploadFiles` / `_tango_fileupload`）。
+remote config、文件单次上传+断点续传（`Files` / `_tango_fileupload`）。
 
 其中多数能力已在前序版本按新架构回归：
 
@@ -22,7 +22,7 @@ remote config、文件单次上传+断点续传（`UploadFiles` / `_tango_fileup
 **v1.6 目标：加回剩余三块**，全部按现行架构（cfgtree / source / parser / process /
 dao / role）重设，不回滚 v1.0 实现：
 
-1. **uploadfile**（v1.6.0）——本地存量文件一次性导入（原"文件上传"的简化形态）。
+1. **file**（v1.6.0）——本地存量文件一次性导入（原"文件上传"的简化形态）。
 2. **backfill**（v1.6.1）——TA OpenAPI 历史数据回填（新域 `internal/backfill`）。
 3. **taskqueue + worker**（v1.6.2）——任务发布/消费控制面。
 
@@ -31,49 +31,50 @@ dao / role）重设，不回滚 v1.0 实现：
 
 ## 2. 已拍板的范围决策
 
-- 阶段顺序与 tag：**uploadfile=v1.6.0 → backfill=v1.6.1 → taskqueue+worker=v1.6.2**。
+- 阶段顺序与 tag：**file=v1.6.0 → backfill=v1.6.1 → taskqueue+worker=v1.6.2**。
   worker 的 handler 依赖 backfill runner，顺序不可换。
 - worker 任务类型**只留 `backfill`**：report-sync 被 cfgsync 取代故裁掉；v1.0 的
   SQL 导入任务语义不清也裁掉；TaskType 结构预留扩展。
 - **不恢复**同步执行的 `POST /backfill`（Lambda/ALB 超时模型下不可用）；gateway 只加
   `POST /publish/backfill`（发布任务，不执行）。
-- uploadfile **无 checkpoint / 无断点续传**：仿照 daemon 对文件的消费，纯有限 Source；
+- file **无 checkpoint / 无断点续传**：仿照 daemon 对文件的消费，纯有限 Source；
   重跑全量重导，幂等由写模型保证（event 按 uuid upsert、user 按 `_ts` 守卫）；
   不建 `_tango_fileupload` 集合。
-- 公开 `client/` SDK 新增三面，一律经 Engine 中转：`UploadFile` / `RunBackfill` /
+- 公开 `client/` SDK 新增三面，一律经 Engine 中转：`File` / `RunBackfill` /
   `PublishBackfillTask`。
 
 ### 能力矩阵（v1.6 全部新增入口）
 
 | 面 | 新增 |
 | --- | --- |
-| Engine（`internal/role/api`） | `UploadFile` / `RunBackfill` / `PublishBackfillTask` |
+| Engine（`internal/role/api`） | `File` / `RunBackfill` / `PublishBackfillTask` |
 | client/ 公开 SDK | 同上三面（经 Engine 中转，守 import 边界） |
-| cli | `function=uploadfile` / `function=backfill` / `function=publish` |
+| cli | `function=file` / `function=backfill` / `function=publish` |
 | gateway | `POST /publish/backfill`（仅发布） |
 | worker（新角色 `role.mode=worker`） | claim 循环 + backfill handler |
 | daemon | 不动 |
 
-## 3. v1.6.0 — uploadfile（本地存量文件一次性导入）
+## 3. v1.6.0 — file（本地存量文件一次性导入）
 
-**需求**：把一批已落盘的存量日志文件（glob 匹配）一次性灌入上报链路，读完即止。
-与既有能力的边界：tailer=常驻追新增；cli `upload`=stdin；uploadfile=存量文件、有限。
+**需求**：把一批已落盘的存量日志文件（**显式文件路径**）一次性灌入上报链路，读完即止。
+与既有能力的边界：tailer=常驻追新增；cli `upload`=stdin；file=存量文件、有限。
+**显式路径**：不支持 glob、不支持目录、不依赖 tailer。
 
 **设计**：
 
-- `internal/source/uploadfile` 实现 `source.Source`：glob 匹配文件 → 逐文件从头读到
-  EOF → 发完关 channel；ctx 取消即提前关闭。行读取语义对齐 tailer（maxLineBytes）。
-  无 dao 依赖（source 层保持干净），无新集合。
-- 配置 `source.uploadfile.*`：`logPattern` / `maxLineBytes`（键=包路径惯例）。
-- source 门面新增 `NewUploadFile(cfg)`，对齐 `NewLines` / `NewReader` / `NewTailer`。
-- `Engine.UploadFile(ctx)` = 构造 source → 复用 `Engine.Run`（薄封装）。
-- cli `role.cli.function=uploadfile`（config `Validate` 同步增加）+ client `UploadFile` 面。
+- `internal/source/file` 实现 `source.Source`：按 `paths` 列出的显式文件路径 → 逐文件从头读到
+  EOF → 发完关 channel；ctx 取消即提前关闭。目录路径 `os.Stat` 检出后跳过、不展开；**不 import tailer**。
+  行读取语义对齐 tailer（maxLineBytes，自有实现）。无 dao 依赖（source 层保持干净），无新集合。
+- 配置 `source.file.*`：`paths` / `maxLineBytes`（键=包路径惯例）。
+- source 门面新增 `NewFile(cfg)`，对齐 `NewLines` / `NewReader` / `NewTailer`。
+- `Engine.File(ctx)` = 构造 source → 复用 `Engine.Run`（薄封装）。
+- cli `role.cli.function=file`（config `Validate` 同步增加）+ client `File` 面。
 
 **验收**：
 
-- source 单测：glob / 行边界 / maxLineBytes / ctx 取消 / 空匹配。
+- source 单测：显式路径导入 / 目录跳过 / glob 字面不展开 / 行边界 / maxLineBytes / ctx 取消 / 空列表。
 - 集成：喂引擎写真实 DocumentDB；**重复导入幂等断言**（重跑结果一致）。
-- 文档（arch/usage/config）+ 示例 `examples/config/cli/cli.uploadfile.{min,max}.{yaml,json}`。
+- 文档（arch/usage/config）+ 示例 `examples/config/cli/cli.file.{min,max}.{yaml,json}`。
 - 门禁全绿（gofmt/vet/全量 test，连真实 DocumentDB）→ 合入 v1.6 → tag `v1.6.0`。
 
 ## 4. v1.6.1 — backfill（TA OpenAPI 历史回填，新域 `internal/backfill`）
@@ -158,7 +159,7 @@ dao / role）重设，不回滚 v1.0 实现：
 
 - worker 的 report-sync（被 cfgsync 取代）与 SQL 导入（语义待重新定义）任务类型。
 - 同步执行的 `POST /backfill`。
-- gateway / daemon 的 uploadfile 入口（仅 cli + api）。
-- uploadfile 的 checkpoint / 断点续传与 `_tango_fileupload` 集合。
+- gateway / daemon 的 file 入口（仅 cli + api）。
+- file 的 checkpoint / 断点续传与 `_tango_fileupload` 集合。
 - `/ingest` 接口（被 `/upload` 取代）。
 - `source/taapi` 占位的兑现（backfill 走页驱动，不经 Source 抽象）。

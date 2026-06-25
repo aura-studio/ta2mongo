@@ -1,13 +1,13 @@
-# cli.uploadfile.max.yaml — cli 角色 uploadfile 功能的全量配置（仅含该功能实际用到的段）。
+# cli.file.max.yaml — cli 角色 file 功能的全量配置（仅含该功能实际用到的段）。
 #
-# 启动：tango --config cli.uploadfile.max.yaml   （不读 stdin，输入来自 logPattern 匹配的文件）
+# 启动：tango --config cli.file.max.yaml   （不读 stdin，输入来自 source.file.paths 列出的文件）
 #
-# uploadfile = 把已落盘的存量日志文件（glob 匹配）一次性灌入上报链路：逐文件从头读到 EOF，
-# 读完即止，统计 JSON 写 stdout。与 daemon 的边界：tailer 常驻追新增，uploadfile 有限导存量。
+# file = 把已落盘的存量日志文件一次性灌入上报链路：逐文件从头读到 EOF，读完即止，统计 JSON 写 stdout。
+# 仅接收显式文件路径：不支持 glob、不支持目录、不依赖 tailer。与 daemon 的边界：tailer 常驻追新增，file 有限导存量。
 # 无 checkpoint/断点续传：重跑全量重导，幂等由写模型保证（event 按 uuid upsert、user 按 _ts 守卫）。
-# 实际用到：logging · dao · parser · process · source.uploadfile · role.cli；
+# 实际用到：logging · dao · parser · process · source.file · role.cli；
 # 不读 source.tailer（不追尾）、role.gateway、role.daemon —— 故此处不列。
-# 环境变量覆盖：键 . → _ 加 TANGO_ 前缀（source.uploadfile.logPattern → TANGO_SOURCE_UPLOADFILE_LOGPATTERN，[]string 用逗号分隔）。
+# 环境变量覆盖：键 . → _ 加 TANGO_ 前缀（source.file.paths → TANGO_SOURCE_FILE_PATHS，[]string 用逗号分隔）。
 
 logging:                          # internal/logging
   level: info                     # [optional]（默认 info）debug / info / warn / error
@@ -42,13 +42,14 @@ process:                          # internal/process（上传策略处理参数�
     deadLetterCap: 128            # [optional]（默认 128）每 worker 死信批容量
 
 source:                           # internal/source
-  uploadfile:                     # internal/source/uploadfile（一次性文件导入源）
-    logPattern:                   # [required] glob 列表（tailer 同款语法：**、跨平台路径），匹配要导入的存量文件
-      - /var/log/app/ta.*.log
-    maxLineBytes: 10485760        # [optional]（默认 10485760 = 10MB，对齐 tailer）单行最大字节；
-                                  # 超限行所在文件剩余部分跳过，其余匹配文件继续导入
+  file:                           # internal/source/file（一次性文件导入源；显式路径，无 glob/目录）
+    paths:                        # [required] 显式文件路径列表（逐文件读到 EOF；目录会被跳过，不展开）
+      - /var/log/app/ta.2024-01-01.log
+      - /var/log/app/ta.2024-01-02.log
+    maxLineBytes: 10485760        # [optional]（默认 10485760 = 10MB）单行最大字节；
+                                  # 超限行所在文件剩余部分跳过，其余文件继续导入
 
 role:                             # internal/role
   mode: cli                       # [required] 选择 cli 角色（默认是 daemon）
   cli:                            # internal/role/cli
-    function: uploadfile          # [required] 切到存量文件导入（默认 upload）upload / uploadfile / ejson / sql / config / configget
+    function: file                # [required] 切到存量文件导入（默认 upload）upload / file / ejson / sql / config / configget

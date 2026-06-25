@@ -1,13 +1,13 @@
 # tango 架构说明
 
-> 本文对应 **v1.6**（v1.6.0 落地 `uploadfile` 一次性文件导入，见 §9；正式需求见
+> 本文对应 **v1.6**（v1.6.0 落地 `file` 一次性文件导入，见 §9；正式需求见
 > [`requirements.md`](requirements.md)）。v1.5 的全部内容仍描述当前系统、原样保留。
 
 ## 0. 架构图
 
 > 以下三张图按 v1.4（[doc/v1.4](../v1.4)）的画法重绘 v1.5 形态，由
 > [`make_diagrams.py`](../v1.5/make_diagrams.py)（纯 Pillow）生成，改图后重跑该脚本即可。
-> v1.6.0 仅新增 uploadfile 源与四层入口（§9），图暂未重绘，仍沿用 v1.5 版本。
+> v1.6.0 仅新增 file 源与四层入口（§9），图暂未重绘，仍沿用 v1.5 版本。
 
 **图 0 · 架构总览**（分层：入口 → 角色 → 编排领域 cfgsync → 引擎根包 → 子包 → 基础）
 
@@ -35,8 +35,8 @@
 |---|---|---|---|
 | **Daemon** | `daemon` | tailer（文件） | 常驻：文件追尾、解析、filter、identity、流水线批量写 MongoDB |
 | **Gateway** | `gateway` | httpbody（HTTP 请求体） | 常驻 HTTP：`/upload`（按 `process.mode` 选 single/batch/pipeline）+ 独立的 `/ejson`（Mongo Data API）+ `/sql`（SQL Data API） |
-| **CLI** | `cli` | stdin（控制台）/ uploadfile（存量文件，`function=uploadfile`） | 一次性：`role.cli.function=upload` 对齐 `/upload`；`=uploadfile` 按 glob 一次性导入存量文件（不读 stdin，见 §9）；`=ejson` 对齐 `/ejson`；`=sql` 对齐 `/sql` |
-| **API** | （库，不可派发） | httpbody（调用方传入）/ uploadfile | 作为 Go 库被业务代码 import：`api.New(...).Upload(lines)` / `.UploadFile(cfg)` / `.EJSON(req)` / `.SQL(query)` |
+| **CLI** | `cli` | stdin（控制台）/ file（存量文件，`function=file`） | 一次性：`role.cli.function=upload` 对齐 `/upload`；`=file` 按显式路径一次性导入存量文件（不读 stdin，见 §9）；`=ejson` 对齐 `/ejson`；`=sql` 对齐 `/sql` |
+| **API** | （库，不可派发） | httpbody（调用方传入）/ file | 作为 Go 库被业务代码 import：`api.New(...).Upload(lines)` / `.File(cfg)` / `.EJSON(req)` / `.SQL(query)` |
 
 除上报外，三端还共享两个 Data API：**Mongo Data API**（`internal/dao/ejson`）与 **SQL Data API**
 （`internal/dao/sql`，代码自 `aura-studio/mongosql` 拷贝），均由 `dao` 根包经 `dao.go` 中转：
@@ -58,7 +58,7 @@ daemon 是长驻的 pipeline 流水线。api 只作为库使用，不由 `role.m
    - `internal/parser`（`Parser` 内嵌 `*talog.Parser`，持有 filter）整合 `parser/talog` + `parser/filter`
    - `internal/process`（`process.go`）整合 `process/core`（共享 Processor/stats）+ `process/single` + `process/batch` + `process/pipeline`
    - `internal/role` 是运行模式集合：`daemon` / `gateway` / `cli` / `api`
-   - `internal/source` 是数据来源集合：`source.Source` 契约（`Run(ctx) <-chan string`）+ `source/httpbody`（HTTP 请求体，gateway/api 用）/ `source/tailer`（文件追尾，daemon 用）/ `source/stdin`（控制台，cli 用）/ `source/uploadfile`（存量文件一次性导入，cli `function=uploadfile` / 库 / SDK 用，v1.6.0）/ `source/taapi`（占位）
+   - `internal/source` 是数据来源集合：`source.Source` 契约（`Run(ctx) <-chan string`）+ `source/httpbody`（HTTP 请求体，gateway/api 用）/ `source/tailer`（文件追尾，daemon 用）/ `source/stdin`（控制台，cli 用）/ `source/file`（存量文件一次性导入，cli `function=file` / 库 / SDK 用，v1.6.0）/ `source/taapi`（占位）
    - 6 个根包统一文件形态：`<包名>.go`（主类型/逻辑/包文档）+ `config.go`（该领域的 `Config` 聚合）。
      即 `logging/logging.go`、`dao/dao.go`、`parser/parser.go`、`source/source.go`、`process/process.go`、`role/role.go`，各配 `config.go`。
    - **该约定现已端到端强制：领域之间只经根包接口互相引用，任何包都不再 import 兄弟领域的子包**
@@ -66,13 +66,13 @@ daemon 是长驻的 pipeline 流水线。api 只作为库使用，不由 `role.m
      `role/* → parser/filter` 这类跨领域子包引用）。为此每个根包把子包里被跨领域复用的符号在 `<包名>.go` 里**重导出成门面**：
      - `dao.go`：`type Store = store.Store`（别名）+ `UserWriteModel`/`EventWriteModel`/`EventWriteModelSkipExisting`/`DeadLetterModel`（薄包装，返回值 `mongo.WriteModel` 是驱动类型，按设计不再隐藏）。
      - `parser.go`：`type Record = talog.Record`、`type RecordCategory = talog.RecordCategory`、`CategoryUser`/`CategoryEvent`、`EnvelopeKeys`（重导出）；过滤器经 `Parser.Filter()` 取 `*filter.Holder`，故消费方无需 import `parser/filter`。
-     - `source.go`：`NewLines`（httpbody）/`NewReader`（stdin）/`NewTailer`（tailer）/`NewUploadFile`（uploadfile）四个构造器门面，role 经它们建源。
+     - `source.go`：`NewLines`（httpbody）/`NewReader`（stdin）/`NewTailer`（tailer）/`NewFile`（file）四个构造器门面，role 经它们建源。
      唯一被允许的"跨界"是 `client → role/api`（公共门面包装引擎，见 §7）；领域**自身的**子包之间（如 `process/single → process/core`、`role/cli → role/api`）不受此限。
 2. **配置键路径 = 包路径；config 只产出一棵 Tree**：配置结构体下沉到各自模块并由领域根包聚合
    （`dao.Config` 聚合 `mongo`/`store`，`parser.Config` 聚合 `filter`，`process.Config` 聚合 `pipeline`，
-   `source.Config` 聚合 `tailer`/`uploadfile`，`role.Config` 聚合 `gateway`），使**每个文件键路径都等于消费它的包路径**（`internal/` 下）：
+   `source.Config` 聚合 `tailer`/`file`，`role.Config` 聚合 `gateway`），使**每个文件键路径都等于消费它的包路径**（`internal/` 下）：
    `logging.level`、`dao.mongo.uri`、`dao.store.maxElapsedTime`、`parser.filter.*`、
-   `source.tailer.*`、`source.uploadfile.*`、`process.pipeline.*`、`role.gateway.*`。**没有顶层 typed 聚合结构体**：
+   `source.tailer.*`、`source.file.*`、`process.pipeline.*`、`role.gateway.*`。**没有顶层 typed 聚合结构体**：
    `config.Load` 把 文件 < `TANGO_*` env < flag 解析后，用 `viper.AllSettings` 物化成一棵**依赖中立**的
    `cfgtree.Tree`（只依赖 `mapstructure`，不依赖 viper；viper 只困在 `config` 包内）。每个模块提供
    `FromTree(t) = t.Sub("<前缀>").Into(&cfg) + ApplyDefaults + Validate`，自取并校验**自己那棵子树**
@@ -91,7 +91,7 @@ daemon 是长驻的 pipeline 流水线。api 只作为库使用，不由 `role.m
 5. **MaxElapsedTime（bulk-write 重试预算）属于 store**，不属于 mongo 连接配置；
    配置文件键为 `dao.store.maxElapsedTime`。
 6. **配置结构 = internal 包层级；角色不重复 host 模块配置**：模块配置都在各自包路径的顶层
-   （`logging.*`/`dao.*`/`parser.filter.*`/`source.tailer.*`/`source.uploadfile.*`/`process.*`），由需要的角色**共享复用**；
+   （`logging.*`/`dao.*`/`parser.filter.*`/`source.tailer.*`/`source.file.*`/`process.*`），由需要的角色**共享复用**；
    `role.<name>.*` 只放该角色**专属**的字段（如 `role.gateway.addr`）。
    例如 gateway 的上传处理直接用顶层 `process.*` 与 `parser.filter.*`，不在 `role.gateway` 下再开
    `process`/`filter`。`role.daemon` 暂为空（daemon 完全由顶层模块驱动）。
@@ -117,11 +117,11 @@ daemon 是长驻的 pipeline 流水线。api 只作为库使用，不由 `role.m
     │   ├── config.go # parser.Config：聚合 parser 子模块配置
     │   ├── talog/    # TA JSON 行解析 -> Record
     │   └── filter/   # expr-lang include/exclude 上报过滤器 + filter.Config
-    ├── source/     # 数据来源集合（source.Source 契约 + source.Config 聚合 tailer/uploadfile）+ New{Lines,Reader,Tailer,UploadFile} 构造器门面
+    ├── source/     # 数据来源集合（source.Source 契约 + source.Config 聚合 tailer/file）+ New{Lines,Reader,Tailer,File} 构造器门面
     │   ├── httpbody/ # HTTP 请求体来源（NewLines；gateway/api 用）
     │   ├── tailer/  # 文件追尾来源 + tailer.Config / TailMode 常量（NewTailer；daemon 用）
     │   ├── stdin/   # 控制台 stdin 来源（NewReader；cli 用）
-    │   ├── uploadfile/ # 存量文件一次性导入来源 + uploadfile.Config（NewUploadFile；cli function=uploadfile / 库 / SDK 用，v1.6.0）
+    │   ├── file/ # 存量文件一次性导入来源 + file.Config（NewFile；cli function=file / 库 / SDK 用，v1.6.0）
     │   └── taapi/   # 占位（未来 TA API 来源）
     ├── dao/        # dao.go 整合 store + mongo + ejson + sql 门面（Store 别名 / 写模型构造器 / Mongo&SQL Data API 重导出）
     │   ├── config.go # dao.Config：聚合 mongo.Config + store.Config
@@ -138,7 +138,7 @@ daemon 是长驻的 pipeline 流水线。api 只作为库使用，不由 `role.m
         ├── api/     # 可复用引擎库：api.Engine（New/Upload/Run/EnsureIndexes/Close）——非可派发角色
         ├── daemon/  # daemon.Role + daemon.Service（pipeline + tailer；含信号处理/启动日志）
         ├── gateway/ # gateway.Role + HTTP Server：内嵌 api.Engine + /upload + /ejson + /sql；gateway.Config（role.gateway.*）
-        └── cli/     # cli.Role：内嵌 api.Engine + stdin/uploadfile 源；cli.Config（role.cli.function=upload|uploadfile|ejson|sql|config|configget）
+        └── cli/     # cli.Role：内嵌 api.Engine + stdin/file 源；cli.Config（role.cli.function=upload|file|ejson|sql|config|configget）
 ```
 
 依赖方向：
@@ -157,8 +157,8 @@ parser           -> talog + filter + cfgtree                        (根包整�
 dao              -> store + mongo + ejson + sql + cfgtree            (根包整合，对外重导出 Store/写模型构造器 + Mongo&SQL Data API)
 dao/ejson        -> dao/mongo（+ bson/mongo/options 驱动）           (dao 子包；用 MongoResource 取 client 与默认库)
 dao/sql          -> dao/mongo + mongosql（外部依赖，注入 db）         (dao 子包；mongosql.New(db) 注入式，SQL→MongoDB)
-source           -> httpbody + stdin + tailer + uploadfile + cfgtree (根包整合，对外暴露 Source + New{Lines,Reader,Tailer,UploadFile})
-source/uploadfile -> source/tailer（仅 DiscoverFiles 复用）+ logging   (同领域子包互引，不跨领域；无 dao 依赖)
+source           -> httpbody + stdin + tailer + file + cfgtree (根包整合，对外暴露 Source + New{Lines,Reader,Tailer,File})
+source/file -> logging                                          (显式文件路径，无 glob/目录，不依赖 tailer；无 dao 依赖)
 cfgtree          -> mapstructure   (叶子载体，不依赖 viper)
 config           -> cfgtree + 各模块（仅用其 RegisterDefaults 注册键）；viper 只在 config
 各模块通过 cfgtree.Tree 解码（FromTree）；各叶子模块 ↛ config；领域之间只经根包，不跨领域 import 兄弟子包
@@ -208,14 +208,14 @@ config           -> cfgtree + 各模块（仅用其 RegisterDefaults 注册键�
 
 | 文件 | 职责 |
 |---|---|
-| `source/source.go` | `source.Source` 契约：`Run(ctx) <-chan string`；**子包门面**：`NewLines`(httpbody)/`NewReader`(stdin)/`NewTailer`(tailer)/`NewUploadFile`(uploadfile，容忍 nil cfg) 构造器 |
-| `source/config.go` | `source.Config`：聚合 `tailer.Config`（键 source.tailer.*）+ `UploadFile *uploadfile.Config`（键 source.uploadfile.*） |
+| `source/source.go` | `source.Source` 契约：`Run(ctx) <-chan string`；**子包门面**：`NewLines`(httpbody)/`NewReader`(stdin)/`NewTailer`(tailer)/`NewFile`(file，容忍 nil cfg) 构造器 |
+| `source/config.go` | `source.Config`：聚合 `tailer.Config`（键 source.tailer.*）+ `File *file.Config`（键 source.file.*） |
 | `source/httpbody/httpbody.go` | `httpbody.Source`：把预解析的行数组（单条/批量）包成 line channel（gateway/api 用） |
 | `source/stdin/stdin.go` | `stdin.Source`：从 io.Reader/os.Stdin 逐行扫描成 channel（cli 用） |
 | `source/tailer/tailer.go` | `Tailer`：glob 发现文件、追尾、rescan，输出 line channel（hybrid/poll/event） |
 | `source/tailer/config.go` | `tailer.Config`（含 `logPattern`/`tailMode`/`rescanInterval`/`pollInterval`/`maxLineBytes`/**`maxOpenFDs`** fd 看门狗阈值）+ `TailModeHybrid`/`Poll`/`Event` 常量 |
-| `source/uploadfile/uploadfile.go` | **v1.6.0** `uploadfile.Source`：有限一次性导入源——复用 `tailer.DiscoverFiles` 按 glob 发现一次，按发现顺序把每个文件从头到 EOF 的非空行送入 channel（cap 2000）后关闭；scanner 语义同 tailer（64KiB 起步、上限 maxLineBytes）；单文件错误（打不开 / `bufio.ErrTooLong`）记日志跳过、不影响其余文件；无 checkpoint（详见 §9） |
-| `source/uploadfile/config.go` | `uploadfile.Config`（`logPattern` []string + `maxLineBytes`，默认 10485760）+ `RegisterDefaults`/`ApplyDefaults`（无 Validate——无可枚举值） |
+| `source/file/file.go` | `file.Source`：有限一次性导入源——按 `paths` 列出的**显式文件路径**逐个从头到 EOF 把非空行送入 channel（cap 2000）后关闭；**无 glob、无目录展开、不依赖 tailer**（目录路径 stat 检出后记日志跳过，不展开）；scanner 语义对齐 tailer（64KiB 起步、上限 maxLineBytes，但为自有实现）；单文件错误（打不开 / 是目录 / `bufio.ErrTooLong`）记日志跳过、不影响其余文件；无 checkpoint（详见 §9） |
+| `source/file/config.go` | `file.Config`（`paths` []string + `maxLineBytes`，默认 10485760）+ `RegisterDefaults`/`ApplyDefaults`（无 Validate——无可枚举值） |
 | `source/taapi/taapi.go` | 占位包（预留未来 TA API 来源，无导出符号） |
 
 #### 数据访问 `internal/dao`
@@ -291,7 +291,7 @@ config           -> cfgtree + 各模块（仅用其 RegisterDefaults 注册键�
 |---|---|
 | `role/role.go` | `Role` 接口（`Run(ctx, cfgtree.Tree) error`）+ `Get(mode) (Role,error)` 派发 + 角色名常量（`API`/`CLI`/`Daemon`/`Gateway`） |
 | `role/config.go` | `role.Config`：聚合 `daemon`/`gateway`/`cli` + `ApplyDefaults`/`Validate`/`RegisterDefaults` + `FromTree` |
-| `role/api/api.go` | 可复用引擎库 `api.Engine`：`New(ctx, *dao.Config, *process.Config, *parser.Config, *cfgsync.Config)` / `NewFromTree(ctx, tree)`（切 dao/process/parser/cfgsync 子树）/`Upload(lines)`（经 `source.NewLines`）/`UploadFile(ctx, cfg)`（**v1.6.0**：先拒空 `LogPattern`（`"api: uploadfile logPattern is required"`，先于任何 source/库操作）再 `Run(source.NewUploadFile(cfg))`；`api.UploadFileConfig` = `source.UploadFileConfig`（经 source 门面、最终 = `uploadfile.Config`，在 `role/api/config.go`——role 层不 import source 子包）/`Run(src)`/`EJSON(req)`（Mongo Data API）/`SQL(query)`（SQL Data API）/`EnsureIndexes`/`Close`/`StartCfgsync(ctx)`（仅 `cfgsync.enabled` 时起 Watcher goroutine）/`PublishConfig(ctx, doc)`（中转 `cfgsync.Publish`）+ `Result`（非可派发角色） |
+| `role/api/api.go` | 可复用引擎库 `api.Engine`：`New(ctx, *dao.Config, *process.Config, *parser.Config, *cfgsync.Config)` / `NewFromTree(ctx, tree)`（切 dao/process/parser/cfgsync 子树）/`Upload(lines)`（经 `source.NewLines`）/`File(ctx, cfg)`（**v1.6.0**：先拒空 `Paths`（`"api: file paths is required"`，先于任何 source/库操作）再 `Run(source.NewFile(cfg))`；`api.FileConfig` = `source.FileConfig`（经 source 门面、最终 = `file.Config`，在 `role/api/config.go`——role 层不 import source 子包）/`Run(src)`/`EJSON(req)`（Mongo Data API）/`SQL(query)`（SQL Data API）/`EnsureIndexes`/`Close`/`StartCfgsync(ctx)`（仅 `cfgsync.enabled` 时起 Watcher goroutine）/`PublishConfig(ctx, doc)`（中转 `cfgsync.Publish`）+ `Result`（非可派发角色） |
 | `role/daemon/role.go` | `daemon.Role.Run`：`signal.NotifyContext(SIGINT/SIGTERM)` → `NewFromTree`（切 dao/parser/source/process/cfgsync + **fail-fast 校验 logPattern，先于连 Mongo** + 启动 banner，含 `maskURI`）→ `EnsureIndexes` → `Run` |
 | `role/daemon/report.go` | `daemon.Service`（`New`/`NewFromTree`）：经 `source.NewTailer` 建源 → 强制 pipeline `process.New(cfg).Run(runCtx, tailer)` → MongoDB；内嵌 cfgsync Watcher（`startCfgsync`）；`reportStats` 每 60s 打 interval/cumulative/**runtime（goroutines/open_fds/tailed_files）** 三条日志 + **fd 看门狗**（`maxOpenFDs>0 && open_fds>阈` → `cancelRun` 优雅 drain+flush+退出，交编排器重启）；`logFinalStats` 收尾摘要 |
 | `role/daemon/procstats.go` | `openFDCount()`：Linux 经 `/proc/self/fd`（-1 修正 ReadDir 自身 fd）；非 Linux 返回 -1（看门狗 inert） |
@@ -299,9 +299,9 @@ config           -> cfgtree + 各模块（仅用其 RegisterDefaults 注册键�
 | `role/gateway/role.go` | `gateway.Role.Run`：从 Tree 取 dao/process/parser + `role.gateway` → `New` → `EnsureIndexes` → `Run(addr)` |
 | `role/gateway/server.go` | gateway `Server`：内嵌 `*api.Engine` + HTTP 面；`New`/`NewFromTree`/`Upload`/`EJSON`/`SQL`/`PublishConfig`/`EnsureIndexes`/`Close`/`Handler`/`Run`；路由 `/healthz` + `/upload`（按 `process.mode` 选策略）+ `/ejson`（Mongo Data API）+ `/sql`（SQL Data API）+ `/config`（cfgsync 发布，`{version}`）；`Run` 起服务前先 `StartCfgsync`，ctx 取消时 10s 优雅 `Shutdown`；`writeEJSON` 经 `ejsonMarshaler` 接口同服务 EJSON/SQL 响应 |
 | `role/gateway/config.go` | `gateway.Config`（仅 `role.gateway.addr`）+ `ApplyDefaults`/`Validate`/`RegisterDefaults` |
-| `role/cli/role.go` | `cli.Role.Run`：取 dao + `role.cli`；`function=upload` 走 stdin 上报（统计 JSON → stdout），`=uploadfile`（**v1.6.0**）切 `source.FromTree` 并 **fail-fast 校验 `source.uploadfile.logPattern`（`"cli: function=uploadfile requires source.uploadfile.logPattern"`，先于连 Mongo）** 后走 `RunUploadFile`，`=ejson` 走 `RunEJSON`，`=sql` 走 `RunSQL` |
-| `role/cli/cli.go` | `cli.RunUpload(...)`：内嵌 `api.Engine` + `source.NewReader(in)` 一次性上报；`cli.RunUploadFile(ctx, daoCfg, procCfg, parserCfg, srcCfg.UploadFile)`：`api.New` + `EnsureIndexes` + `eng.UploadFile`，统计 JSON → stdout（与 `function=upload` 同形，**不读 stdin**）；`cli.RunEJSON(...)`：stdin EJSON 请求 → `engine.EJSON` → out EJSON；`cli.RunSQL(...)`：stdin SQL → `engine.SQL` → out EJSON |
-| `role/cli/config.go` | `cli.Config`（`role.cli.function`=upload\|uploadfile\|ejson\|sql\|config\|configget，常量 `FunctionUploadFile`）+ `ApplyDefaults`/`Validate`/`RegisterDefaults` |
+| `role/cli/role.go` | `cli.Role.Run`：取 dao + `role.cli`；`function=upload` 走 stdin 上报（统计 JSON → stdout），`=file`（**v1.6.0**）切 `source.FromTree` 并 **fail-fast 校验 `source.file.paths`（`"cli: function=file requires source.file.paths"`，先于连 Mongo）** 后走 `RunFile`，`=ejson` 走 `RunEJSON`，`=sql` 走 `RunSQL` |
+| `role/cli/cli.go` | `cli.RunUpload(...)`：内嵌 `api.Engine` + `source.NewReader(in)` 一次性上报；`cli.RunFile(ctx, daoCfg, procCfg, parserCfg, srcCfg.File)`：`api.New` + `EnsureIndexes` + `eng.File`，统计 JSON → stdout（与 `function=upload` 同形，**不读 stdin**）；`cli.RunEJSON(...)`：stdin EJSON 请求 → `engine.EJSON` → out EJSON；`cli.RunSQL(...)`：stdin SQL → `engine.SQL` → out EJSON |
+| `role/cli/config.go` | `cli.Config`（`role.cli.function`=upload\|file\|ejson\|sql\|config\|configget，常量 `FunctionFile`）+ `ApplyDefaults`/`Validate`/`RegisterDefaults` |
 
 ## 4. Daemon Service（daemon 模式）
 
@@ -341,10 +341,10 @@ POST /sql      # body: JSON {"sql":"..."}；SQL Data API（见 §5.3）
 从整棵配置树切 dao/process/parser/cfgsync 四段）连接 MongoDB，`Upload(lines)` / `Run(src)`
 对任意 `source.Source` 跑 `process.mode` 指定的策略。它被 gateway（`source.NewLines` 面）与 cli（`source.NewReader` 面）内嵌，
 因此三者提供**完全相同**的 single/batch/pipeline 上传能力。`cli` 角色（`role.mode=cli`）按 `role.cli.function` 派发：
-`function=upload` 从 stdin 读日志数组、`process.mode` 选策略，统计 JSON 写 stdout；`function=uploadfile`（v1.6.0）
-不读 stdin，按 `source.uploadfile.logPattern` 一次性导入存量文件，统计 JSON 同样写 stdout（见 §9）；
-`api` 不由 `role.mode` 派发，作为库 import（对应引擎面 `(*Engine).UploadFile(ctx, cfg)`）。公共 SDK `client`
-（`client.New(...).Upload(...)` / `.UploadFile(ctx, patterns...)`）也内嵌同一 `api.Engine`，见 §7。
+`function=upload` 从 stdin 读日志数组、`process.mode` 选策略，统计 JSON 写 stdout；`function=file`（v1.6.0）
+不读 stdin，按 `source.file.paths` 一次性导入存量文件，统计 JSON 同样写 stdout（见 §9）；
+`api` 不由 `role.mode` 派发，作为库 import（对应引擎面 `(*Engine).File(ctx, cfg)`）。公共 SDK `client`
+（`client.New(...).Upload(...)` / `.File(ctx, patterns...)`）也内嵌同一 `api.Engine`，见 §7。
 
 ## 5.2 Mongo Data API（`/ejson` · cli `ejson` · `api.EJSON`）
 
@@ -467,18 +467,18 @@ Elastic Cluster 不支持）；standalone mongod 无 change stream → 启动时
 |---|---|---|---|
 | `process/{core,single,batch,pipeline}` | **dao** | `dao.Store`（=`store.Store` 别名）；`(*Store).Identity().Resolve(ctx, accountID, distinctID)`；`(*Store).BulkWrite`/`BulkWriteOrdered`；`(*Store).UserCollection`/`EventCollection`/`DeadLetterCollection`；`dao.UserWriteModel`/`EventWriteModel`/`EventWriteModelSkipExisting`/`DeadLetterModel` | 身份解析、写模型构造、bulk 写（实现在 `dao/store`） |
 | `process/{core,single,batch,pipeline}` | **parser** | `*parser.Parser`；`(*Parser).ParseLine(line) → *parser.Record`；`(*Parser).Filter() → *filter.Holder`（再 `.Empty()`/`.Keep(doc)`）；`parser.Record` 字段（`Type`/`UUID`/`AccountID`/`DistinctID`/`Doc`）；`(*Record).Category()` + `parser.CategoryUser`/`CategoryEvent`；`parser.EnvelopeKeys` | 解析、过滤、分类、亲和路由键抽取（实现在 `parser/talog`+`parser/filter`） |
-| `process`（root）、`role/{api,daemon}` | **source** | `source.Source`（`Run(ctx) <-chan string` 接口）；`source.NewLines`/`NewReader`/`NewTailer`/`NewUploadFile` | 消费日志源 / 构造具体源（实现在 `source/httpbody`+`stdin`+`tailer`+`uploadfile`） |
-| `role/cli` | **source** | `source.FromTree(t) → *source.Config`；`(*Config).UploadFile`（`*uploadfile.Config`） | `function=uploadfile` 时裁剪 source 子树、fail-fast 校验 `logPattern` 后交 `RunUploadFile` → 引擎（v1.6.0；cli 不直接 import `source/uploadfile`） |
+| `process`（root）、`role/{api,daemon}` | **source** | `source.Source`（`Run(ctx) <-chan string` 接口）；`source.NewLines`/`NewReader`/`NewTailer`/`NewFile` | 消费日志源 / 构造具体源（实现在 `source/httpbody`+`stdin`+`tailer`+`file`） |
+| `role/cli` | **source** | `source.FromTree(t) → *source.Config`；`(*Config).File`（`*file.Config`） | `function=file` 时裁剪 source 子树、fail-fast 校验 `logPattern` 后交 `RunFile` → 引擎（v1.6.0；cli 不直接 import `source/file`） |
 | `role/api` | **dao** | `dao.New(ctx, *dao.Config) → *dao.Dao`；`(*Dao).Store`；`(*Dao).Mongo.Close()`；`(*Store).EnsureIndexes(ctx)` | 连接 MongoDB、建索引、收尾 |
 | `role/api` | **parser** | `(*parser.Config).Build() → *parser.Parser` | 装配解析器（含 filter） |
 | `role/api` | **process** | `process.New(cfg, *dao.Dao, *parser.Parser, *Counters) → Uploader`；`(Uploader).Run(ctx, Source)`；`process.Counters`/`Snapshot`；`(*process.Config).ModeValue()` | 选策略并驱动上传 |
-| `role/{gateway,cli}` | **role/api** | `api.New(ctx, *dao.Config, *process.Config, *parser.Config, *cfgsync.Config) → *Engine` / `api.NewFromTree(ctx, tree)`；`(*Engine).Upload`/`UploadFile`/`Run`/`EJSON`/`SQL`/`EnsureIndexes`/`Close`/`StartCfgsync`/`PublishConfig`；`api.Result`；`api.UploadFileConfig`（=`source.UploadFileConfig`，经 source 门面、最终 =`uploadfile.Config`） | 内嵌同一引擎（上报 + uploadfile 导入 + Data API + cfgsync） |
+| `role/{gateway,cli}` | **role/api** | `api.New(ctx, *dao.Config, *process.Config, *parser.Config, *cfgsync.Config) → *Engine` / `api.NewFromTree(ctx, tree)`；`(*Engine).Upload`/`File`/`Run`/`EJSON`/`SQL`/`EnsureIndexes`/`Close`/`StartCfgsync`/`PublishConfig`；`api.Result`；`api.FileConfig`（=`source.FileConfig`，经 source 门面、最终 =`file.Config`） | 内嵌同一引擎（上报 + file 导入 + Data API + cfgsync） |
 | `role/api` | **dao** | `(*Dao).EJSON(ctx, *EJSONRequest) → *EJSONResponse`；`dao.EJSONRequest`/`EJSONResponse` | Mongo Data API 中转（实现在 dao/ejson，经 dao 门面；dao/ejson 内部依赖 dao/mongo） |
 | `role/{gateway,cli}` | **dao** | `dao.DecodeEJSONRequest(body) → *EJSONRequest`；`(*EJSONResponse).MarshalEJSON()` | HTTP / stdin 的 EJSON 请求解析与响应编码 |
 | `role/api` | **dao** | `(*Dao).SQL(ctx, query) → *SQLResult`；`dao.SQLResult` | SQL Data API 中转（实现在 dao/sql，经 dao 门面；dao/sql 内部依赖 dao/mongo + vitess） |
 | `role/{gateway,cli}` | **dao** | `(*SQLResult).MarshalEJSON()` | HTTP / stdin 的 SQL 结果 EJSON 编码 |
 | `role/daemon` | **dao/parser/source/process** | `dao.New`；`(*parser.Config).Build`；`source.NewTailer(srcCfg.Tailer)`；`process.New(pipelineCfg, …).Run(ctx, tailerSrc)` | 编排长驻流水线 |
-| `client`（公共 SDK） | **role/api** | `api.New(o.ctx, &o.dao, &o.proc, &o.parser, &o.cfgsync)`（持 cfgsync 配置但**不起 Watcher**）；`(*Engine).Upload`/`UploadFile`/`EnsureIndexes`/`PublishConfig`/`AppendConfig`/`FetchConfig`/`EJSONBytes`/`SQLBytes`/`Close` | redis-go 风格门面，复用真实 config 结构体（`Client.UploadFile` 经引擎中转，client 不 import `internal/source`；查询面走 bytes-in/bytes-out，不触 dao 类型） |
+| `client`（公共 SDK） | **role/api** | `api.New(o.ctx, &o.dao, &o.proc, &o.parser, &o.cfgsync)`（持 cfgsync 配置但**不起 Watcher**）；`(*Engine).Upload`/`File`/`EnsureIndexes`/`PublishConfig`/`AppendConfig`/`FetchConfig`/`EJSONBytes`/`SQLBytes`/`Close` | redis-go 风格门面，复用真实 config 结构体（`Client.File` 经引擎中转，client 不 import `internal/source`；查询面走 bytes-in/bytes-out，不触 dao 类型） |
 | `cfgsync` | **dao** | `(*Dao).EJSON(ctx, *EJSONRequest)`（findOne 读 / updateOne `$set`+`$inc` upsert 写）；`(*Dao).Watch(ctx, coll, pipeline, opts) → *mongo.ChangeStream` | 读中心文档 + 订阅 change stream + 原子发布（实现在 dao/ejson + dao/mongo，经 dao 门面） |
 | `cfgsync` | **parser** | `(*Parser).SwapFilter(include, exclude)` | 编译后再原子热替换 live filter（实现在 parser/filter，经 parser 门面；由内嵌角色注入回调调用） |
 | `role/{daemon,gateway}` | **cfgsync** | `cfgsync.FromTree(t)`；`cfgsync.New(d, cfg, reg.Apply)`；`(*Watcher).Run(ctx)`；`cfgsync.NewRegistry`/`RegisterFilter` | 内嵌读侧 Watcher（goroutine，panic recover），热替换自身 live filter |
@@ -492,7 +492,7 @@ Elastic Cluster 不支持）；standalone mongod 无 change stream → 启动时
 
 ```text
 (Uploader).Run(ctx, src)                                   [process/{single,batch,pipeline}]
- ├─ src.Run(ctx) <-chan string                             [source.Source：NewLines/NewReader/NewTailer/NewUploadFile 之一]
+ ├─ src.Run(ctx) <-chan string                             [source.Source：NewLines/NewReader/NewTailer/NewFile 之一]
  └─ core.Processor.Process(ctx, line):                     [process/core]
       ├─ (*parser.Parser).ParseLine(line) → *parser.Record       → 失败：dao.DeadLetterModel(line, err)
       ├─ (*parser.Parser).Filter().Empty()/.Keep(rec.Doc)        → 命中 exclude/不命中 include：丢弃
@@ -540,30 +540,30 @@ daemon 是唯一长驻的 pipeline 角色，其上报路径的并发结构（`in
 worker 的批次走 background ctx 写完。`RunWorkers` 内 `wg.Wait()` 等所有 worker 退出后才返回，`Service.Run`
 再 `<-reportDone` 等 stats reporter 退出、`logFinalStats` 打收尾摘要。
 
-#### 7.2.2 uploadfile 一次性导入的函数调用链（v1.6.0）
+#### 7.2.2 file 一次性导入的函数调用链（v1.6.0）
 
-`function=uploadfile` 与 `function=upload` 同核（同一 `Engine.Run` → `process.Uploader`），
-差异只在源（有限的 uploadfile 源替代 stdin）与入口的 fail-fast 校验：
+`function=file` 与 `function=upload` 同核（同一 `Engine.Run` → `process.Uploader`），
+差异只在源（有限的 file 源替代 stdin）与入口的 fail-fast 校验：
 
 ```text
-cli.Role.Run（role.cli.function=uploadfile）                       [role/cli/role.go]
- ├─ source.FromTree(tree) → srcCfg.UploadFile                      [裁剪 source 子树]
- │    （logPattern 为空 → "cli: function=uploadfile requires source.uploadfile.logPattern"，先于连 Mongo）
- └─ cli.RunUploadFile(ctx, daoCfg, procCfg, parserCfg, srcCfg.UploadFile)   [role/cli/cli.go]
+cli.Role.Run（role.cli.function=file）                       [role/cli/role.go]
+ ├─ source.FromTree(tree) → srcCfg.File                      [裁剪 source 子树]
+ │    （logPattern 为空 → "cli: function=file requires source.file.paths"，先于连 Mongo）
+ └─ cli.RunFile(ctx, daoCfg, procCfg, parserCfg, srcCfg.File)   [role/cli/cli.go]
       ├─ api.New(...) → *Engine（连 MongoDB）
       ├─ (*Engine).EnsureIndexes(ctx)
-      └─ (*Engine).UploadFile(ctx, cfg)                            [role/api/api.go]
-           ├─ 拒空 LogPattern："api: uploadfile logPattern is required"（先于任何 source/库操作）
-           └─ c.Run(ctx, source.NewUploadFile(cfg))                [source 门面 → source/uploadfile]
-                ├─ tailer.DiscoverFiles(patterns)（glob 发现一次，同领域子包复用）
+      └─ (*Engine).File(ctx, cfg)                            [role/api/api.go]
+           ├─ 拒空 Paths："api: file paths is required"（先于任何 source/库操作）
+           └─ c.Run(ctx, source.NewFile(cfg))                [source 门面 → source/file]
+                ├─ 按 paths 列出的显式文件路径逐个处理（无 glob/目录/tailer；目录 stat 检出后跳过）
                 ├─ 逐文件从头扫到 EOF → 非空行进 channel（cap 2000）→ 扫完关闭
                 └─ (Uploader).Run(ctx, src)：与 §7.2 完全同核
                    （parse→filter→identity→写模型→BulkWrite，process.mode 选 single/batch/pipeline）
  stdout ← api.Result 统计 JSON（与 function=upload 输出完全一致；不读 stdin）
 ```
 
-库与 SDK 走同一引擎面：`(*api.Engine).UploadFile(ctx, cfg)` 直接调用；
-`client.Client.UploadFile(ctx, patterns...)` 把调用期 glob 列表交给引擎中转（client 不 import `internal/source`）。
+库与 SDK 走同一引擎面：`(*api.Engine).File(ctx, cfg)` 直接调用；
+`client.Client.File(ctx, paths...)` 把调用期文件路径列表交给引擎中转（client 不 import `internal/source`）。
 源是**有限**的：channel 关闭即 `Run` 返回、统计落定，无需 `Stop()`/信号编排。
 
 ### 7.3 配置装配的函数链
@@ -582,8 +582,8 @@ main → config.Load(文件 < TANGO_* env < flag) → viper.AllSettings 物化 �
 ```
 
 `client` 不走 `cfgtree`：`With*` 选项直接写入它内嵌的真实 `dao.Config`/`parser.Config`/`process.Config`/
-`cfgsync.Config`（v1.6.0 起含 uploadfile：`WithSourceUploadFileMaxLineBytes(n)` = 键 `source.uploadfile.maxLineBytes`；
-glob 列表则是 `Client.UploadFile(ctx, patterns...)` 的调用期参数，不进配置），
+`cfgsync.Config`（v1.6.0 起含 file：`WithSourceFileMaxLineBytes(n)` = 键 `source.file.maxLineBytes`；
+文件路径列表则是 `Client.File(ctx, paths...)` 的调用期参数，不进配置），
 `client.New` 把它们的地址原样交给 `api.New(..., &o.cfgsync)`（持 cfgsync 配置供 `PublishConfig`/`FetchConfig`
 等配置面寻址中心文档，但 SDK **不起** cfgsync Watcher；与上面角色侧最终调用的 `api.New` 同一入口）。
 `WithConfigFile`/`WithConfigBytes` 可从 gateway 兼容配置导入 dao/parser.filter/process/cfgsync 四段
@@ -672,37 +672,37 @@ EC2（us-east-1）VPC 内对真 DocumentDB 实测 daemon 上报链路：n=20000 
 
 ---
 
-## 9. v1.6.0 uploadfile 一次性文件导入
+## 9. v1.6.0 file 一次性文件导入
 
-> v1.6.0 的唯一增量：把**已落盘的存量日志文件**按 glob 一次性灌进既有上报管线。
-> 需求见 [`requirements.md`](requirements.md) §3；新代码集中在 `internal/source/uploadfile`
-> （`uploadfile.go` + `config.go`），其余全是既有四层的薄接线。
+> v1.6.0 的唯一增量：把**已落盘的存量日志文件**按**显式文件路径**一次性灌进既有上报管线。
+> 需求见 [`requirements.md`](requirements.md) §3；新代码集中在 `internal/source/file`
+> （`file.go` + `config.go`），其余全是既有四层的薄接线。
 
-### 9.1 需求边界：tailer / upload / uploadfile 三者分工
+### 9.1 需求边界：tailer / upload / file 三者分工
 
 | 入口 | 源 | 形态 | 场景 |
 |---|---|---|---|
 | daemon（tailer） | `source/tailer` | **常驻**：glob 发现 + 追尾 + rescan，只追**新增**行 | 在线日志持续采集 |
 | cli `function=upload` | `source/stdin` | 一次性：读 **stdin** 的日志数组 | 管道/脚本灌少量行 |
-| cli `function=uploadfile` | `source/uploadfile` | 一次性：glob 发现一次，**存量文件**从头到 EOF，**有限**（读完即收敛退出） | 批量导入历史落盘文件 |
+| cli `function=file` | `source/file` | 一次性：按**显式路径**（无 glob/目录），**存量文件**从头到 EOF，**有限**（读完即收敛退出） | 批量导入历史落盘文件 |
 
-按 [`requirements.md`](requirements.md) §7，**gateway 与 daemon 不增加 uploadfile 入口**——gateway 的
+按 [`requirements.md`](requirements.md) §7，**gateway 与 daemon 不增加 file 入口**——gateway 的
 HTTP 面接的是请求体（文件在服务端本地无意义），daemon 的职责就是 tailer 常驻。也**没有**任何新集合
-（不存在 `_tango_fileupload`），uploadfile 不依赖 dao。
+（不存在 `_tango_fileupload`），file 不依赖 dao。
 
 ### 9.2 source 设计：有限源 + 错误隔离 + 无 checkpoint
 
-`uploadfile.Source` 是 `source.Source` 契约的**有限**实现（tailer 的一次性对偶）：
+`file.Source` 是 `source.Source` 契约的**有限**实现（tailer 的一次性对偶）：
 
-- **发现**：复用 `tailer.DiscoverFiles`（同领域子包复用，见 §2 约定 1 的"自身子包不受限"），
-  与 tailer 完全相同的 pattern 语法（`**`、跨平台路径）。只发现**一次**，不 rescan。
-- **流式输出**：按发现顺序（每个 pattern 内为 `WalkDir` 字典序）逐文件从头扫到 EOF，
+- **输入**：`paths` 列出的**显式文件路径**，逐个 `os.Stat` 后处理——**无 glob、无目录展开、不依赖 tailer**
+  （目录路径检出后记日志跳过，不递归）。不发现、不 rescan。
+- **流式输出**：按 `paths` 列表顺序逐文件从头扫到 EOF，
   **非空行**送入 cap 2000 的 channel；全部扫完即 `close(out)`——`process.Uploader.Run` 随之返回、
   统计落定，无需 `Stop()`。`ctx` 取消则提前关闭。
 - **scanner 语义对齐 tailer**：`bufio.Scanner`，64KiB 起步、上限 `maxLineBytes`
   （常量 `defaultMaxLineSize` = 10485760 = 10MB，与 config 共享）——一次性导入接受的行与常驻 tailer 完全一致。
 - **错误隔离按文件**：超长行触发 `bufio.ErrTooLong` → 记日志、**该文件**剩余部分跳过、
-  超长 token 不会被输出；打不开的文件同样记日志跳过。**其余文件照常导入**，单个坏文件不拖垮整批。
+  超长 token 不会被输出；打不开 / 是目录 / 不存在的路径同样记日志跳过。**其余文件照常导入**，单个坏文件不拖垮整批。
 - **无 checkpoint / 断点续传（拍板决策）**：不记导入进度、不落任何状态，重跑即全量重导。
   幂等由写模型承担（与 §7.2 同核的天然性质），**按操作类型分档**：
   - event（track）：按 `#uuid` upsert（`$setOnInsert`），重导**零新增**；
@@ -719,31 +719,31 @@ HTTP 面接的是请求体（文件在服务端本地无意义），daemon 的�
 
 | 层 | 面 | 形态 |
 |---|---|---|
-| source 门面 | `source.NewUploadFile(cfg *uploadfile.Config) Source`（`source/source.go`，容忍 nil cfg） | 与 `NewLines`/`NewReader`/`NewTailer` 并列的第四个构造器 |
-| 引擎（库） | `(*api.Engine).UploadFile(ctx, cfg *api.UploadFileConfig) (Result, error)` | **先**拒空 `LogPattern`（`"api: uploadfile logPattern is required"`，不碰 source/库）再 `c.Run(ctx, source.NewUploadFile(cfg))`；`api.UploadFileConfig` = `source.UploadFileConfig`（经 source 门面、最终 = `uploadfile.Config`——role 层不 import source 子包，DAO-6 边界）（`role/api/config.go`） |
-| cli | `role.cli.function=uploadfile`（常量 `FunctionUploadFile`，在 `Validate` 的 allowed list 里） | `role.go` 切 `source.FromTree`，**fail-fast**（`"cli: function=uploadfile requires source.uploadfile.logPattern"`，先于连 Mongo）→ `RunUploadFile(ctx, daoCfg, procCfg, parserCfg, srcCfg.UploadFile)`（`api.New` + `EnsureIndexes` + `eng.UploadFile`）→ `api.Result` 统计 JSON 写 stdout，与 `function=upload` 完全同形；**不读 stdin** |
-| client SDK | `Client.UploadFile(ctx, patterns ...string) (Result, error)` | glob 是**调用期参数**（不进 option），经引擎中转——client 仍只依赖 `internal/role/api`，不 import `internal/source`（§2 约定 1）；新 option `WithSourceUploadFileMaxLineBytes(n)`（= 键 `source.uploadfile.maxLineBytes`，默认 10MB）。重导收敛（无 checkpoint） |
+| source 门面 | `source.NewFile(cfg *file.Config) Source`（`source/source.go`，容忍 nil cfg） | 与 `NewLines`/`NewReader`/`NewTailer` 并列的第四个构造器 |
+| 引擎（库） | `(*api.Engine).File(ctx, cfg *api.FileConfig) (Result, error)` | **先**拒空 `Paths`（`"api: file paths is required"`，不碰 source/库）再 `c.Run(ctx, source.NewFile(cfg))`；`api.FileConfig` = `source.FileConfig`（经 source 门面、最终 = `file.Config`——role 层不 import source 子包，DAO-6 边界）（`role/api/config.go`） |
+| cli | `role.cli.function=file`（常量 `FunctionFile`，在 `Validate` 的 allowed list 里） | `role.go` 切 `source.FromTree`，**fail-fast**（`"cli: function=file requires source.file.paths"`，先于连 Mongo）→ `RunFile(ctx, daoCfg, procCfg, parserCfg, srcCfg.File)`（`api.New` + `EnsureIndexes` + `eng.File`）→ `api.Result` 统计 JSON 写 stdout，与 `function=upload` 完全同形；**不读 stdin** |
+| client SDK | `Client.File(ctx, paths ...string) (Result, error)` | 文件路径是**调用期参数**（不进 option），经引擎中转——client 仍只依赖 `internal/role/api`，不 import `internal/source`（§2 约定 1）；新 option `WithSourceFileMaxLineBytes(n)`（= 键 `source.file.maxLineBytes`，默认 10MB）。重导收敛（无 checkpoint） |
 
 ### 9.4 配置键（键 = 包路径，§2 约定 2）
 
 | 键 | 类型 | 占位默认 | 说明 |
 |---|---|---|---|
-| `source.uploadfile.logPattern` | `[]string` | `[]` | glob 列表（tailer 同款语法）。`Config` 自身不校验（空 = 暂无可导）；由消费面（cli 派发 / `Engine.UploadFile`）要求非空 |
-| `source.uploadfile.maxLineBytes` | `int` | `0` | 单行上限；`ApplyDefaults` 把 `<=0` 补成 `10485760`（10MB，对齐 tailer） |
+| `source.file.paths` | `[]string` | `[]` | **显式文件路径列表**（无 glob、无目录）。`Config` 自身不校验（空 = 暂无可导）；由消费面（cli 派发 / `Engine.File`）要求非空 |
+| `source.file.maxLineBytes` | `int` | `0` | 单行上限；`ApplyDefaults` 把 `<=0` 补成 `10485760`（10MB，对齐 tailer） |
 
-经 `uploadfile.Config` 的 `RegisterDefaults`/`ApplyDefaults` 注册与补默认（**无 `Validate`**——没有可枚举取值），
-以字段 `UploadFile *uploadfile.Config`（mapstructure `"uploadfile"`）聚合进 `source.Config`，因此
-env 绑定 `TANGO_SOURCE_UPLOADFILE_LOGPATTERN`（逗号分隔）/ `TANGO_SOURCE_UPLOADFILE_MAXLINEBYTES`
-与 flag `--source.uploadfile.*` 自动可用（文件 < env < flag 三途径一致）。
+经 `file.Config` 的 `RegisterDefaults`/`ApplyDefaults` 注册与补默认（**无 `Validate`**——没有可枚举取值），
+以字段 `File *file.Config`（mapstructure `"file"`）聚合进 `source.Config`，因此
+env 绑定 `TANGO_SOURCE_FILE_PATHS`（逗号分隔）/ `TANGO_SOURCE_FILE_MAXLINEBYTES`
+与 flag `--source.file.*` 自动可用（文件 < env < flag 三途径一致）。
 
-示例配置：[`examples/config/cli/cli.uploadfile.{min,max}.{yaml,json}`](../../examples/config/cli/)——
-min = `role.mode=cli` + `role.cli.function=uploadfile` + `dao.mongo.uri` + `source.uploadfile.logPattern`；
-max 另带 logging/parser/process/`source.uploadfile.maxLineBytes`。运行：
-`tango --config cli.uploadfile.max.yaml`（**无 stdin 管道**）。
+示例配置：[`examples/config/cli/cli.file.{min,max}.{yaml,json}`](../../examples/config/cli/)——
+min = `role.mode=cli` + `role.cli.function=file` + `dao.mongo.uri` + `source.file.paths`；
+max 另带 logging/parser/process/`source.file.maxLineBytes`。运行：
+`tango --config cli.file.max.yaml`（**无 stdin 管道**）。
 
-### 9.5 与 v1.0 `UploadFiles` / `_tango_fileupload` 的差异
+### 9.5 与 v1.0 `Files` / `_tango_fileupload` 的差异
 
 v1.0 时代的文件导入是带状态的：`_tango_fileupload` 集合记录每个文件的导入进度/状态。v1.6.0 **不恢复**
-该集合与任何进度记录——uploadfile 是**纯有限 Source**：零持久状态、零新集合、零恢复协议，
+该集合与任何进度记录——file 是**纯有限 Source**：零持久状态、零新集合、零恢复协议，
 "断点续传"被"重跑 + 写模型幂等收敛"（§9.2）取代。这与 v1.4 移除 fileupload/filebatch 的方向一致：
 能力以最薄的 source + 既有四层接线回归，而不是把旧的有状态子系统搬回来。

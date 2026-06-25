@@ -7,7 +7,7 @@
 所有角色共用**单一 schema**，且**配置键路径 = 消费它的包路径**（`internal/` 下）。
 最外层 `config` 包不定义任何字段，只做加载/覆盖；每个角色只取自己需要的段。
 
-**角色由配置键 `role.mode` 指定**（`daemon`/`gateway`/`cli`，默认 `daemon`），不再用子命令。`role.mode=cli` 是 gateway `POST /upload` 的控制台等价入口（默认 `function=upload` 从 stdin 读取；`function=uploadfile` 不读 stdin、改按 `source.uploadfile.logPattern` 导入存量文件）。注意区分两个 mode：`role.mode` 选运行角色，`process.mode` 选上传策略（`single`/`batch`/`pipeline`）。**三个途径完全一致**：
+**角色由配置键 `role.mode` 指定**（`daemon`/`gateway`/`cli`，默认 `daemon`），不再用子命令。`role.mode=cli` 是 gateway `POST /upload` 的控制台等价入口（默认 `function=upload` 从 stdin 读取；`function=file` 不读 stdin、改按 `source.file.paths` 导入存量文件）。注意区分两个 mode：`role.mode` 选运行角色，`process.mode` 选上传策略（`single`/`batch`/`pipeline`）。**三个途径完全一致**：
 每个配置键都可经 配置文件 / `TANGO_*` 环境变量 / `--<键>` 命令行参数 三种方式设置，键名相同、可互换；
 唯一例外是 `--config <path>`（只有命令行、不是配置键）。
 
@@ -17,7 +17,7 @@
 |------|--------|
 | `daemon`（默认） | `logging` · `dao` · `parser` · `source` · `process` |
 | `gateway` | `logging` · `dao` · `parser` · `process` · `role.gateway` |
-| `cli` | `logging` · `dao` · `parser` · `process` · `role.cli`（`function=uploadfile` 时另读 `source.uploadfile`；`function=ejson`/`sql` 时仅 `logging` · `dao` · `role.cli`） |
+| `cli` | `logging` · `dao` · `parser` · `process` · `role.cli`（`function=file` 时另读 `source.file`；`function=ejson`/`sql` 时仅 `logging` · `dao` · `role.cli`） |
 
 `--config` 留空时在**二进制同级目录**按 `tango.yaml → tango.yml → tango.json` 取首个存在者。
 文件缺失或解析为空时静默跳过（回退到默认值 + 环境变量 + flag）。
@@ -53,14 +53,14 @@
 | `source.tailer.tailMode` | `TANGO_SOURCE_TAILER_TAILMODE` |
 | `source.tailer.logPattern` | `TANGO_SOURCE_TAILER_LOGPATTERN` |
 | `source.tailer.maxOpenFDs` | `TANGO_SOURCE_TAILER_MAXOPENFDS` |
-| `source.uploadfile.logPattern` | `TANGO_SOURCE_UPLOADFILE_LOGPATTERN`（逗号分隔，见下） |
-| `source.uploadfile.maxLineBytes` | `TANGO_SOURCE_UPLOADFILE_MAXLINEBYTES` |
+| `source.file.paths` | `TANGO_SOURCE_FILE_PATHS`（逗号分隔，见下） |
+| `source.file.maxLineBytes` | `TANGO_SOURCE_FILE_MAXLINEBYTES` |
 | `role.gateway.addr` | `TANGO_ROLE_GATEWAY_ADDR` |
 | `role.cli.function` | `TANGO_ROLE_CLI_FUNCTION` |
 
 #### 切片（`[]string`）字段的 env 写法：逗号分隔
 
-`logPattern`（`source.tailer` 与 `source.uploadfile` 各有一个，以及 `parser.filter.include`/`exclude`）是 `[]string`。配置文件里用 YAML 列表，env 里则用**逗号分隔的单个字符串**，由 `StringToSliceHookFunc(",")` 在解码阶段切回 `[]string`。
+`logPattern`（`source.tailer` 与 `source.file` 各有一个，以及 `parser.filter.include`/`exclude`）是 `[]string`。配置文件里用 YAML 列表，env 里则用**逗号分隔的单个字符串**，由 `StringToSliceHookFunc(",")` 在解码阶段切回 `[]string`。
 
 实例——一个 env 变量给出多元素 `[]string`（同时追尾两类日志、跨多个挂载点）：
 
@@ -78,7 +78,7 @@ source:
       - '/data/*/events-*.ndjson'
 ```
 
-即 `tcfg.LogPattern == []string{"/var/log/ta/.*\\.log", "/data/*/events-*.ndjson"}`（`len==2`，`daemon` 的 `logPattern` required 校验通过）。注意：模式里**不能含逗号**（会被当分隔符切开）；glob/正则一般用不到逗号，如确需可改走配置文件列表形式。
+即 `tcfg.Paths == []string{"/var/log/ta/.*\\.log", "/data/*/events-*.ndjson"}`（`len==2`，`daemon` 的 `logPattern` required 校验通过）。注意：模式里**不能含逗号**（会被当分隔符切开）；glob/正则一般用不到逗号，如确需可改走配置文件列表形式。
 
 ---
 
@@ -194,9 +194,9 @@ mongodb://user:pass@<cluster-endpoint>:27017/tango?tls=true&tlsCAFile=/path/glob
 | `parser.filter.include` | optional | `[]`(全放行) | expr 表达式，OR 语义命中其一即保留 |
 | `parser.filter.exclude` | optional | `[]` | 命中其一即丢弃（在 include 之后） |
 
-### source（daemon / cli `function=uploadfile`） → `internal/source/{tailer,uploadfile}`
+### source（daemon / cli `function=file`） → `internal/source/{tailer,file}`
 
-`source` 段现含两个子包：`source.tailer.*` 供 daemon 常驻追尾，`source.uploadfile.*` 供 cli `function=uploadfile` 的有限存量导入（v1.6 新增）。
+`source` 段现含两个子包：`source.tailer.*` 供 daemon 常驻追尾，`source.file.*` 供 cli `function=file` 的有限存量导入（v1.6 新增）。
 
 #### source.tailer.*（daemon） → `internal/source/tailer`
 
@@ -204,7 +204,7 @@ mongodb://user:pass@<cluster-endpoint>:27017/tango?tls=true&tlsCAFile=/path/glob
 
 | 键 | required/optional | 默认 | 说明 |
 |----|----|----|----|
-| `source.tailer.logPattern` | **required**（daemon） | `[]`（占位） | `[]string`，至少一条 glob/正则，匹配要追尾的日志文件路径。env 用逗号分隔（见上）。`Config.Validate` 不强制非空（空 = 匹配 0 文件，仍是合法 tailer 配置）；**是 daemon 角色单独强制**——`daemon.NewFromTree`（`internal/role/daemon/role.go`）在 `dao.New` 连 Mongo 之前先校验 `len(LogPattern)==0` 直接 fail-fast，`Run` 里也再查一次 |
+| `source.tailer.logPattern` | **required**（daemon） | `[]`（占位） | `[]string`，至少一条 glob/正则，匹配要追尾的日志文件路径。env 用逗号分隔（见上）。`Config.Validate` 不强制非空（空 = 匹配 0 文件，仍是合法 tailer 配置）；**是 daemon 角色单独强制**——`daemon.NewFromTree`（`internal/role/daemon/role.go`）在 `dao.New` 连 Mongo 之前先校验 `len(Paths)==0` 直接 fail-fast，`Run` 里也再查一次 |
 | `source.tailer.tailMode` | optional | `hybrid` | `hybrid`/`poll`/`event`，见下。`Validate` 拒绝其它值（空串视为用默认） |
 | `source.tailer.rescanInterval` | optional | `30s` | 重新扫描新文件 + 反向 reap 已消失路径的间隔。占位 `"0s"`，`ApplyDefaults` 把 `<=0` 修正成 `30s` |
 | `source.tailer.pollInterval` | optional | `200ms` | poll/hybrid 模式轮询节奏。占位 `"0s"`，`ApplyDefaults` 把 `<=0` 修正成 `200ms` |
@@ -231,14 +231,14 @@ mongodb://user:pass@<cluster-endpoint>:27017/tango?tls=true&tlsCAFile=/path/glob
 - 取值建议：设在容器 `ulimit -n` **之下**、正常用量**之上**（≈ 被追尾文件数 + 少量 Mongo/连接 fd）。
 - 同一 60s tick 还会打 `report: runtime stats` 日志：`goroutines`（`runtime.NumGoroutine`）、`open_fds`（`openFDCount`）、`tailed_files`（tailer 的 `TailedCount()`，活跃 tail goroutine 数，是 fd 泄漏最直接的信号）。优雅退出时 `logFinalStats` 再打一份关停汇总。
 
-#### source.uploadfile.*（cli `function=uploadfile`） → `internal/source/uploadfile`
+#### source.file.*（cli `function=file`） → `internal/source/file`
 
-有限一次性的存量文件导入 Source（与 tailer 的常驻追新增相对：把匹配文件从头到尾发完一遍即收尾）。glob 发现复用 `tailer.DiscoverFiles`，模式语法与 `source.tailer.logPattern` 完全一致（`**`、跨平台路径）。扫描语义也对齐 tailer（`bufio.Scanner`，64KiB 起始缓冲、上限 `maxLineBytes`）。**无 checkpoint/断点**：重跑会全量重导，幂等由写模型按操作类型保证（event 按 `#uuid` `$setOnInsert` upsert 零新增；`user_set`/`user_setOnce`/`user_uniq_append` 收敛；**`user_add`/`user_append` 会重复累加/追加**——`_ts` 守卫只防乱序不防重放，含此类操作的文件不宜盲目重跑；dead_letter 是 append-only 诊断，每次重跑会增长）。字段见 `internal/source/uploadfile/config.go`（`RegisterDefaults`/`ApplyDefaults`；无 `Validate`——没有可枚举取值）。
+有限一次性的存量文件导入 Source（与 tailer 的常驻追新增相对：把列出的文件从头到尾发完一遍即收尾）。**只接收 `paths` 里的显式文件路径——无 glob、无目录展开、不依赖 tailer**（目录路径 `os.Stat` 检出后记日志跳过，不递归）。扫描语义对齐 tailer（`bufio.Scanner`，64KiB 起始缓冲、上限 `maxLineBytes`，但为 `source/file` 自有实现）。**无 checkpoint/断点**：重跑会全量重导，幂等由写模型按操作类型保证（event 按 `#uuid` `$setOnInsert` upsert 零新增；`user_set`/`user_setOnce`/`user_uniq_append` 收敛；**`user_add`/`user_append` 会重复累加/追加**——`_ts` 守卫只防乱序不防重放，含此类操作的文件不宜盲目重跑；dead_letter 是 append-only 诊断，每次重跑会增长）。字段见 `internal/source/file/config.go`（`RegisterDefaults`/`ApplyDefaults`；无 `Validate`——没有可枚举取值）。
 
 | 键 | required/optional | 默认 | 说明 |
 |----|----|----|----|
-| `source.uploadfile.logPattern` | **required**（cli `function=uploadfile`） | `[]`（占位） | `[]string`，至少一条 glob，匹配要导入的存量日志文件。env 用逗号分隔（见上）。`Config` 自身不强制非空；**由消费面强制**——cli 分发（`internal/role/cli/role.go`）在连 Mongo 之前 fail-fast（`cli: function=uploadfile requires source.uploadfile.logPattern`），api 面 `Engine.UploadFile` 在任何 source/数据库工作之前也拒绝 nil/空（`api: uploadfile logPattern is required`） |
-| `source.uploadfile.maxLineBytes` | optional | `10485760`(10MB) | 单行最大字节，对齐 tailer 的默认值（各自包内同名同值常量 `defaultMaxLineSize`）。占位 `0`，`ApplyDefaults` 把 `<=0` 修正成默认。超限行记 `bufio.ErrTooLong` 日志并**跳过该文件剩余部分**（超限行不发出），其余文件继续导入；打不开的文件同样记日志跳过 |
+| `source.file.paths` | **required**（cli `function=file`） | `[]`（占位） | `[]string`，至少一条**显式文件路径**（无 glob、无目录）。env 用逗号分隔（见上）。`Config` 自身不强制非空；**由消费面强制**——cli 分发（`internal/role/cli/role.go`）在连 Mongo 之前 fail-fast（`cli: function=file requires source.file.paths`），api 面 `Engine.File` 在任何 source/数据库工作之前也拒绝 nil/空（`api: file paths is required`） |
+| `source.file.maxLineBytes` | optional | `10485760`(10MB) | 单行最大字节，对齐 tailer 的默认值（各自包内同名同值常量 `defaultMaxLineSize`）。占位 `0`，`ApplyDefaults` 把 `<=0` 修正成默认。超限行记 `bufio.ErrTooLong` 日志并**跳过该文件剩余部分**（超限行不发出），其余文件继续导入；打不开的文件同样记日志跳过 |
 
 ### process（daemon / cli） → `internal/process{,/pipeline}`
 
@@ -316,15 +316,15 @@ gateway 同时暴露三个独立路径（与 `/upload` 互不影响，无额外�
 
 | 键 | required/optional | 默认 | 说明 |
 |----|----|----|----|
-| `role.cli.function` | optional | `upload` | cli 角色功能：`upload`（stdin 日志数组上报）/ `uploadfile`（按 `source.uploadfile.*` 导入存量日志文件，**不读 stdin**）/ `ejson`（stdin 一个 EJSON Mongo Data API 请求，等价 `POST /ejson`）/ `sql`（stdin 一条 SQL，等价 `POST /sql`）/ `config`（stdin 一个 cfgsync 配置文档，等价 `POST /config`，输出 `{version}`）/ `configget`（查询当前中央配置文档，等价 `GET /config`），输出均为 EJSON/JSON |
+| `role.cli.function` | optional | `upload` | cli 角色功能：`upload`（stdin 日志数组上报）/ `file`（按 `source.file.*` 导入存量日志文件，**不读 stdin**）/ `ejson`（stdin 一个 EJSON Mongo Data API 请求，等价 `POST /ejson`）/ `sql`（stdin 一条 SQL，等价 `POST /sql`）/ `config`（stdin 一个 cfgsync 配置文档，等价 `POST /config`，输出 `{version}`）/ `configget`（查询当前中央配置文档，等价 `GET /config`），输出均为 EJSON/JSON |
 | `role.cli.configMode` | optional | `set` | `function=config` 的发布模式：`set`（整树替换）/ `append`（include/exclude 并集合并，等价 `POST /config?mode=append`） |
 
-`function=uploadfile` 是唯一读取 `source` 段的 cli 功能：分发处（`internal/role/cli/role.go`）解码 `source.uploadfile.*`，校验 `logPattern` 非空后才连 Mongo，跑完后向 stdout 打印与 `function=upload` 相同的 stats JSON。gateway / daemon **没有** uploadfile 入口（v1.6 需求 §7）。
+`function=file` 是唯一读取 `source` 段的 cli 功能：分发处（`internal/role/cli/role.go`）解码 `source.file.*`，校验 `logPattern` 非空后才连 Mongo，跑完后向 stdout 打印与 `function=upload` 相同的 stats JSON。gateway / daemon **没有** file 入口（v1.6 需求 §7）。
 
 完整样例：[daemon](../../examples/config/daemon/daemon.max.yaml)、
 [gateway](../../examples/config/gateway/gateway.max.yaml)、
 [cli upload](../../examples/config/cli/cli.upload.max.yaml)、
-[cli uploadfile](../../examples/config/cli/cli.uploadfile.max.yaml)、
+[cli file](../../examples/config/cli/cli.file.max.yaml)、
 [cli ejson](../../examples/config/cli/cli.ejson.max.yaml)、
 [cli sql](../../examples/config/cli/cli.sql.max.yaml)。
 
@@ -350,8 +350,8 @@ gateway 同时暴露三个独立路径（与 `/upload` 互不影响，无额外�
 | `source.tailer.pollInterval` | `200ms` | `internal/source/tailer` |
 | `source.tailer.maxLineBytes` | `10485760`（10MiB） | `defaultMaxLineSize`（`tailer.go`） |
 | `source.tailer.maxOpenFDs` | `0`（关闭） | `internal/source/tailer`（负值归一为 `0`） |
-| `source.uploadfile.logPattern` | **required:cli `function=uploadfile`**（无默认） | `cli` 分发（`role.go`）/ `Engine.UploadFile` 强制 |
-| `source.uploadfile.maxLineBytes` | `10485760`（10MiB） | `internal/source/uploadfile`（与 tailer 共用 `defaultMaxLineSize`） |
+| `source.file.paths` | **required:cli `function=file`**（无默认） | `cli` 分发（`role.go`）/ `Engine.File` 强制 |
+| `source.file.maxLineBytes` | `10485760`（10MiB） | `internal/source/file`（与 tailer 共用 `defaultMaxLineSize`） |
 | `process.mode` | `batch`（daemon 忽略，固定 pipeline） | `internal/process` |
 | `process.batchSize` | `1000` | `internal/process` |
 | `process.pipeline.batchSize` | `1000` | `internal/process/pipeline` |
