@@ -88,7 +88,11 @@ def box(d, x, y, w, h, colors, title=None, subs=None,
         tw = bb[2] - bb[0]
         d.text((s(cx) - tw // 2, s(cy)), title, font=font(tpx, bold=True), fill=title_color)
         cy += th
-    _wrap_center(d, cx, cy, subs, font(spx), SUBINK, s(spx + 4))
+    # Line advance is (spx+4) in the same logical units as cy/sh — NOT s(spx+4),
+    # which double-applied the supersample factor and made the rendered subs block
+    # ~2x taller than the budget (th+sh) used for vertical centering, spilling the
+    # last sub-line of boxes with many subs below the bottom border.
+    _wrap_center(d, cx, cy, subs, font(spx), SUBINK, spx + 4)
 
 
 def _dashed_rrect(d, xy, r, color, width, dash, gap):
