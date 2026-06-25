@@ -57,10 +57,11 @@ func RunFile(ctx context.Context, daoCfg *dao.Config, procCfg *process.Config, p
 
 // RunBackfill pulls historical data from the ThinkingData OpenAPI per bfCfg
 // (backfill.*) and ingests it through the embedded api engine, returning per-run
-// statistics. It builds an engine, ensures indexes, runs the checkpointed
-// submit→poll→paginate loop to completion, and closes the engine. It backs the
-// cli role's function=backfill.
-func RunBackfill(ctx context.Context, daoCfg *dao.Config, procCfg *process.Config, parserCfg *parser.Config, bfCfg *api.BackfillConfig) (api.Result, error) {
+// statistics. It builds an engine, ensures indexes, runs the submit→poll→
+// paginate fetch loop to completion feeding the rows through an in-memory relay
+// (sized by memCfg, source.mem.*) and a forced-pipeline uploader, and closes the
+// engine. It backs the cli role's function=backfill.
+func RunBackfill(ctx context.Context, daoCfg *dao.Config, procCfg *process.Config, parserCfg *parser.Config, bfCfg *api.BackfillConfig, memCfg *api.MemConfig) (api.Result, error) {
 	eng, err := api.New(ctx, daoCfg, procCfg, parserCfg, nil)
 	if err != nil {
 		return api.Result{}, err
@@ -70,7 +71,7 @@ func RunBackfill(ctx context.Context, daoCfg *dao.Config, procCfg *process.Confi
 	if err := eng.EnsureIndexes(ctx); err != nil {
 		return api.Result{}, err
 	}
-	return eng.RunBackfill(ctx, bfCfg)
+	return eng.RunBackfill(ctx, bfCfg, memCfg)
 }
 
 // RunEJSON reads a single Extended-JSON Mongo Data API request from in, executes

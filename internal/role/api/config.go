@@ -47,6 +47,13 @@ type FileConfig = source.FileConfig
 // alone.
 type BackfillConfig = backfill.Config
 
+// MemConfig is the source.mem.* module config (the in-memory relay source's
+// buffer size). Alias for the source facade's MemConfig (itself an alias for
+// mem.Config — DAO-6: the role layer names source types through the facade
+// only). Engine.RunBackfill sizes the relay it feeds fetched rows through from
+// it; a nil value uses the relay's default buffer.
+type MemConfig = source.MemConfig
+
 // Tree is the resolved unified-config tree NewFromTree slices its module
 // branches from. Alias for cfgtree.Tree.
 type Tree = cfgtree.Tree

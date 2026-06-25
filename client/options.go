@@ -39,6 +39,7 @@ type options struct {
 	proc     api.ProcessConfig
 	cfgsync  api.CfgsyncConfig
 	file     api.FileConfig
+	mem      api.MemConfig
 	backfill api.BackfillConfig
 
 	// err records the first failure from a config-loading option
@@ -57,6 +58,7 @@ func defaultOptions() *options {
 	o.proc.ApplyDefaults()
 	o.cfgsync.ApplyDefaults()
 	o.file.ApplyDefaults()
+	o.mem.ApplyDefaults()
 	o.backfill.ApplyDefaults()
 	return o
 }
@@ -175,6 +177,16 @@ func WithDaoMongoServerSelectionTimeout(d time.Duration) Option {
 // files still import.
 func WithSourceFileMaxLineBytes(n int) Option {
 	return func(o *options) { o.file.MaxLineBytes = n }
+}
+
+// ----------------------------------------------------------------- source.mem
+
+// WithSourceMemBufferSize sets source.mem.bufferSize: the capacity (in lines) of
+// the in-memory relay the RunBackfill face feeds fetched rows through. It bounds
+// how far the fetch producer may run ahead of the draining pipeline before it
+// blocks (backpressure). A non-positive value uses the default (2000).
+func WithSourceMemBufferSize(n int) Option {
+	return func(o *options) { o.mem.BufferSize = n }
 }
 
 // ----------------------------------------------------------------- backfill

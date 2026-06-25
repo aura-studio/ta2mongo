@@ -115,7 +115,7 @@ func TestBackfillEventPath(t *testing.T) {
 		t.Fatalf("EnsureIndexes: %v", err)
 	}
 
-	res, err := eng.RunBackfill(ctx, eventCfg(srv.URL))
+	res, err := eng.RunBackfill(ctx, eventCfg(srv.URL), nil)
 	if err != nil {
 		t.Fatalf("RunBackfill: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestBackfillEventPath(t *testing.T) {
 
 	// Re-run is idempotent: no checkpoint, but #uuid $setOnInsert dedups, so the
 	// event count stays at 4.
-	if _, err := eng.RunBackfill(ctx, eventCfg(srv.URL)); err != nil {
+	if _, err := eng.RunBackfill(ctx, eventCfg(srv.URL), nil); err != nil {
 		t.Fatalf("re-run RunBackfill: %v", err)
 	}
 	if got := count(t, db, "event"); got != 4 {
@@ -166,7 +166,9 @@ func TestBackfillUserPath(t *testing.T) {
 		t.Fatalf("EnsureIndexes: %v", err)
 	}
 
-	res, err := eng.RunBackfill(ctx, cfg)
+	// A small configured relay buffer (source.mem.*) exercises the mem-config
+	// path and backpressure without changing the result.
+	res, err := eng.RunBackfill(ctx, cfg, &api.MemConfig{BufferSize: 4})
 	if err != nil {
 		t.Fatalf("RunBackfill: %v", err)
 	}

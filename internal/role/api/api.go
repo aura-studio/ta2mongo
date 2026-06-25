@@ -240,7 +240,11 @@ func (c *Engine) File(ctx context.Context, cfg *FileConfig) (Result, error) {
 // connection; it adds no custom write model, selection filter or checkpoint —
 // re-runs re-fetch and the write models dedup. The returned Result aggregates
 // the pipeline's ingestion counters.
-func (c *Engine) RunBackfill(ctx context.Context, cfg *BackfillConfig) (Result, error) {
+//
+// memCfg sizes the in-memory relay's buffer (source.mem.*): how far the fetch
+// producer may run ahead of the draining pipeline before Push blocks. A nil
+// memCfg uses the relay's default buffer.
+func (c *Engine) RunBackfill(ctx context.Context, cfg *BackfillConfig, memCfg *MemConfig) (Result, error) {
 	if cfg == nil {
 		return Result{}, fmt.Errorf("api: backfill config is required")
 	}
@@ -260,7 +264,7 @@ func (c *Engine) RunBackfill(ctx context.Context, cfg *BackfillConfig) (Result, 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	relay := source.NewMem(0)
+	relay := source.NewMem(memCfg)
 
 	type runOut struct {
 		res Result

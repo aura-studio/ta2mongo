@@ -34,9 +34,9 @@ v1.3–v1.6 按现行架构回归（SQL Data API / cfgsync / client SDK / file�
 
 | 面 | 新增 |
 | --- | --- |
-| Engine（`internal/role/api`） | `RunBackfill(ctx, *BackfillConfig)` |
-| client/ 公开 SDK | `RunBackfill(ctx)`（`WithBackfill*` options；经 Engine 中转，守 import 边界） |
-| cli | `role.cli.function=backfill`（读 `backfill.*`，不读 stdin） |
+| Engine（`internal/role/api`） | `RunBackfill(ctx, *BackfillConfig, *MemConfig)`（第二参 = `source.mem.*` 中转源缓冲，nil 取默认） |
+| client/ 公开 SDK | `RunBackfill(ctx)`（`WithBackfill*` + `WithSourceMemBufferSize` options；经 Engine 中转，守 import 边界） |
+| cli | `role.cli.function=backfill`（读 `backfill.*` + `source.mem.*`，不读 stdin） |
 | gateway / daemon | 不动（无 backfill 入口） |
 
 ## 3. 设计
@@ -51,9 +51,10 @@ v1.3–v1.6 按现行架构回归（SQL Data API / cfgsync / client SDK / file�
 - **编码成日志行**（`rowdecode.EncodeRowAsJSONLine`）：把 header 与一行数据拼成与 file-tail 同形的 TA JSON 行
   （`#`/`_`/`$` 前缀字段提顶层、其余进 `properties`、nil 丢弃）；行缺 `#type` 时注入默认类型——event 表注 `track`，
   user 表注 `user_setOnce`（默认，永不覆盖）或 `user_set`（`forceSkipExisting=false` 时）。
-- **内存中转源**（**新包** `internal/source/mem`，门面 `source.NewMem`）：channel 背书的 `source.Source`
+- **内存中转源**（**新包** `internal/source/mem`，门面 `source.NewMem(cfg *MemConfig)`）：channel 背书的 `source.Source`
   （`New(buf)` / `Push(ctx,line)` / `Close()` / `Run(ctx) <-chan string`，**单生产者**；Push 满则阻塞背压）。
-  它是 `source/file` 的内存版——file 从磁盘读行、mem 从同进程生产者收行。
+  它是 `source/file` 的内存版——file 从磁盘读行、mem 从同进程生产者收行；与 file 一样自带配置（`mem.Config`，
+  键 `source.mem.bufferSize`，默认 2000），经 `source.Config` 聚合、`Engine.RunBackfill` 据此定中转缓冲。
 - **强制 pipeline 消费**（`Engine.RunBackfill` + `runPipeline`）：起一个后台 pipeline uploader 漏取中转源，同时 fetcher
   作为生产者 fetch→encode→push；`runPipeline` **强制 `process.mode=pipeline`**（无视 engine 配置的 mode），让生产/消费并发。
   借派生 ctx：pipeline 写失败时 cancel，解开 fetcher 在满缓冲上阻塞的 Push（避免死锁）。

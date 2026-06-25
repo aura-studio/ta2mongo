@@ -18,6 +18,9 @@
     "mode": "pipeline",
     "batchSize": 1000
   },
+  "source": {
+    "mem": { "bufferSize": 2000 }
+  },
   "backfill": {
     "apiBaseURL": "https://ta.example.com",
     "token": "your-ta-openapi-token",

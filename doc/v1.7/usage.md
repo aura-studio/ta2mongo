@@ -325,10 +325,11 @@ defer c.Close()
 res, _ := c.File(ctx, "/var/log/app/ta.2024-01-01.log", "/var/log/app/ta.2024-01-02.log") // 显式路径（无 glob/目录）；无 checkpoint：重跑全量重导（event/user_set 类收敛；含 user_add/user_append 的文件勿盲目重跑）
 ```
 
-v1.7 起（源自 v1.6.1）同一引擎再多一个 TA OpenAPI 历史回填面：嵌入方直接调 `eng.RunBackfill(ctx, &api.BackfillConfig{...})`
+v1.7 起（源自 v1.6.1）同一引擎再多一个 TA OpenAPI 历史回填面：嵌入方直接调 `eng.RunBackfill(ctx, &api.BackfillConfig{...}, memCfg)`
 （`api.BackfillConfig` 是 `internal/backfill` 配置的类型别名；先 `Validate` 再跑，**借用引擎已开的 Mongo + dao
 连接、不自开自关**；Fetcher 把每行编码成 TA JSON 推进内存中转源（`source/mem`），`RunBackfill` **强制
-`process.mode=pipeline`** 让后台流水线边拉边消费——**无 checkpoint、无 RunID、重跑即重拉，幂等靠写模型**）：
+`process.mode=pipeline`** 让后台流水线边拉边消费——**无 checkpoint、无 RunID、重跑即重拉，幂等靠写模型**。
+第二个参数 `memCfg *api.MemConfig`（= `source.mem.*`）给中转源定缓冲；传 `nil` 取默认 2000）：
 
 ```go
 cfg := &api.BackfillConfig{
@@ -338,7 +339,7 @@ cfg := &api.BackfillConfig{
     Events:     []string{"login"}, // 下推为 SQL 的 "#event_name" IN (...)
 }
 cfg.PartDateRange.Start, cfg.PartDateRange.End = "2026-01-01", "2026-03-31"
-res, _ := eng.RunBackfill(ctx, cfg)
+res, _ := eng.RunBackfill(ctx, cfg, nil) // nil = 默认中转缓冲；或传 &api.MemConfig{BufferSize: 5000}
 // res 同 Upload 形（行数 / user / event / 死信）
 ```
 
@@ -354,6 +355,7 @@ c, _ := client.New(
     client.WithBackfillPartDateRange("2026-01-01", "2026-03-31"),
     client.WithBackfillEvents("login"), // 下推为 "#event_name" IN (...)；还有 WithBackfillTable/
                                         // EventTimeRange/SchemaPrefix/Proxy/PageSize/Limit/ForceSkipExisting
+    // client.WithSourceMemBufferSize(5000), // 可选：中转源缓冲（== source.mem.bufferSize，默认 2000）
 )
 defer c.Close()
 

@@ -232,8 +232,8 @@ config           -> cfgtree + 各模块（仅用其 RegisterDefaults 注册键�
 
 | 文件 | 职责 |
 |---|---|
-| `source/source.go` | `source.Source` 契约：`Run(ctx) <-chan string`；**子包门面**：`NewLines`(httpbody)/`NewReader`(stdin)/`NewTailer`(tailer)/`NewFile`(file，容忍 nil cfg)/`NewMem(buf) *mem.Source`（返回具体类型供调用方 Push/Close，v1.7） 构造器 |
-| `source/config.go` | `source.Config`：聚合 `tailer.Config`（键 source.tailer.*）+ `File *file.Config`（键 source.file.*） |
+| `source/source.go` | `source.Source` 契约：`Run(ctx) <-chan string`；**子包门面**：`NewLines`(httpbody)/`NewReader`(stdin)/`NewTailer`(tailer)/`NewFile`(file，容忍 nil cfg)/`NewMem(cfg *MemConfig) *mem.Source`（返回具体类型供调用方 Push/Close；buffer 由 `source.mem.bufferSize` 配置、容忍 nil cfg，v1.7） 构造器；`MemConfig = mem.Config` 别名（经门面再导出，role 层不 import 子包） |
+| `source/config.go` | `source.Config`：聚合 `Tailer *tailer.Config`（键 source.tailer.*）+ `File *file.Config`（键 source.file.*）+ `Mem *mem.Config`（键 source.mem.*，v1.7），`RegisterDefaults`/`ApplyDefaults` 级联三者 |
 | `source/httpbody/httpbody.go` | `httpbody.Source`：把预解析的行数组（单条/批量）包成 line channel（gateway/api 用） |
 | `source/stdin/stdin.go` | `stdin.Source`：从 io.Reader/os.Stdin 逐行扫描成 channel（cli 用） |
 | `source/tailer/tailer.go` | `Tailer`：glob 发现文件、追尾、rescan，输出 line channel（hybrid/poll/event） |
@@ -241,6 +241,7 @@ config           -> cfgtree + 各模块（仅用其 RegisterDefaults 注册键�
 | `source/file/file.go` | `file.Source`：有限一次性导入源——按 `paths` 列出的**显式文件路径**逐个从头到 EOF 把非空行送入 channel（cap 2000）后关闭；**无 glob、无目录展开、不依赖 tailer**（目录路径 stat 检出后记日志跳过，不展开）；scanner 语义对齐 tailer（64KiB 起步、上限 maxLineBytes，但为自有实现）；单文件错误（打不开 / 是目录 / `bufio.ErrTooLong`）记日志跳过、不影响其余文件；无 checkpoint（详见 §9） |
 | `source/file/config.go` | `file.Config`（`paths` []string + `maxLineBytes`，默认 10485760）+ `RegisterDefaults`/`ApplyDefaults`（无 Validate——无可枚举值） |
 | `source/mem/mem.go` | **v1.7** `mem.Source`：channel 背书的中转源——`New(buf)`（buf<=0 取默认 2000）/ `Push(ctx, line)`（单生产者；空行跳过、满则阻塞背压、ctx 取消或已 Close 报错 `ErrClosed`）/ `Close()`（`sync.Once`，关 channel 让 pipeline drain 完收尾）/ `Run(ctx) <-chan string`（不起 goroutine，仅交出接收端）。是 file 的内存对偶，供 backfill 把拉取行喂进上报管线 |
+| `source/mem/config.go` | **v1.7** `mem.Config`（`bufferSize` int，键 source.mem.*）+ `RegisterDefaults`/`ApplyDefaults`（`<=0` 补成默认 2000）——对齐 file（无 Validate，buffer 无可枚举值）。`source.NewMem(cfg)` 据此给中转通道定容量 |
 | `source/taapi/taapi.go` | 占位包（预留未来 TA API 来源，无导出符号） |
 
 #### 数据访问 `internal/dao`
@@ -332,7 +333,7 @@ config           -> cfgtree + 各模块（仅用其 RegisterDefaults 注册键�
 |---|---|
 | `role/role.go` | `Role` 接口（`Run(ctx, cfgtree.Tree) error`）+ `Get(mode) (Role,error)` 派发 + 角色名常量（`API`/`CLI`/`Daemon`/`Gateway`） |
 | `role/config.go` | `role.Config`：聚合 `daemon`/`gateway`/`cli` + `ApplyDefaults`/`Validate`/`RegisterDefaults` + `FromTree` |
-| `role/api/api.go` | 可复用引擎库 `api.Engine`：`New(ctx, *dao.Config, *process.Config, *parser.Config, *cfgsync.Config)` / `NewFromTree(ctx, tree)`（切 dao/process/parser/cfgsync 子树）/`Upload(lines)`（经 `source.NewLines`）/`File(ctx, cfg)`（**v1.6.0**：先拒空 `Paths`（`"api: file paths is required"`，先于任何 source/库操作）再 `Run(source.NewFile(cfg))`；`api.FileConfig` = `source.FileConfig`（经 source 门面、最终 = `file.Config`，在 `role/api/config.go`——role 层不 import source 子包）/`RunBackfill(ctx, *api.BackfillConfig) (Result, error)`（**v1.7**：`ApplyDefaults`+`Validate` 后建 `backfill.New` Fetcher + `source.NewMem(0)` 中转源；后台 goroutine 跑 `runPipeline`（**强制** `process.ModePipeline`）并发消费中转源，前台 `Fetcher.Run` 把每行 `relay.Push`，`relay.Close()` 收尾；派生 `runCtx` 让 pipeline 失败时取消、解阻塞生产者；pipeline 写错误优先于由取消引发的 fetch 错误；`api.BackfillConfig` = `backfill.Config` 别名，在 `role/api/config.go`）；私有 `runPipeline(ctx, src)`（拷 procCfg 强置 pipeline 跑任意 source）/`Run(src)`/`EJSON(req)`（Mongo Data API）/`SQL(query)`（SQL Data API）/`EnsureIndexes`/`Close`/`StartCfgsync(ctx)`（仅 `cfgsync.enabled` 时起 Watcher goroutine）/`PublishConfig(ctx, doc)`（中转 `cfgsync.Publish`）+ `Result`（非可派发角色） |
+| `role/api/api.go` | 可复用引擎库 `api.Engine`：`New(ctx, *dao.Config, *process.Config, *parser.Config, *cfgsync.Config)` / `NewFromTree(ctx, tree)`（切 dao/process/parser/cfgsync 子树）/`Upload(lines)`（经 `source.NewLines`）/`File(ctx, cfg)`（**v1.6.0**：先拒空 `Paths`（`"api: file paths is required"`，先于任何 source/库操作）再 `Run(source.NewFile(cfg))`；`api.FileConfig` = `source.FileConfig`（经 source 门面、最终 = `file.Config`，在 `role/api/config.go`——role 层不 import source 子包）/`RunBackfill(ctx, *api.BackfillConfig, *api.MemConfig) (Result, error)`（**v1.7**：`ApplyDefaults`+`Validate` 后建 `backfill.New` Fetcher + `source.NewMem(memCfg)` 中转源（`memCfg` = `source.mem.*`，nil 取默认 buffer）；后台 goroutine 跑 `runPipeline`（**强制** `process.ModePipeline`）并发消费中转源，前台 `Fetcher.Run` 把每行 `relay.Push`，`relay.Close()` 收尾；派生 `runCtx` 让 pipeline 失败时取消、解阻塞生产者；pipeline 写错误优先于由取消引发的 fetch 错误；`api.BackfillConfig` = `backfill.Config`、`api.MemConfig` = `source.MemConfig` 别名，在 `role/api/config.go`）；私有 `runPipeline(ctx, src)`（拷 procCfg 强置 pipeline 跑任意 source）/`Run(src)`/`EJSON(req)`（Mongo Data API）/`SQL(query)`（SQL Data API）/`EnsureIndexes`/`Close`/`StartCfgsync(ctx)`（仅 `cfgsync.enabled` 时起 Watcher goroutine）/`PublishConfig(ctx, doc)`（中转 `cfgsync.Publish`）+ `Result`（非可派发角色） |
 | `role/daemon/role.go` | `daemon.Role.Run`：`signal.NotifyContext(SIGINT/SIGTERM)` → `NewFromTree`（切 dao/parser/source/process/cfgsync + **fail-fast 校验 logPattern，先于连 Mongo** + 启动 banner，含 `maskURI`）→ `EnsureIndexes` → `Run` |
 | `role/daemon/report.go` | `daemon.Service`（`New`/`NewFromTree`）：经 `source.NewTailer` 建源 → 强制 pipeline `process.New(cfg).Run(runCtx, tailer)` → MongoDB；内嵌 cfgsync Watcher（`startCfgsync`）；`reportStats` 每 60s 打 interval/cumulative/**runtime（goroutines/open_fds/tailed_files）** 三条日志 + **fd 看门狗**（`maxOpenFDs>0 && open_fds>阈` → `cancelRun` 优雅 drain+flush+退出，交编排器重启）；`logFinalStats` 收尾摘要 |
 | `role/daemon/procstats.go` | `openFDCount()`：Linux 经 `/proc/self/fd`（-1 修正 ReadDir 自身 fd）；非 Linux 返回 -1（看门狗 inert） |
@@ -520,7 +521,7 @@ Elastic Cluster 不支持）；standalone mongod 无 change stream → 启动时
 | `role/{gateway,cli}` | **dao** | `(*SQLResult).MarshalEJSON()` | HTTP / stdin 的 SQL 结果 EJSON 编码 |
 | `role/daemon` | **dao/parser/source/process** | `dao.New`；`(*parser.Config).Build`；`source.NewTailer(srcCfg.Tailer)`；`process.New(pipelineCfg, …).Run(ctx, tailerSrc)` | 编排长驻流水线 |
 | `role/api` | **backfill** | `backfill.New(cfg) → *Fetcher`；`(*Fetcher).Run(ctx, emit func(line string) error)`；`backfill.Config`（经 `api.BackfillConfig` 别名，`ApplyDefaults`/`Validate`） | `RunBackfill` 建 Fetcher，把 `emit` 接到中转源 Push（backfill 只认回调签名、不认 `role/api`，无 import 环） |
-| `role/api` | **source** | `source.NewMem(buf) → *mem.Source`；`(*mem.Source).Push(ctx,line)`/`Close()`；该 `*mem.Source` 亦满足 `source.Source` 供 `runPipeline` | `RunBackfill` 用内存中转源接 Fetcher 的 `emit` → 强制 pipeline 上报管线并发 drain（实现在 `source/mem`，经 source 门面） |
+| `role/api` | **source** | `source.NewMem(cfg *MemConfig) → *mem.Source`（cfg = `source.mem.*`，nil 取默认）；`(*mem.Source).Push(ctx,line)`/`Close()`；该 `*mem.Source` 亦满足 `source.Source` 供 `runPipeline` | `RunBackfill` 用内存中转源接 Fetcher 的 `emit` → 强制 pipeline 上报管线并发 drain（实现在 `source/mem`，经 source 门面；buffer 由 `source.mem.bufferSize` 配） |
 | `role/cli` | **backfill** | `backfill.FromTree(t) → *backfill.Config`；`(*Config).Validate()` | `function=backfill` 时裁剪 `backfill` 子树、连 Mongo **前** 校验后交 `RunBackfill` |
 | `client`（公共 SDK） | **role/api** | `api.New(o.ctx, &o.dao, &o.proc, &o.parser, &o.cfgsync)`（持 cfgsync 配置但**不起 Watcher**）；`(*Engine).Upload`/`File`/`RunBackfill`/`EnsureIndexes`/`PublishConfig`/`AppendConfig`/`FetchConfig`/`EJSONBytes`/`SQLBytes`/`Close`；`api.BackfillConfig`（由 `WithBackfill*` 选项填充） | redis-go 风格门面，复用真实 config 结构体（`Client.File`/`Client.RunBackfill` 经引擎中转，client **不 import** `internal/source`/`internal/backfill`——backfill 走 `api.BackfillConfig` 别名，importboundary 测试强制；查询面走 bytes-in/bytes-out，不触 dao 类型） |
 | `cfgsync` | **dao** | `(*Dao).EJSON(ctx, *EJSONRequest)`（findOne 读 / updateOne `$set`+`$inc` upsert 写）；`(*Dao).Watch(ctx, coll, pipeline, opts) → *mongo.ChangeStream` | 读中心文档 + 订阅 change stream + 原子发布（实现在 dao/ejson + dao/mongo，经 dao 门面） |
@@ -621,13 +622,13 @@ goroutine 跑 **强制 pipeline** 的 `runPipeline` 消费中转源，前台 `Fe
 cli.Role.Run（role.cli.function=backfill）                          [role/cli/role.go]
  ├─ backfill.FromTree(tree) → *backfill.Config                       [裁剪 backfill 子树]
  │    （(*Config).Validate() 失败即报错——先于连 Mongo）
- └─ cli.RunBackfill(ctx, daoCfg, procCfg, parserCfg, bfCfg)          [role/cli/cli.go]
+ └─ cli.RunBackfill(ctx, daoCfg, procCfg, parserCfg, bfCfg, srcCfg.Mem)  [role/cli/cli.go；srcCfg.Mem = source.mem.*]
       ├─ api.New(...) → *Engine（连 MongoDB）
       ├─ (*Engine).EnsureIndexes(ctx)
-      └─ (*Engine).RunBackfill(ctx, bfCfg) (Result, error)           [role/api/api.go]
+      └─ (*Engine).RunBackfill(ctx, bfCfg, memCfg) (Result, error)   [role/api/api.go]
            ├─ bfCfg.ApplyDefaults() + Validate()
            ├─ fetcher := backfill.New(bfCfg)                         [近叶子，无 dao/parser]
-           ├─ relay := source.NewMem(0)                              [内存中转源；runCtx 可取消解阻塞 Push]
+           ├─ relay := source.NewMem(memCfg)                         [内存中转源；buffer=source.mem.bufferSize，nil 取默认；runCtx 可取消解阻塞 Push]
            ├─ go runPipeline(runCtx, relay)：                        [拷 procCfg 强置 ModePipeline]
            │    process.New(pipeline,...).Run(runCtx, relay)         [消费者：与 §7.2 完全同核]
            │      relay.Run(ctx) <-chan string → parse→filter(parser.filter.*)→identity→写模型→BulkWrite
@@ -664,6 +665,7 @@ main → config.Load(文件 < TANGO_* env < flag) → viper.AllSettings 物化 �
 
 `client` 不走 `cfgtree`：`With*` 选项直接写入它内嵌的真实 `dao.Config`/`parser.Config`/`process.Config`/
 `cfgsync.Config`（v1.6.0 起含 file：`WithSourceFileMaxLineBytes(n)` = 键 `source.file.maxLineBytes`；
+v1.7 起含 mem：`WithSourceMemBufferSize(n)` = 键 `source.mem.bufferSize`，由 `RunBackfill` 喂中转源；
 文件路径列表则是 `Client.File(ctx, paths...)` 的调用期参数，不进配置），
 `client.New` 把它们的地址原样交给 `api.New(..., &o.cfgsync)`（持 cfgsync 配置供 `PublishConfig`/`FetchConfig`
 等配置面寻址中心文档，但 SDK **不起** cfgsync Watcher；与上面角色侧最终调用的 `api.New` 同一入口）。
@@ -890,7 +892,7 @@ pipeline 上报管线。**两表的唯一差别是行缺 `#type` 时注入的默
 `Engine.RunBackfill`（`role/api/api.go`）的并发结构：
 
 ```text
-relay := source.NewMem(0)                  // channel 背书，默认 cap 2000，单生产者
+relay := source.NewMem(memCfg)             // channel 背书，cap=source.mem.bufferSize（nil/<=0 取默认 2000），单生产者
 runCtx, cancel := context.WithCancel(ctx)  // 派生 ctx：pipeline 失败→cancel→解阻塞生产者 Push
  ├─ 后台 goroutine（消费者）：runPipeline(runCtx, relay)
  │     拷 procCfg、强置 process.ModePipeline → process.New(...).Run(runCtx, relay.Run(ctx))

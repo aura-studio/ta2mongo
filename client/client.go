@@ -69,7 +69,8 @@ type Client interface {
 	// write models dedup by #uuid / #user_id. Configure it via the WithBackfill*
 	// options (apiBaseURL/token/projectID are required, plus partDateRange for
 	// the event table; an invalid config errors before any network or database
-	// work). Returns the run's aggregate ingestion statistics.
+	// work); WithSourceMemBufferSize tunes the relay buffer. Returns the run's
+	// aggregate ingestion statistics.
 	RunBackfill(ctx context.Context) (Result, error)
 	// File bulk imports the explicitly-listed on-disk TA log files once — every
 	// file is read start to EOF through the configured strategy, then the run
@@ -124,6 +125,10 @@ type client struct {
 	// backfill carries the backfill.* config the RunBackfill face hands to the
 	// engine (set via the WithBackfill* options).
 	backfill api.BackfillConfig
+	// mem carries the source.mem.* tuning (bufferSize) sizing the in-memory relay
+	// the RunBackfill face feeds fetched rows through (set via
+	// WithSourceMemBufferSize).
+	mem api.MemConfig
 	// file carries the source.file.* tuning (maxLineBytes) the
 	// File face combines with its call-time paths; the engine
 	// constructs the source from it (the client never touches the source
@@ -152,7 +157,7 @@ func New(opts ...Option) (Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &client{engine: engine, file: o.file, backfill: o.backfill}, nil
+	return &client{engine: engine, file: o.file, mem: o.mem, backfill: o.backfill}, nil
 }
 
 func (c *client) Upload(ctx context.Context, lines ...string) (Result, error) {
@@ -171,7 +176,8 @@ func (c *client) Upload(ctx context.Context, lines ...string) (Result, error) {
 
 func (c *client) RunBackfill(ctx context.Context) (Result, error) {
 	cfg := c.backfill // copy so the engine's ApplyDefaults never mutates the client
-	res, err := c.engine.RunBackfill(ctx, &cfg)
+	memCfg := c.mem   // ditto; sizes the relay (source.mem.*)
+	res, err := c.engine.RunBackfill(ctx, &cfg, &memCfg)
 	if err != nil {
 		return Result{}, err
 	}

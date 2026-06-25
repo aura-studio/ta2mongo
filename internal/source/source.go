@@ -78,12 +78,24 @@ func NewFile(cfg *FileConfig) Source {
 	return file.New(cfg.Paths, cfg.MaxLineBytes)
 }
 
-// NewMem returns an in-memory relay Source: a single producer pushes already-
-// formed TA log lines into it via Push and ends the stream with Close, while
-// the process pipeline drains them concurrently. buf bounds how far the
-// producer may run ahead (Push blocks when full). It is the in-memory analogue
-// of NewFile and is used by the backfill domain to feed fetched ThinkingData
-// rows through the normal upload pipeline without its own write path. The
-// concrete *mem.Source is returned (not the Source interface) so the caller can
-// Push/Close; it also satisfies Source for the uploader.
-func NewMem(buf int) *mem.Source { return mem.New(buf) }
+// MemConfig is the in-memory relay source's configuration (source.mem.*),
+// re-exported so the role/engine layer names it through the source facade alone
+// (the DAO-6 boundary: role/* never imports source subpackages). Alias for
+// mem.Config.
+type MemConfig = mem.Config
+
+// NewMem returns an in-memory relay Source configured by cfg (source.mem.*): a
+// single producer pushes already-formed TA log lines into it via Push and ends
+// the stream with Close, while the process pipeline drains them concurrently.
+// cfg.BufferSize bounds how far the producer may run ahead (Push blocks when
+// full); a nil cfg or non-positive bufferSize uses the default. It is the
+// in-memory analogue of NewFile and is used by the backfill domain to feed
+// fetched ThinkingData rows through the normal upload pipeline without its own
+// write path. The concrete *mem.Source is returned (not the Source interface)
+// so the caller can Push/Close; it also satisfies Source for the uploader.
+func NewMem(cfg *MemConfig) *mem.Source {
+	if cfg == nil {
+		cfg = &MemConfig{}
+	}
+	return mem.New(cfg.BufferSize)
+}

@@ -5,6 +5,7 @@ import (
 
 	"github.com/aura-studio/tango/internal/cfgtree"
 	"github.com/aura-studio/tango/internal/source/file"
+	"github.com/aura-studio/tango/internal/source/mem"
 	"github.com/aura-studio/tango/internal/source/tailer"
 )
 
@@ -23,15 +24,19 @@ func FromTree(t cfgtree.Tree) (*Config, error) {
 }
 
 // Config aggregates the data-source configurations, fronting the source
-// subpackages so the file schema key (source.*) maps to the package path. Only
-// the file-backed sources carry configuration; httpbody/stdin take their input
-// at call time and need none.
+// subpackages so the file schema key (source.*) maps to the package path. The
+// tailer, file and mem sources carry configuration; httpbody/stdin take their
+// input at call time and need none.
 type Config struct {
 	// Tailer configures the file-tailing source (file key source.tailer.*).
 	Tailer *tailer.Config `mapstructure:"tailer"`
 	// File configures the one-shot file-import source (config key
 	// source.file.*): explicit file paths, no glob, no directories.
 	File *file.Config `mapstructure:"file"`
+	// Mem configures the in-memory relay source (config key source.mem.*): the
+	// buffer bounding how far a producer (e.g. the backfill fetcher) may run
+	// ahead of the draining pipeline. Engine.RunBackfill sizes its relay from it.
+	Mem *mem.Config `mapstructure:"mem"`
 }
 
 // Validate delegates to the configured source sub-configs.
@@ -48,6 +53,7 @@ func (c *Config) Validate() error {
 func (c *Config) RegisterDefaults(set func(key string, value any), prefix string) {
 	new(tailer.Config).RegisterDefaults(set, prefix+".tailer")
 	new(file.Config).RegisterDefaults(set, prefix+".file")
+	new(mem.Config).RegisterDefaults(set, prefix+".mem")
 }
 
 // ApplyDefaults allocates child configs and lets them own their defaults.
@@ -60,4 +66,8 @@ func (c *Config) ApplyDefaults() {
 		c.File = &file.Config{}
 	}
 	c.File.ApplyDefaults()
+	if c.Mem == nil {
+		c.Mem = &mem.Config{}
+	}
+	c.Mem.ApplyDefaults()
 }

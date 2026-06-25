@@ -93,7 +93,7 @@ graph TD
 | **L1 基础** | `logging` | `cfgtree` |
 | **L2 子包** | `dao/mongo` | （无 internal） |
 | | `parser/talog` | （无 internal） |
-| | `source/mem` | （无 internal——只依赖 stdlib `context`/`errors`/`sync`）——内存中转源（relay），`source` 根包经 `NewMem` fronts 它 |
+| | `source/mem` | （无 internal——只依赖 stdlib `context`/`errors`/`sync`）——内存中转源（relay），`source` 根包经 `NewMem(cfg *MemConfig)` fronts 它；自带 `mem.Config`（键 `source.mem.bufferSize`，v1.7），但配置纯 stdlib、不引入 internal 边 |
 | | `source/taapi` | （无 internal）——**预留** stub，尚未接入 `source` 根包（`source` 不 import 它） |
 | | `dao/store` | `logging` |
 | | `parser/filter` | `logging` |

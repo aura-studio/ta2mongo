@@ -17,7 +17,7 @@
 |------|--------|
 | `daemon`（默认） | `logging` · `dao` · `parser` · `source` · `process` |
 | `gateway` | `logging` · `dao` · `parser` · `process` · `role.gateway` |
-| `cli` | `logging` · `dao` · `parser` · `process` · `role.cli`（`function=file` 时另读 `source.file`；`function=backfill` 时另读 `backfill.*`；`function=ejson`/`sql` 时仅 `logging` · `dao` · `role.cli`） |
+| `cli` | `logging` · `dao` · `parser` · `process` · `role.cli`（`function=file` 时另读 `source.file`；`function=backfill` 时另读 `backfill.*` + `source.mem`；`function=ejson`/`sql` 时仅 `logging` · `dao` · `role.cli`） |
 
 `--config` 留空时在**二进制同级目录**按 `tango.yaml → tango.yml → tango.json` 取首个存在者。
 文件缺失或解析为空时静默跳过（回退到默认值 + 环境变量 + flag）。
@@ -55,6 +55,7 @@
 | `source.tailer.maxOpenFDs` | `TANGO_SOURCE_TAILER_MAXOPENFDS` |
 | `source.file.paths` | `TANGO_SOURCE_FILE_PATHS`（逗号分隔，见下） |
 | `source.file.maxLineBytes` | `TANGO_SOURCE_FILE_MAXLINEBYTES` |
+| `source.mem.bufferSize` | `TANGO_SOURCE_MEM_BUFFERSIZE` |
 | `backfill.apiBaseURL` | `TANGO_BACKFILL_APIBASEURL` |
 | `backfill.token` | `TANGO_BACKFILL_TOKEN` |
 | `backfill.projectID` | `TANGO_BACKFILL_PROJECTID` |
@@ -198,9 +199,9 @@ mongodb://user:pass@<cluster-endpoint>:27017/tango?tls=true&tlsCAFile=/path/glob
 | `parser.filter.include` | optional | `[]`(全放行) | expr 表达式，OR 语义命中其一即保留 |
 | `parser.filter.exclude` | optional | `[]` | 命中其一即丢弃（在 include 之后） |
 
-### source（daemon / cli `function=file`） → `internal/source/{tailer,file}`
+### source（daemon / cli `function=file` / cli `function=backfill`） → `internal/source/{tailer,file,mem}`
 
-`source` 段现含两个子包：`source.tailer.*` 供 daemon 常驻追尾，`source.file.*` 供 cli `function=file` 的有限存量导入（v1.6 新增）。
+`source` 段现含三个**有配置**的子包：`source.tailer.*` 供 daemon 常驻追尾，`source.file.*` 供 cli `function=file` 的有限存量导入（v1.6 新增），`source.mem.*` 供 cli `function=backfill`（及 `Engine.RunBackfill`）的内存中转源调容量（v1.7 新增）。`httpbody`/`stdin` 在调用期拿输入，无配置。
 
 #### source.tailer.*（daemon） → `internal/source/tailer`
 
@@ -243,6 +244,14 @@ mongodb://user:pass@<cluster-endpoint>:27017/tango?tls=true&tlsCAFile=/path/glob
 |----|----|----|----|
 | `source.file.paths` | **required**（cli `function=file`） | `[]`（占位） | `[]string`，至少一条**显式文件路径**（无 glob、无目录）。env 用逗号分隔（见上）。`Config` 自身不强制非空；**由消费面强制**——cli 分发（`internal/role/cli/role.go`）在连 Mongo 之前 fail-fast（`cli: function=file requires source.file.paths`），api 面 `Engine.File` 在任何 source/数据库工作之前也拒绝 nil/空（`api: file paths is required`） |
 | `source.file.maxLineBytes` | optional | `10485760`(10MB) | 单行最大字节，对齐 tailer 的默认值（各自包内同名同值常量 `defaultMaxLineSize`）。占位 `0`，`ApplyDefaults` 把 `<=0` 修正成默认。超限行记 `bufio.ErrTooLong` 日志并**跳过该文件剩余部分**（超限行不发出），其余文件继续导入；打不开的文件同样记日志跳过 |
+
+#### source.mem.*（cli `function=backfill` / `Engine.RunBackfill`） → `internal/source/mem`
+
+内存中转源（v1.7 新增）：单生产者把已成形的 TA JSON 日志行 `Push` 进一个带缓冲的 channel，process pipeline 并发抽干，`Close` 收尾。它是 `source/file` 的内存对偶（file 从磁盘读、mem 由同进程生产者喂），唯一可调的就是缓冲容量。`Engine.RunBackfill` 据 `source.mem.*` 给中转源定容量，回灌的 fetch 生产者据此对 pipeline 施加背压。字段见 `internal/source/mem/config.go`（`RegisterDefaults`/`ApplyDefaults`；与 file 一样**无 `Validate`**——没有可枚举取值）。
+
+| 键 | required/optional | 默认 | 说明 |
+|----|----|----|----|
+| `source.mem.bufferSize` | optional | `2000` | 中转 channel 容量（行）：单生产者（如回灌 fetcher）最多可超前抽干中的 pipeline 这么多行，超出则 `Push` 阻塞（背压）。占位 `0`，`ApplyDefaults` 把 `<=0` 修正成默认 2000（`defaultBuffer`，`mem.go`） |
 
 ### backfill（cli `function=backfill`） → `internal/backfill`
 
@@ -371,7 +380,7 @@ gateway 同时暴露三个独立路径（与 `/upload` 互不影响，无额外�
 | `role.cli.function` | optional | `upload` | cli 角色功能：`upload`（stdin 日志数组上报）/ `file`（按 `source.file.*` 导入存量日志文件，**不读 stdin**）/ `backfill`（按 `backfill.*` 从 TA OpenAPI 回灌历史，**不读 stdin**，输出 `api.Result` JSON）/ `ejson`（stdin 一个 EJSON Mongo Data API 请求，等价 `POST /ejson`）/ `sql`（stdin 一条 SQL，等价 `POST /sql`）/ `config`（stdin 一个 cfgsync 配置文档，等价 `POST /config`，输出 `{version}`）/ `configget`（查询当前中央配置文档，等价 `GET /config`），输出均为 EJSON/JSON |
 | `role.cli.configMode` | optional | `set` | `function=config` 的发布模式：`set`（整树替换）/ `append`（include/exclude 并集合并，等价 `POST /config?mode=append`） |
 
-`function=file` 是唯一读取 `source` 段的 cli 功能：分发处（`internal/role/cli/role.go`）解码 `source.file.*`，校验 `source.file.paths` 非空后才连 Mongo（空则 fail-fast `cli: function=file requires source.file.paths`），跑完后向 stdout 打印与 `function=upload` 相同的 stats JSON。gateway / daemon **没有** file 入口（v1.6 需求 §7）。
+`function=file` 与 `function=backfill` 是仅有的两个读取 `source` 段的 cli 功能：`function=file` 分发处（`internal/role/cli/role.go`）解码 `source.file.*`，校验 `source.file.paths` 非空后才连 Mongo（空则 fail-fast `cli: function=file requires source.file.paths`），跑完后向 stdout 打印与 `function=upload` 相同的 stats JSON；`function=backfill` 则解码 `source.mem.*`（中转源缓冲容量）连同 `backfill.*` 一并传入 `RunBackfill`。gateway / daemon **没有** file/backfill 入口（v1.6 需求 §7）。
 
 `function=backfill` 同理是唯一读取 `backfill.*` 段的 cli 功能：分发处先 `FromTree` 解码 + `Validate`（在连 Mongo **之前**做完校验），跑完向 stdout 打印 `api.Result` JSON，**不读 stdin**。gateway / daemon 同样**没有** backfill 入口（v1.6 需求 §7：无同步 `POST /backfill`）。
 
@@ -407,6 +416,7 @@ gateway 同时暴露三个独立路径（与 `/upload` 互不影响，无额外�
 | `source.tailer.maxOpenFDs` | `0`（关闭） | `internal/source/tailer`（负值归一为 `0`） |
 | `source.file.paths` | **required:cli `function=file`**（无默认） | `cli` 分发（`role.go`）/ `Engine.File` 强制 |
 | `source.file.maxLineBytes` | `10485760`（10MiB） | `internal/source/file`（与 tailer 共用 `defaultMaxLineSize`） |
+| `source.mem.bufferSize` | `2000` | `internal/source/mem`（`<=0` 归一为 `defaultBuffer`；cli `function=backfill` / `Engine.RunBackfill` 用） |
 | `backfill.apiBaseURL` | **required**（无默认） | `internal/backfill`（`Validate`） |
 | `backfill.token` | **required**（无默认） | `internal/backfill`（`Validate`） |
 | `backfill.proxy` | `""` | `internal/backfill` |

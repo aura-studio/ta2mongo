@@ -101,7 +101,12 @@ func (Role) Run(ctx context.Context, cfg cfgtree.Tree) error {
 		if err != nil {
 			return err
 		}
-		res, err := RunBackfill(ctx, daoCfg, procCfg, parserCfg, bfCfg)
+		// source.mem.* sizes the relay the fetched rows stream through.
+		srcCfg, err := source.FromTree(cfg)
+		if err != nil {
+			return err
+		}
+		res, err := RunBackfill(ctx, daoCfg, procCfg, parserCfg, bfCfg, srcCfg.Mem)
 		if err != nil {
 			return err
 		}

@@ -10,7 +10,7 @@
 # 无 checkpoint / 无断点续传：重跑直接重新拉取，幂等由写模型保证。
 # 选择性：event 名走 backfill.events → SQL #event_name IN (...)；超出事件名的过滤用引擎的上报过滤器 parser.filter.include/exclude
 # （expr-lang 表达式，作用在解析后的扁平记录上）——backfill 不再做 SQL WHERE 下推，也不再有 include/exclude 键。
-# 实际用到：logging · dao · process · parser.filter · backfill · role.cli；不读 source、gateway、daemon —— 故此处不列。
+# 实际用到：logging · dao · process · parser.filter · source.mem · backfill · role.cli；不读 gateway、daemon —— 故此处不列。
 # 环境变量覆盖：键 . → _ 加 TANGO_ 前缀（backfill.token → TANGO_BACKFILL_TOKEN；[]string 用逗号分隔）。
 
 logging:                          # internal/logging
@@ -35,6 +35,10 @@ parser:                           # internal/parser
 process:                          # internal/process（上传策略；backfill 内部强制 pipeline，此处为信息性）
   mode: pipeline                  # [optional]（默认 batch）single / batch / pipeline；backfill 运行时强制 pipeline
   batchSize: 1000                 # [optional]（默认 1000）single/batch 模式 bulk-write 批大小
+
+source:                           # internal/source（backfill 只用内存中转源 mem；tailer/file 段不适用此功能）
+  mem:                            # internal/source/mem（fetch 行推入此中转源，由强制 pipeline 消费）
+    bufferSize: 2000              # [optional]（默认 2000）中转通道容量（行）：fetch 生产者超前 pipeline 多少行后阻塞（背压）
 
 backfill:                         # internal/backfill（仅依赖 logging + cfgtree；不碰 dao/parser/process/source）
   apiBaseURL: https://ta.example.com   # [required] TA OpenAPI 基址（http:// 或 https://）
