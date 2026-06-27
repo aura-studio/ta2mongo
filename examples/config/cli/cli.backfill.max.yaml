@@ -52,6 +52,7 @@ backfill:                         # internal/backfill（仅依赖 logging + cfgt
   schemaPrefix: ""                     # [optional]（默认空）表名前的 schema 限定（如 ta.）
   userTimeColumn: "#update_time"       # [optional]（默认 #update_time，仅 user 表）映射成 #time 的 v_user 列；该列缺则回退合成时间戳。user 行还会按身份确定性合成 #uuid（talog 必需，v_user 无）
   eventTimeColumn: "#event_time"       # [optional]（默认 #event_time，仅 event 表）映射成 #time 的 v_event 列（数仓事件视图用 #event_time 非 #time）；该列缺则回退合成时间戳
+  userOrderBy: ""                      # [optional]（仅 user 表）ORDER BY 子句（不含前缀），配 limit 取确定性 top-N，如 "last_login_time DESC" 取最近登录的 N 个用户；空=不排序
   partDateRange:                       # [required]（event 表）分区日期闭区间 YYYY-MM-DD
     start: "2026-05-01"
     end: "2026-05-03"

@@ -89,6 +89,13 @@ type Config struct {
 	// "#event_time"; when that column is absent too, a per-run synthesized
 	// timestamp is used. Ignored for the user table.
 	EventTimeColumn string `mapstructure:"eventTimeColumn"`
+	// UserOrderBy is an optional ORDER BY clause (column[s] + ASC/DESC, no
+	// "ORDER BY" prefix) applied to the user-table query, so a Limit selects a
+	// deterministic slice instead of an arbitrary sample — e.g.
+	// "last_login_time DESC" to import the N most-recently-logged-in users.
+	// Empty = no ordering. Ignored for the event table. Operator-supplied
+	// (trusted) SQL, like Events.
+	UserOrderBy string `mapstructure:"userOrderBy"`
 
 	// --- pagination / polling ---
 	PageSize     int           `mapstructure:"pageSize"`
@@ -131,6 +138,7 @@ func (c *Config) RegisterDefaults(set func(key string, value any), prefix string
 	set(prefix+".schemaPrefix", "")
 	set(prefix+".userTimeColumn", "")
 	set(prefix+".eventTimeColumn", "")
+	set(prefix+".userOrderBy", "")
 	set(prefix+".partDateRange.start", "")
 	set(prefix+".partDateRange.end", "")
 	set(prefix+".eventTimeRange.start", "")
@@ -334,6 +342,12 @@ func (c *Config) buildSelect(day string, limit int) string {
 	}
 	if len(predicates) > 0 {
 		fmt.Fprintf(&b, " WHERE %s", strings.Join(predicates, " AND "))
+	}
+	// ORDER BY is supported for the user table only (the event table is fetched
+	// per partition day). It lets a Limit select a deterministic slice — e.g.
+	// the N most-recently-logged-in users via "last_login_time DESC".
+	if c.Table == TableUser && c.UserOrderBy != "" {
+		fmt.Fprintf(&b, " ORDER BY %s", c.UserOrderBy)
 	}
 	if limit > 0 {
 		fmt.Fprintf(&b, " LIMIT %d", limit)

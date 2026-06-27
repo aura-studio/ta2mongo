@@ -254,6 +254,15 @@ func WithBackfillSchemaPrefix(prefix string) Option {
 	return func(o *options) { o.backfill.SchemaPrefix = prefix }
 }
 
+// WithBackfillUserOrderBy sets backfill.userOrderBy: an optional ORDER BY clause
+// (no "ORDER BY" prefix) for the USER-table query, so a limit selects a
+// deterministic slice rather than an arbitrary sample — e.g. "last_login_time
+// DESC" with WithBackfillLimit(10000) to import the 10000 most-recently-logged-in
+// users. Ignored for the event table.
+func WithBackfillUserOrderBy(orderBy string) Option {
+	return func(o *options) { o.backfill.UserOrderBy = orderBy }
+}
+
 // WithBackfillPageSize sets backfill.pageSize: the server-side page size
 // (default 10000, minimum 1000).
 func WithBackfillPageSize(n int) Option {
