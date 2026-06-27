@@ -30,6 +30,7 @@
     "events": ["login", "pay"],
     "schemaPrefix": "",
     "userTimeColumn": "#update_time",
+    "eventTimeColumn": "#event_time",
     "partDateRange": { "start": "2026-05-01", "end": "2026-05-03" },
     "eventTimeRange": { "start": "2026-05-01 00:00:00", "end": "2026-05-03 23:59:59" },
     "limit": 0,

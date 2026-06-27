@@ -20,6 +20,7 @@
 package backfill
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -220,6 +221,59 @@ func (c *Client) CancelTask(ctx context.Context, taskID string) error {
 	form := url.Values{}
 	form.Set("taskId", taskID)
 	return c.postForm(ctx, "/open/cancel-sql-task", form, nil)
+}
+
+// headerEnvelope is the first NDJSON line of a synchronous /querySql response:
+//
+//	{"data": {"headers": [...]}, "return_code": 0, "return_message": "..."}
+type headerEnvelope struct {
+	ReturnCode    int    `json:"return_code"`
+	ReturnMessage string `json:"return_message"`
+	Data          struct {
+		Headers []string `json:"headers"`
+	} `json:"data"`
+}
+
+// ProbeHeaders fetches just the result column names for sql via the SYNCHRONOUS
+// /querySql endpoint. It is the fallback the runner uses when the async
+// /open/sql-task-info response omits headers (TA drops them for very wide
+// SELECT * results, e.g. the ~985-column event view), so that rows are not
+// encoded against empty headers and silently dropped. The synchronous endpoint
+// streams a JSON envelope line (carrying data.headers) followed by NDJSON data
+// rows; only the first line is read, so a cheap query (LIMIT 1) is enough.
+func (c *Client) ProbeHeaders(ctx context.Context, sql string) ([]string, error) {
+	form := url.Values{}
+	form.Set("sql", sql)
+	u := c.baseURL + "/querySql?" + c.authQuery(nil).Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return nil, fmt.Errorf("querySql http %d: %s", resp.StatusCode, body)
+	}
+
+	// Read only the first line — the envelope; the remaining lines are data rows.
+	line, err := bufio.NewReader(resp.Body).ReadBytes('\n')
+	if err != nil && len(line) == 0 {
+		return nil, fmt.Errorf("querySql: empty response")
+	}
+	var env headerEnvelope
+	if err := json.Unmarshal(line, &env); err != nil {
+		return nil, fmt.Errorf("querySql: decode envelope: %w; body=%s", err, truncate(line, 200))
+	}
+	if env.ReturnCode != 0 {
+		return nil, &APIError{Code: env.ReturnCode, Message: env.ReturnMessage}
+	}
+	return env.Data.Headers, nil
 }
 
 // ---------------------------------------------------------------------------

@@ -153,7 +153,7 @@ daemon 是长驻的 pipeline 流水线。api 只作为库使用，不由 `role.m
     │   ├── client.go    # 含包文档 + TA OpenAPI 客户端：submit-sql → 轮询 sql-task-info → 分页 sql-result-page（NDJSON）；token 走 query param；状态常量/APIError/ErrTaskExpired
     │   ├── httpclient.go# 底层 HTTP：net/http + x/net/proxy（http/https/socks5）+ backoff/v4（按 pageRetries 重试）
     │   ├── ndjson.go    # 结果页 NDJSON 流式解码：逐行 json → row，边解边交（不全量驻留）
-    │   ├── rowdecode.go # EncodeRowAsJSONLine(headers,row,defaultType,userKeys)：行 → TA JSON 日志行（#/_/$ 前缀升顶层、其余进 properties、nil 丢弃；缺 #type 时注入 defaultType——event=track / user=user_setOnce|user_set；userKeys≠nil[仅 user 表] 时合成 talog 必需而 v_user 没有的 #uuid[按身份确定性]+#time[映射 userTimeColumn]）
+    │   ├── rowdecode.go # EncodeRowAsJSONLine(headers,row,defaultType,keys)：行 → TA JSON 日志行（#/_ 前缀升顶层、$前缀伪列[$part_date/$part_event]丢弃、其余进 properties、nil 丢弃；缺 #type 时注入 defaultType；keys[RowKeys] 把数仓视图缺的 #time 映射进来[event=#event_time / user=#update_time,缺则回退]、仅 user 合成 #uuid[按身份]）
     │   ├── runner.go    # Fetcher（New + Run(ctx, emit func(line) error)）：按 Days() 逐块 submit→poll→paginate→编码→emit；task 过期重提一次；无 checkpoint（重跑重拉，幂等靠写模型）
     │   └── config.go    # backfill.Config（backfill.*）+ FromTree/RegisterDefaults/ApplyDefaults/Validate + BuildSQL/Days + 助手（ForceSkip/ShouldPaginate/EffectivePageSize/...）+ 表名常量 TableEvent/TableUser/UserChunkKey
     └── role/       # 运行角色：Role 接口 + Get(mode) 派发；role.Config 聚合 daemon/gateway
@@ -305,7 +305,8 @@ config           -> cfgtree + 各模块（仅用其 RegisterDefaults 注册键�
 | `backfill/client.go` | **包文档（package 注释在此）** + TA OpenAPI 客户端：`submit-sql`（提交 Presto SQL，返回 taskId；`pageSize` 在提交时定）→ `sql-task-info`（按 `pollInterval` 轮询至完成，超 `pollTimeout` 报错）→ `sql-result-page`（按 `pageId` 分页拉 NDJSON，`StreamResultPage` 流式）+ `cancel-sql-task`；token 作为 query param 拼入 URL；状态常量 `StatusRunning/Finished/Failed`、`APIError`、`ErrTaskExpired`、TA 信封 `{return_code,return_message,data}` 解析也在此 |
 | `backfill/httpclient.go` | 底层 HTTP：`net/http` + `golang.org/x/net/proxy`（http/https/socks5，DIRECT 依赖）+ `backoff/v4`（按 `pageRetries` 重试） |
 | `backfill/ndjson.go` | 结果页 NDJSON 流式解码：逐行 `json.Decode` → `[]interface{}` row，边解边交（不全量驻留） |
-| `backfill/rowdecode.go` | `EncodeRowAsJSONLine(headers, row, defaultType, userKeys *UserKeys)`：把表头与一行数据 zip 成 TA JSON 日志行——`#`/`_`/`$` 前缀列升到顶层信封，其余列收进 `"properties"`，nil 值丢弃；行缺 `#type` 时注入 `defaultType`（event=`track` / user=`user_setOnce`\|`user_set`），让 parser 正确路由；产出喂进上报管线复用 parse→filter→identity→写。**`userKeys`（仅 user 表非 nil；event 传 nil 零影响）补齐 talog 必需但 v_user 快照行没有的两字段**：`#uuid` 缺则按身份(`#user_id`,否则 `#account_id`+`#distinct_id`)**确定性合成**(SHA-1→UUIDv5 形,重跑稳定不 churn;真正去重仍由写模型按解析后 `#user_id`)、`#time` 缺则从 `UserKeys.TimeColumn`(=`backfill.userTimeColumn`,默认 `#update_time`)映射,该列也缺则用每轮一次性合成的 `Fallback` 时间戳。私有助手 `synthUserUUID`/`ensureUserKeys`/`asString` |
+| `backfill/rowdecode.go` | `EncodeRowAsJSONLine(headers, row, defaultType, keys *RowKeys)`：把表头与一行数据 zip 成 TA JSON 日志行——`#`/`_` 前缀列升到顶层信封，**`$` 前缀伪列(`$part_date`/`$part_event`)丢弃**(MongoDB/DocumentDB 拒收 `$` 前缀字段名、且非 TA 记录字段),其余列收进 `"properties"`，nil 值丢弃；行缺 `#type` 时注入 `defaultType`(event=`track` / user=`user_setOnce`\|`user_set`)。**`keys`(`RowKeys`,两表均非 nil)补齐数仓视图与日志格式的差异**:`#time` 缺则映射 `TimeColumn`(event=`#event_time`/user=`#update_time`,该列也缺则回退每轮一次性 `Fallback` 时间戳),**仅 `SynthUUID`(user) 才按身份(`#user_id`,否则 `#account_id`+`#distinct_id`)确定性合成 `#uuid`**(SHA-1→UUIDv5,重跑稳定;event 有真 `#uuid` 不合成,缺则 dead_letter)。助手 `synthUserUUID`/`ensureRowKeys`/`asString`；`buildSelect`/`BuildProbeSQL`(LIMIT 1 列名探针)在 config.go |
+| `backfill/client.go` | `Client.ProbeHeaders(ctx, sql)`(**v1.7.2**)：当异步 `sql-task-info` 不返回 headers(TA 对超宽 `SELECT *`/~985 列事件视图会省略)时,经**同步 `/querySql ... LIMIT 1`** 取列名(读首行信封 `data.headers`)。`runner.resolveHeaders` 调它兜底并缓存,**取不到则硬报错**(杜绝空 headers→整页静默丢弃) |
 | `backfill/runner.go` | `Fetcher`：`New(cfg)`（建带 proxy、无 wall-clock 超时的 HTTP client）+ `Run(ctx, emit func(line string) error)`——按 `cfg.Days()` 逐块（event=逐 `partDateRange` 日 / user=单 `UserChunkKey`）`buildSQL → submit → poll(await) → paginate(emitPage)`，每行 `EncodeRowAsJSONLine` 后调 `emit`；task 过期(`ErrTaskExpired`)自动重提一次从 page 0；单页失败按 `pageRetries` 退避重试且页内先缓冲后整页 emit（重试不重复 emit）；**无 checkpoint**——重跑即重拉，幂等靠写模型（events `#uuid`、user `#user_id` user_setOnce） |
 | `backfill/config.go` | `backfill.Config`（`backfill.*`）+ `FromTree`/`RegisterDefaults`/`ApplyDefaults`/`Validate` + `BuildSQL(day)`（event=`SELECT * FROM [schema.]v_event_<pid> WHERE "$part_date"='<day>' [AND "#event_time">='..'][AND "#event_time"<='..'][AND "#event_name" IN (..)] [LIMIT n]`；user=`SELECT * FROM [schema.]v_user_<pid> [LIMIT n]`，无 filter 下推）+ `Days()` + 助手 `ForceSkip`/`ShouldPaginate`/`EffectivePageSize`/`userType`/`defaultType` + 表名常量 `TableEvent`/`TableUser`/`UserChunkKey`（见 §10.6） |
 
@@ -880,7 +881,7 @@ pipeline 上报管线。**两表的唯一差别是行缺 `#type` 时注入的默
 `defaultType` 由 `Config.defaultType()` 决定（event=`track`，user=`userType()`=`user_setOnce`/`user_set`）。
 `forceSkipExisting` **只影响 user 表的 `#type` 选择**，对 event 表无任何作用。
 
-> **⚠️ user 行还须补 `#uuid`/`#time`（否则整批 dead_letter）**：`talog.buildRecord` 要求**所有类型** `#type`+`#uuid` 非空、user 类型再要 `#time` 非空。事件视图天然带 `#uuid`/`#time`,但 `v_user` 快照按 `#user_id` 主键、**无逐行 `#uuid`、时间列名也不是 `#time`**(而是 `#update_time` 之类)。故 user 路径(`userKeys≠nil`)在 `EncodeRowAsJSONLine` 里:**按身份确定性合成 `#uuid`**(SHA-1→UUIDv5 形,重跑稳定;仅为过校验,去重仍按解析后 `#user_id`)、**把 `backfill.userTimeColumn`(默认 `#update_time`)映射成 `#time`**(该列也缺则用每轮一次性合成时间戳)。事件路径 `userKeys=nil`、行为不变。
+> **⚠️ 数仓 schema 与日志格式的差异调和(v1.7.2,真实项目实测后加固;两表都涉及)**:`talog.buildRecord` 要求**所有类型** `#type`+`#uuid` 非空、user/event 再要 `#time` 非空——但 TA **数仓视图**与日志上传格式有三处差异,`RowKeys`(两表非 nil)在 `EncodeRowAsJSONLine` 调和:① **`#time` 映射**:事件视图用 `#event_time`(非 `#time`)、用户视图用 `#update_time`,按表映射成 `#time`(该列也缺则回退合成时间戳);② **`#uuid`**:`v_user` 快照按 `#user_id` 主键、**无逐行 `#uuid`**,故 user 按身份确定性合成(SHA-1→UUIDv5,去重仍按解析后 `#user_id`);event 视图**有真 `#uuid`**、不合成;③ **`$` 伪列丢弃** + **headers 兜底**(见下)。**⚠️ 这些差异曾被 mock 测试(手写 schema)长期掩盖,经真实 TA 项目端到端测试(`test/backfill_realta_test.go`)暴露并修复。**
 
 **与早期设计相比关键删除**：不再有 `backfill/executor.go` 的两路写入、不再用 `dao.UserSnapshotWriteModel`
 （已删除——user 行复用既有 `UserWriteModel`，靠 `user_setOnce` 实现"永不覆盖"），backfill 也**不再** import
@@ -956,6 +957,7 @@ user 表无任何谓词（全表 `SELECT *`，仅可选 `LIMIT`）。
 | `backfill.events` | | `[]` | 事件名过滤（event 表）→ `"#event_name" IN (...)`（user 表忽略） |
 | `backfill.schemaPrefix` | | — | SQL schema 前缀 |
 | `backfill.userTimeColumn` | | `#update_time` | 仅 user 表：映射成 `#time` 的 `v_user` 列(该列缺则回退合成时间戳;event 表忽略) |
+| `backfill.eventTimeColumn` | | `#event_time` | 仅 event 表：映射成 `#time` 的 `v_event` 列(数仓事件视图用 `#event_time` 非 `#time`;该列缺则回退;user 表忽略) |
 | `backfill.partDateRange.{start,end}` | event 必填 | — | `YYYY-MM-DD`，event 表逐日分块边界 |
 | `backfill.eventTimeRange.{start,end}` | | — | `YYYY-MM-DD HH:MM:SS`，细化事件时间窗（仅 event 表） |
 | `backfill.limit` | | `0` | SQL `LIMIT n`（event/user **两表均施加**；`0`=不限） |

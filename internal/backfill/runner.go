@@ -19,6 +19,10 @@ import (
 type Fetcher struct {
 	cfg    *Config
 	client *Client
+	// headers caches the result column names once resolved (via task-info or the
+	// querySql probe). The schema is day-independent, so one resolution serves the
+	// whole run.
+	headers []string
 }
 
 // New builds a Fetcher with an HTTP client honouring cfg.Proxy and no
@@ -44,7 +48,7 @@ func (f *Fetcher) Run(ctx context.Context, emit func(line string) error) error {
 		return fmt.Errorf("backfill: %w", err)
 	}
 	defaultType := f.cfg.defaultType()
-	userKeys := f.userKeys()
+	keys := f.rowKeys()
 	logging.WithFields(logging.Fields{
 		"projectID": f.cfg.ProjectID,
 		"table":     f.cfg.Table,
@@ -59,7 +63,7 @@ func (f *Fetcher) Run(ctx context.Context, emit func(line string) error) error {
 			return ctx.Err()
 		default:
 		}
-		if err := f.fetchDay(ctx, day, defaultType, userKeys, emit); err != nil {
+		if err := f.fetchDay(ctx, day, defaultType, keys, emit); err != nil {
 			return fmt.Errorf("backfill: chunk %s: %w", day, err)
 		}
 		logging.WithField("chunk", day).Info("backfill: chunk fetched")
@@ -68,24 +72,49 @@ func (f *Fetcher) Run(ctx context.Context, emit func(line string) error) error {
 	return nil
 }
 
-// userKeys returns the per-run #uuid/#time synthesis config for the user table
-// (nil for the event table, whose rows carry their own #uuid/#time). The
-// Fallback timestamp is stamped once per run so a user row missing both #time
-// and the configured time column still parses.
-func (f *Fetcher) userKeys() *UserKeys {
-	if f.cfg.Table != TableUser {
-		return nil
+// rowKeys returns the per-run #time (and, for the user view, #uuid) reconciliation
+// config. Both warehouse views need #time mapped (event: #event_time, user:
+// #update_time) because talog requires a literal #time; only the user view also
+// needs #uuid synthesized (it has no per-row #uuid). The Fallback timestamp is
+// stamped once per run for rows whose mapped time column is also empty.
+func (f *Fetcher) rowKeys() *RowKeys {
+	fallback := time.Now().Format("2006-01-02 15:04:05.000")
+	if f.cfg.Table == TableUser {
+		return &RowKeys{TimeColumn: f.cfg.UserTimeColumn, Fallback: fallback, SynthUUID: true}
 	}
-	return &UserKeys{
-		TimeColumn: f.cfg.UserTimeColumn,
-		Fallback:   time.Now().Format("2006-01-02 15:04:05.000"),
+	return &RowKeys{TimeColumn: f.cfg.EventTimeColumn, Fallback: fallback, SynthUUID: false}
+}
+
+// resolveHeaders returns the result column names: task-info's headers when
+// present, else a one-time probe via the synchronous /querySql endpoint (TA omits
+// headers from task-info for very wide SELECT * results, e.g. the event view).
+// The result is cached on the Fetcher since the schema is day-independent. Empty
+// headers are a hard error — encoding rows against empty headers would silently
+// drop every row (width mismatch), i.e. lose all data with no signal.
+func (f *Fetcher) resolveHeaders(ctx context.Context, day string, fromTaskInfo []string) ([]string, error) {
+	if len(fromTaskInfo) > 0 {
+		return fromTaskInfo, nil
 	}
+	if len(f.headers) > 0 {
+		return f.headers, nil
+	}
+	logging.WithFields(logging.Fields{"table": f.cfg.Table, "projectID": f.cfg.ProjectID}).
+		Warn("backfill: task-info carried no headers; probing schema via querySql")
+	h, err := f.client.ProbeHeaders(ctx, f.cfg.BuildProbeSQL(day))
+	if err != nil {
+		return nil, fmt.Errorf("resolve headers (task-info had none): %w", err)
+	}
+	if len(h) == 0 {
+		return nil, fmt.Errorf("resolve headers: querySql probe returned no headers")
+	}
+	f.headers = h
+	return h, nil
 }
 
 // fetchDay submits one day's SQL, polls to completion, and paginates — encoding
 // each row and emitting it. On a task-expired error it re-submits a fresh task
 // once and restarts pagination from page 0 (safe: write models dedup).
-func (f *Fetcher) fetchDay(ctx context.Context, day, defaultType string, userKeys *UserKeys, emit func(line string) error) error {
+func (f *Fetcher) fetchDay(ctx context.Context, day, defaultType string, keys *RowKeys, emit func(line string) error) error {
 	sql := f.cfg.BuildSQL(day)
 	var taskID string
 	resubmitted := false
@@ -109,6 +138,11 @@ attempt:
 		return err
 	}
 
+	headers, err := f.resolveHeaders(ctx, day, info.ResultStat.Headers)
+	if err != nil {
+		return err
+	}
+
 	logging.WithFields(logging.Fields{
 		"chunk": day, "taskId": taskID,
 		"pageCount": info.ResultStat.PageCount, "rowCount": info.ResultStat.RowCount,
@@ -120,7 +154,7 @@ attempt:
 			return ctx.Err()
 		default:
 		}
-		if err := f.emitPage(ctx, taskID, pageID, info.ResultStat.Headers, defaultType, userKeys, emit); err != nil {
+		if err := f.emitPage(ctx, taskID, pageID, headers, defaultType, keys, emit); err != nil {
 			if errors.Is(err, ErrTaskExpired) && !resubmitted {
 				logging.WithField("chunk", day).Warn("backfill: task expired mid-paginate; resubmitting from page 0")
 				resubmitted, taskID = true, ""
@@ -165,7 +199,7 @@ func (f *Fetcher) await(ctx context.Context, taskID string) (*TaskInfoResult, er
 // emits the whole page. Buffering before emit means a transient retry never
 // double-emits rows (the partial buffer is discarded). ErrTaskExpired and ctx
 // errors bubble up so fetchDay can resubmit.
-func (f *Fetcher) emitPage(ctx context.Context, taskID string, pageID int, headers []string, defaultType string, userKeys *UserKeys, emit func(line string) error) error {
+func (f *Fetcher) emitPage(ctx context.Context, taskID string, pageID int, headers []string, defaultType string, keys *RowKeys, emit func(line string) error) error {
 	attempts := f.cfg.PageRetries
 	if attempts < 1 {
 		attempts = 1
@@ -175,7 +209,7 @@ func (f *Fetcher) emitPage(ctx context.Context, taskID string, pageID int, heade
 		lines := make([]string, 0, 2048)
 		err := f.client.StreamResultPage(ctx, taskID, pageID, f.cfg.PageSize,
 			func(row []interface{}) error {
-				line, encErr := EncodeRowAsJSONLine(headers, row, defaultType, userKeys)
+				line, encErr := EncodeRowAsJSONLine(headers, row, defaultType, keys)
 				if encErr != nil {
 					logging.WithError(encErr).Debug("backfill: encode row; skipping")
 					return nil

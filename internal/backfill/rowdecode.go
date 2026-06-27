@@ -6,29 +6,35 @@ import (
 	"fmt"
 )
 
-// UserKeys configures the synthesis that makes a v_user snapshot row satisfy the
-// event-oriented requirements of talog.buildRecord. TA's user table (v_user_<id>)
-// has neither a per-row #uuid nor a column literally named "#time" — it is keyed
-// by #user_id and timestamps with a column like #update_time — yet the parser
-// rejects any record whose #uuid is empty, and any user_* record whose #time is
-// empty. When EncodeRowAsJSONLine is given a non-nil *UserKeys (the user table
-// only; event rows pass nil and are left untouched), it:
+// RowKeys reconciles a TA warehouse view row with the requirements of
+// talog.buildRecord, which the live-ingest log format satisfies but the
+// warehouse views do not. talog rejects any record whose #uuid is empty, and any
+// record whose #time is empty — but the warehouse exposes the time as #event_time
+// (event view) or #update_time (user view), not the literal #time, and the user
+// view carries no per-row #uuid (it is keyed by #user_id). When EncodeRowAsJSONLine
+// is given a non-nil *RowKeys it:
 //
-//   - synthesizes a deterministic #uuid from the row's identity (#user_id, else
-//     #account_id + #distinct_id) when #uuid is absent/empty. It is stable
-//     across re-runs so the stored value never churns; real dedup still happens
-//     at the write model, which keys the user document by the resolved #user_id —
-//     this #uuid exists only to pass parsing.
-//   - fills #time from TimeColumn (e.g. "#update_time") when #time is absent,
-//     falling back to Fallback (a single per-run timestamp) when that column is
-//     missing too.
-type UserKeys struct {
-	// TimeColumn is the v_user column whose value is copied into #time when the
-	// row carries no #time of its own (e.g. "#update_time").
+//   - fills #time from TimeColumn (e.g. "#event_time" for events, "#update_time"
+//     for users) when #time is absent, falling back to Fallback (a single per-run
+//     timestamp) when that column is missing/null too.
+//   - when SynthUUID is set (user view only — the event view carries a real
+//     #uuid), synthesizes a deterministic #uuid from the row's identity (#user_id,
+//     else #account_id + #distinct_id) when #uuid is absent/empty. It is stable
+//     across re-runs so the stored value never churns; real dedup still happens at
+//     the write model, which keys the user document by the resolved #user_id — this
+//     #uuid exists only to pass parsing.
+type RowKeys struct {
+	// TimeColumn is the source column copied into #time when the row carries no
+	// #time of its own (#event_time for events, #update_time for users).
 	TimeColumn string
 	// Fallback is the #time used when neither #time nor TimeColumn is present on
 	// the row. Callers set it once per run (a formatted timestamp).
 	Fallback string
+	// SynthUUID synthesizes a deterministic #uuid from identity when #uuid is
+	// absent. Set for the user view (no per-row #uuid); left false for the event
+	// view (which carries a real #uuid — a missing one there is a genuine defect
+	// and should dead-letter, not be papered over).
+	SynthUUID bool
 }
 
 // EncodeRowAsJSONLine zips a header row with one data row and renders a JSON
@@ -38,18 +44,21 @@ type UserKeys struct {
 //
 //   - Null values (Go nil) are dropped entirely rather than serialized as
 //     null, so the parser never sees literal nulls in identity fields.
-//   - System/identity fields — keys starting with '#', '_' or '$' — are
-//     promoted to the top level.
+//   - '$'-prefixed columns are dropped: they are TA query pseudo-columns
+//     ($part_date / $part_event) — not part of the record, and unstorable
+//     anyway (MongoDB/DocumentDB reject dollar-prefixed field names).
+//   - System/identity fields — keys starting with '#' or '_' — are promoted to
+//     the top level.
 //   - All other columns are grouped under "properties" (the shape
 //     talog.Parser flattens), omitted entirely when empty.
 //   - When the row carries no "#type" (the user-state table has none; an event
 //     row normally does), defaultType is injected so the parser routes the line
 //     correctly: "track" for events, "user_setOnce"/"user_set" for user rows. A
 //     defaultType of "" leaves #type absent.
-//   - When userKeys is non-nil (the user table only), the #uuid and #time that
-//     talog requires but a v_user snapshot row lacks are synthesized; see
-//     UserKeys. Event rows pass userKeys == nil and are encoded verbatim.
-func EncodeRowAsJSONLine(headers []string, row []interface{}, defaultType string, userKeys *UserKeys) (string, error) {
+//   - When keys is non-nil, the #time (and, for the user view, #uuid) that talog
+//     requires but a warehouse row lacks are mapped/synthesized; see RowKeys.
+//     A nil keys encodes the row verbatim.
+func EncodeRowAsJSONLine(headers []string, row []interface{}, defaultType string, keys *RowKeys) (string, error) {
 	if len(headers) != len(row) {
 		return "", fmt.Errorf("backfill: row width %d does not match headers %d", len(row), len(headers))
 	}
@@ -62,7 +71,10 @@ func EncodeRowAsJSONLine(headers []string, row []interface{}, defaultType string
 		if v == nil {
 			continue
 		}
-		if len(h) > 0 && (h[0] == '#' || h[0] == '_' || h[0] == '$') {
+		if len(h) > 0 && h[0] == '$' {
+			continue // TA query pseudo-column ($part_date/$part_event): not a record field, and unstorable
+		}
+		if len(h) > 0 && (h[0] == '#' || h[0] == '_') {
 			obj[h] = v
 		} else {
 			props[h] = v
@@ -76,8 +88,8 @@ func EncodeRowAsJSONLine(headers []string, row []interface{}, defaultType string
 			obj["#type"] = defaultType
 		}
 	}
-	if userKeys != nil {
-		ensureUserKeys(obj, userKeys)
+	if keys != nil {
+		ensureRowKeys(obj, keys)
 	}
 
 	buf, err := json.Marshal(obj)
@@ -87,10 +99,9 @@ func EncodeRowAsJSONLine(headers []string, row []interface{}, defaultType string
 	return string(buf), nil
 }
 
-// ensureUserKeys backfills the #time and #uuid that talog.buildRecord requires
-// but a v_user snapshot row does not carry. Called for user-table rows only;
-// event rows are never passed here.
-func ensureUserKeys(obj map[string]interface{}, k *UserKeys) {
+// ensureRowKeys backfills the #time (always) and #uuid (user view only) that
+// talog.buildRecord requires but a warehouse row does not carry in that shape.
+func ensureRowKeys(obj map[string]interface{}, k *RowKeys) {
 	if isEmptyString(obj["#time"]) {
 		if k.TimeColumn != "" {
 			if tv := asString(obj[k.TimeColumn]); tv != "" {
@@ -101,7 +112,7 @@ func ensureUserKeys(obj map[string]interface{}, k *UserKeys) {
 			obj["#time"] = k.Fallback
 		}
 	}
-	if isEmptyString(obj["#uuid"]) {
+	if k.SynthUUID && isEmptyString(obj["#uuid"]) {
 		obj["#uuid"] = synthUserUUID(obj)
 	}
 }

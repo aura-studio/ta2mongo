@@ -257,6 +257,8 @@ mongodb://user:pass@<cluster-endpoint>:27017/tango?tls=true&tlsCAFile=/path/glob
 
 历史数据回灌（v1.7 起，源自 v1.6.1）。从 ThinkingData（TA）OpenAPI 按**日期区间**（事件表）或**整表**（用户表）拉取历史：`submit-sql`（提交查询）→ 轮询 `sql-task-info`（等任务就绪）→ 翻页拉 `sql-result-page`（NDJSON）逐页处理。每行经 `rowdecode.EncodeRowAsJSONLine` 编成一条 TA JSON 日志行（缺 `#type` 时按表注入：事件表 → `track`，用户表 → `user_setOnce`/`user_set`），推入**内存中转源** `internal/source/mem`，由 Engine **强制 pipeline** 的上传管线并发抽干——回灌行因此走**与线上摄入完全相同的** parse → filter → identity → write 路径，无自定义写模型、无回灌内置 filter、无 checkpoint。`internal/backfill` 只 import `internal/logging` + `internal/cfgtree`（近叶子，不依赖 dao / parser / process / source）。token 走 query 参数；代理支持 http/https/socks5。仅 cli `function=backfill` 一面消费，**不在 gateway/daemon 上暴露**（v1.6 需求 §7：无同步 `POST /backfill`）。字段见 `internal/backfill/config.go`（约定 `FromTree`/`RegisterDefaults`/`ApplyDefaults`/`Validate`）。
 
+**TA 数仓 schema 与日志格式的差异调和（v1.7.2，真实项目实测后加固)**:① **列名映射 `#time`**——数仓事件视图用 `#event_time`、用户视图用 `#update_time`,而 talog 要求 `#time` 非空,故按表把 `eventTimeColumn`/`userTimeColumn` 映射成 `#time`(缺则回退合成时间戳);② **headers 兜底**——TA 对**超宽 `SELECT *`(如 ~985 列的事件视图)的 `sql-task-info` 不返回列名**,此时改用同步 `/querySql ... LIMIT 1` 探一次列名并缓存,**取不到则硬报错**(杜绝"空 headers→整页静默丢弃"的零写入);③ **丢弃 `$` 伪列**——`SELECT *` 会带回 `$part_date`/`$part_event` 等分区伪列,MongoDB/DocumentDB 拒收 `$` 前缀字段名,故编码时丢弃(非记录字段)。**这些都因 mock 测试用手写 schema 而长期被掩盖,经真实 TA 项目端到端测试暴露并修复。**
+
 | 键 | required/optional | 默认 | 说明 |
 |----|----|----|----|
 | `backfill.apiBaseURL` | **required** | `""`（占位） | TA OpenAPI 基址，必须 `http(s)://` 前缀 |
@@ -267,6 +269,7 @@ mongodb://user:pass@<cluster-endpoint>:27017/tango?tls=true&tlsCAFile=/path/glob
 | `backfill.events` | optional | `[]` | `[]string`，限定要回灌的事件名（事件表），编进 SQL 的 `"#event_name" IN (...)`。env 逗号分隔。超出事件名的选取交给 Engine 上报 filter（`parser.filter.*`） |
 | `backfill.schemaPrefix` | optional | `""` | TA SQL 表名 schema 前缀（`[schema.]v_event_<pid>`），留空则不加 |
 | `backfill.userTimeColumn` | optional | `#update_time` | **仅用户表**：把 `v_user_<pid>` 的哪一列映射成 `#time`。TA 用户表没有名为 `#time` 的列（那是事件概念）、其按用户的时间列是 `#update_time`,但 talog 要求 user_* 记录的 `#time` 非空。该列缺失时回退为一次性合成时间戳。事件表忽略此项 |
+| `backfill.eventTimeColumn` | optional | `#event_time` | **仅事件表**：把 `v_event_<pid>` 的哪一列映射成 `#time`。TA 数仓事件视图暴露的是 `#event_time`（非日志上传的 `#time`),talog 要求事件 `#time` 非空 → 须映射。该列缺失时回退为一次性合成时间戳。用户表忽略此项 |
 | `backfill.partDateRange.start` | **required（event 表）** | `""` | 分区日期起（含），`YYYY-MM-DD`；事件表必填、用户表忽略 |
 | `backfill.partDateRange.end` | **required（event 表）** | `""` | 分区日期止（含），`YYYY-MM-DD` |
 | `backfill.eventTimeRange.start` | optional | `""` | 事件时间窗起（含），`YYYY-MM-DD HH:MM:SS`，在分区内再收窄；仅事件表 |
@@ -426,6 +429,7 @@ gateway 同时暴露三个独立路径（与 `/upload` 互不影响，无额外�
 | `backfill.events` | `[]` | `internal/backfill` |
 | `backfill.schemaPrefix` | `""` | `internal/backfill` |
 | `backfill.userTimeColumn` | `#update_time` | `internal/backfill`（`ApplyDefaults`；仅用户表→`#time` 映射） |
+| `backfill.eventTimeColumn` | `#event_time` | `internal/backfill`（`ApplyDefaults`；仅事件表→`#time` 映射） |
 | `backfill.partDateRange.start` | **required:event 表**（无默认） | `internal/backfill`（`Validate`） |
 | `backfill.partDateRange.end` | **required:event 表**（无默认） | `internal/backfill`（`Validate`） |
 | `backfill.eventTimeRange.start` | `""`（可选） | `internal/backfill` |

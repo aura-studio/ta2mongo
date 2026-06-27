@@ -34,8 +34,13 @@ const (
 	// defaultUserTimeColumn is the v_user_<id> column copied into #time for
 	// user-table rows when none is configured. TA's user table has no column
 	// literally named "#time" (that is an event concept); its per-user timestamp
-	// is #update_time. See Config.UserTimeColumn and UserKeys.
+	// is #update_time. See Config.UserTimeColumn and RowKeys.
 	defaultUserTimeColumn = "#update_time"
+	// defaultEventTimeColumn is the v_event_<id> column copied into #time for
+	// event-table rows when none is configured. TA's warehouse event view exposes
+	// the event time as #event_time, not the live-ingest #time, so it must be
+	// mapped. See Config.EventTimeColumn and RowKeys.
+	defaultEventTimeColumn = "#event_time"
 )
 
 // DateRange is an inclusive [Start, End] partition-date range (YYYY-MM-DD).
@@ -78,6 +83,12 @@ type Config struct {
 	// that column is absent too, a per-run synthesized timestamp is used. Ignored
 	// for the event table.
 	UserTimeColumn string `mapstructure:"userTimeColumn"`
+	// EventTimeColumn names the v_event_<id> column copied into #time for
+	// event-table rows (the warehouse event view exposes #event_time, not the
+	// live-ingest #time, yet talog requires a non-empty #time). Default
+	// "#event_time"; when that column is absent too, a per-run synthesized
+	// timestamp is used. Ignored for the user table.
+	EventTimeColumn string `mapstructure:"eventTimeColumn"`
 
 	// --- pagination / polling ---
 	PageSize     int           `mapstructure:"pageSize"`
@@ -119,6 +130,7 @@ func (c *Config) RegisterDefaults(set func(key string, value any), prefix string
 	set(prefix+".events", []string{})
 	set(prefix+".schemaPrefix", "")
 	set(prefix+".userTimeColumn", "")
+	set(prefix+".eventTimeColumn", "")
 	set(prefix+".partDateRange.start", "")
 	set(prefix+".partDateRange.end", "")
 	set(prefix+".eventTimeRange.start", "")
@@ -139,6 +151,9 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.UserTimeColumn == "" {
 		c.UserTimeColumn = defaultUserTimeColumn
+	}
+	if c.EventTimeColumn == "" {
+		c.EventTimeColumn = defaultEventTimeColumn
 	}
 	if c.PageSize <= 0 {
 		c.PageSize = defaultPageSize
@@ -280,7 +295,15 @@ func (c *Config) Days() ([]string, error) {
 // unpartitioned). There is NO include/exclude filter push-down — selectivity
 // beyond event-name lives in the engine's reporting filter (parser.filter.*),
 // so this module needs no dependency on parser/filter.
-func (c *Config) BuildSQL(day string) string {
+func (c *Config) BuildSQL(day string) string { return c.buildSelect(day, c.Limit) }
+
+// BuildProbeSQL builds a 1-row query (same FROM/WHERE as BuildSQL, always
+// LIMIT 1) used only to discover the result column headers via the synchronous
+// querySql fallback when the async sql-task-info response omits them (TA drops
+// headers for very wide SELECT * results, e.g. the ~985-column event view).
+func (c *Config) BuildProbeSQL(day string) string { return c.buildSelect(day, 1) }
+
+func (c *Config) buildSelect(day string, limit int) string {
 	var b strings.Builder
 	b.WriteString(`SELECT * FROM `)
 	if c.SchemaPrefix != "" {
@@ -312,8 +335,8 @@ func (c *Config) BuildSQL(day string) string {
 	if len(predicates) > 0 {
 		fmt.Fprintf(&b, " WHERE %s", strings.Join(predicates, " AND "))
 	}
-	if c.Limit > 0 {
-		fmt.Fprintf(&b, " LIMIT %d", c.Limit)
+	if limit > 0 {
+		fmt.Fprintf(&b, " LIMIT %d", limit)
 	}
 	return b.String()
 }
