@@ -276,6 +276,19 @@ func WithBackfillUserWhere(where string) Option {
 	return func(o *options) { o.backfill.UserWhere = where }
 }
 
+// WithBackfillEventWhere sets backfill.eventWhere: an optional WHERE predicate
+// (no "WHERE" prefix) AND-ed into the EVENT-table query (alongside the
+// $part_date / event-time / event-name terms). It is the primitive a
+// distributed orchestrator uses to sub-shard ONE day into bounded row-count
+// slices — e.g. an even hash shard over the random event #uuid:
+//
+//	mod(from_base(substr("#uuid", 1, 8), 16), 8) = 3
+//
+// Ignored for the user table (use WithBackfillUserWhere).
+func WithBackfillEventWhere(where string) Option {
+	return func(o *options) { o.backfill.EventWhere = where }
+}
+
 // WithBackfillPageSize sets backfill.pageSize: the server-side page size
 // (default 10000, minimum 1000).
 func WithBackfillPageSize(n int) Option {

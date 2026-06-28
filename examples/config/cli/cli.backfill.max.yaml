@@ -54,6 +54,7 @@ backfill:                         # internal/backfill（仅依赖 logging + cfgt
   eventTimeColumn: "#event_time"       # [optional]（默认 #event_time，仅 event 表）映射成 #time 的 v_event 列（数仓事件视图用 #event_time 非 #time）；该列缺则回退合成时间戳
   userOrderBy: ""                      # [optional]（仅 user 表）ORDER BY 子句（不含前缀），配 limit 取确定性 top-N，如 "last_login_time DESC" 取最近登录的 N 个用户；空=不排序
   userWhere: ""                        # [optional]（仅 user 表）WHERE 谓词（不含前缀），分布式编排取单分片用，如 mod(cast("#user_id" AS bigint)/4194304, 8) = 3；空=无谓词
+  eventWhere: ""                       # [optional]（仅 event 表）WHERE 谓词（不含前缀），把一天再切成定行数小片用，对随机 #uuid 哈希，如 mod(from_base(substr("#uuid",1,8),16), 8) = 3；空=无谓词
   partDateRange:                       # [required]（event 表）分区日期闭区间 YYYY-MM-DD
     start: "2026-05-01"
     end: "2026-05-03"

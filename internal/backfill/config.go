@@ -107,6 +107,16 @@ type Config struct {
 	// predicate. Ignored for the event table (it shards by $part_date day).
 	// Operator-supplied (trusted) SQL, like Events / UserOrderBy.
 	UserWhere string `mapstructure:"userWhere"`
+	// EventWhere is an optional WHERE predicate (no "WHERE" prefix) AND-ed into
+	// the EVENT-table query, alongside the $part_date / event-time / event-name
+	// terms. It is the primitive a distributed orchestrator uses to sub-shard ONE
+	// day into bounded row-count slices (the event table is partitioned only by
+	// day, so finer slicing is a predicate), e.g. an even hash shard over the
+	// random event #uuid:
+	//   mod(from_base(substr("#uuid", 1, 8), 16), 8) = 3
+	// Empty = no extra predicate. Ignored for the user table (use UserWhere).
+	// Operator-supplied (trusted) SQL, like Events / UserWhere.
+	EventWhere string `mapstructure:"eventWhere"`
 
 	// --- pagination / polling ---
 	PageSize     int           `mapstructure:"pageSize"`
@@ -151,6 +161,7 @@ func (c *Config) RegisterDefaults(set func(key string, value any), prefix string
 	set(prefix+".eventTimeColumn", "")
 	set(prefix+".userOrderBy", "")
 	set(prefix+".userWhere", "")
+	set(prefix+".eventWhere", "")
 	set(prefix+".partDateRange.start", "")
 	set(prefix+".partDateRange.end", "")
 	set(prefix+".eventTimeRange.start", "")
@@ -350,6 +361,9 @@ func (c *Config) buildSelect(day string, limit int) string {
 				quoted = append(quoted, "'"+strings.ReplaceAll(ev, "'", "''")+"'")
 			}
 			predicates = append(predicates, fmt.Sprintf(`"#event_name" IN (%s)`, strings.Join(quoted, ", ")))
+		}
+		if c.EventWhere != "" {
+			predicates = append(predicates, c.EventWhere)
 		}
 	}
 	// UserWhere is the user-table shard predicate (the table is unpartitioned, so

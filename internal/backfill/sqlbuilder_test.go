@@ -84,6 +84,18 @@ func TestBuildSQL(t *testing.T) {
 			day:  "2026-05-01",
 			want: `SELECT * FROM v_event_35 WHERE "$part_date" = '2026-05-01'`,
 		},
+		{
+			name: "event sub-shard (eventWhere) with events",
+			cfg:  &Config{ProjectID: 35, Table: TableEvent, Events: []string{"pay"}, EventWhere: `mod(from_base(substr("#uuid", 1, 8), 16), 8) = 3`},
+			day:  "2026-05-01",
+			want: `SELECT * FROM v_event_35 WHERE "$part_date" = '2026-05-01' AND "#event_name" IN ('pay') AND mod(from_base(substr("#uuid", 1, 8), 16), 8) = 3`,
+		},
+		{
+			name: "eventWhere ignored for user table",
+			cfg:  &Config{ProjectID: 35, Table: TableUser, EventWhere: "x = 1"},
+			day:  "ignored",
+			want: `SELECT * FROM v_user_35`,
+		},
 	}
 
 	for _, c := range cases {
