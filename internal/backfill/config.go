@@ -96,6 +96,17 @@ type Config struct {
 	// Empty = no ordering. Ignored for the event table. Operator-supplied
 	// (trusted) SQL, like Events.
 	UserOrderBy string `mapstructure:"userOrderBy"`
+	// UserWhere is an optional WHERE predicate (no "WHERE" prefix) AND-ed into
+	// the user-table query. It is the primitive a distributed orchestrator uses
+	// to FETCH ONE SHARD of the user table per worker — the user table is
+	// unpartitioned (no $part_date), so an even, complete, disjoint partition is
+	// expressed as a predicate, e.g.
+	//   mod(cast("#user_id" AS bigint) / 4194304, 8) = 3
+	// (drop the snowflake id's low 22 sequence/machine bits — those are skewed —
+	// and mod the embedded millisecond timestamp, which is uniform). Empty = no
+	// predicate. Ignored for the event table (it shards by $part_date day).
+	// Operator-supplied (trusted) SQL, like Events / UserOrderBy.
+	UserWhere string `mapstructure:"userWhere"`
 
 	// --- pagination / polling ---
 	PageSize     int           `mapstructure:"pageSize"`
@@ -139,6 +150,7 @@ func (c *Config) RegisterDefaults(set func(key string, value any), prefix string
 	set(prefix+".userTimeColumn", "")
 	set(prefix+".eventTimeColumn", "")
 	set(prefix+".userOrderBy", "")
+	set(prefix+".userWhere", "")
 	set(prefix+".partDateRange.start", "")
 	set(prefix+".partDateRange.end", "")
 	set(prefix+".eventTimeRange.start", "")
@@ -339,6 +351,11 @@ func (c *Config) buildSelect(day string, limit int) string {
 			}
 			predicates = append(predicates, fmt.Sprintf(`"#event_name" IN (%s)`, strings.Join(quoted, ", ")))
 		}
+	}
+	// UserWhere is the user-table shard predicate (the table is unpartitioned, so
+	// distributed slicing is expressed as a WHERE). Raw, trusted operator SQL.
+	if c.Table == TableUser && c.UserWhere != "" {
+		predicates = append(predicates, c.UserWhere)
 	}
 	if len(predicates) > 0 {
 		fmt.Fprintf(&b, " WHERE %s", strings.Join(predicates, " AND "))

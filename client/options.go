@@ -263,6 +263,19 @@ func WithBackfillUserOrderBy(orderBy string) Option {
 	return func(o *options) { o.backfill.UserOrderBy = orderBy }
 }
 
+// WithBackfillUserWhere sets backfill.userWhere: an optional WHERE predicate (no
+// "WHERE" prefix) AND-ed into the USER-table query. It is the primitive a
+// distributed orchestrator uses to fetch ONE SHARD of the (unpartitioned) user
+// table per worker — e.g. an even, complete, disjoint hash shard
+//
+//	mod(cast("#user_id" AS bigint) / 4194304, 8) = 3
+//
+// (drop the snowflake id's skewed low 22 bits and mod its embedded millisecond
+// timestamp). Ignored for the event table (which shards by $part_date day).
+func WithBackfillUserWhere(where string) Option {
+	return func(o *options) { o.backfill.UserWhere = where }
+}
+
 // WithBackfillPageSize sets backfill.pageSize: the server-side page size
 // (default 10000, minimum 1000).
 func WithBackfillPageSize(n int) Option {

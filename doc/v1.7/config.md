@@ -271,6 +271,7 @@ mongodb://user:pass@<cluster-endpoint>:27017/tango?tls=true&tlsCAFile=/path/glob
 | `backfill.userTimeColumn` | optional | `#update_time` | **仅用户表**：把 `v_user_<pid>` 的哪一列映射成 `#time`。TA 用户表没有名为 `#time` 的列（那是事件概念）、其按用户的时间列是 `#update_time`,但 talog 要求 user_* 记录的 `#time` 非空。该列缺失时回退为一次性合成时间戳。事件表忽略此项 |
 | `backfill.eventTimeColumn` | optional | `#event_time` | **仅事件表**：把 `v_event_<pid>` 的哪一列映射成 `#time`。TA 数仓事件视图暴露的是 `#event_time`（非日志上传的 `#time`),talog 要求事件 `#time` 非空 → 须映射。该列缺失时回退为一次性合成时间戳。用户表忽略此项 |
 | `backfill.userOrderBy` | optional | `""` | **仅用户表**：可选 `ORDER BY` 子句(列+ASC/DESC,不含 `ORDER BY` 前缀),让 `limit` 取确定性切片而非任意取样——如 `last_login_time DESC` 配 `limit=10000` 导入"最近登录的 1 万个用户"。空=不排序。事件表忽略 |
+| `backfill.userWhere` | optional | `""` | **仅用户表**：可选 `WHERE` 谓词(不含 `WHERE` 前缀),AND 进用户表查询。这是分布式编排给用户表**取单个分片**的原语(用户表无 `$part_date` 分区,故均匀/完整/不相交的分片用谓词表达),如 `mod(cast("#user_id" AS bigint) / 4194304, 8) = 3`——丢掉雪花 id 低 22 位倾斜的序列号/机器号,对高位毫秒时间戳取模。空=无谓词。事件表忽略(它按 `$part_date` 按天切) |
 | `backfill.partDateRange.start` | **required（event 表）** | `""` | 分区日期起（含），`YYYY-MM-DD`；事件表必填、用户表忽略 |
 | `backfill.partDateRange.end` | **required（event 表）** | `""` | 分区日期止（含），`YYYY-MM-DD` |
 | `backfill.eventTimeRange.start` | optional | `""` | 事件时间窗起（含），`YYYY-MM-DD HH:MM:SS`，在分区内再收窄；仅事件表 |
@@ -432,6 +433,7 @@ gateway 同时暴露三个独立路径（与 `/upload` 互不影响，无额外�
 | `backfill.userTimeColumn` | `#update_time` | `internal/backfill`（`ApplyDefaults`；仅用户表→`#time` 映射） |
 | `backfill.eventTimeColumn` | `#event_time` | `internal/backfill`（`ApplyDefaults`；仅事件表→`#time` 映射） |
 | `backfill.userOrderBy` | `""` | `internal/backfill`（仅用户表 SQL 加 `ORDER BY`；配 limit 取 top-N） |
+| `backfill.userWhere` | `""` | `internal/backfill`（仅用户表 SQL 加 `WHERE` 分片谓词；分布式编排取单分片用） |
 | `backfill.partDateRange.start` | **required:event 表**（无默认） | `internal/backfill`（`Validate`） |
 | `backfill.partDateRange.end` | **required:event 表**（无默认） | `internal/backfill`（`Validate`） |
 | `backfill.eventTimeRange.start` | `""`（可选） | `internal/backfill` |

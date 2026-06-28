@@ -66,6 +66,24 @@ func TestBuildSQL(t *testing.T) {
 			day:  "2026-05-01",
 			want: `SELECT * FROM v_event_35 WHERE "$part_date" = '2026-05-01'`,
 		},
+		{
+			name: "user table hash shard (userWhere)",
+			cfg:  &Config{ProjectID: 35, Table: TableUser, UserWhere: `mod(cast("#user_id" AS bigint) / 4194304, 8) = 3`},
+			day:  "ignored",
+			want: `SELECT * FROM v_user_35 WHERE mod(cast("#user_id" AS bigint) / 4194304, 8) = 3`,
+		},
+		{
+			name: "user table shard + orderBy + limit",
+			cfg:  &Config{ProjectID: 35, Table: TableUser, UserWhere: `mod(cast("#user_id" AS bigint) / 4194304, 4) = 1`, UserOrderBy: "last_login_time DESC", Limit: 5000},
+			day:  "ignored",
+			want: `SELECT * FROM v_user_35 WHERE mod(cast("#user_id" AS bigint) / 4194304, 4) = 1 ORDER BY last_login_time DESC LIMIT 5000`,
+		},
+		{
+			name: "userWhere ignored for event table",
+			cfg:  &Config{ProjectID: 35, Table: TableEvent, UserWhere: "x = 1", PartDateRange: DateRange{Start: "2026-05-01", End: "2026-05-01"}},
+			day:  "2026-05-01",
+			want: `SELECT * FROM v_event_35 WHERE "$part_date" = '2026-05-01'`,
+		},
 	}
 
 	for _, c := range cases {
