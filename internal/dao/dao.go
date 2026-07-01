@@ -118,6 +118,8 @@ const (
 	EJSONActionListIndexes     = ejson.ActionListIndexes
 	EJSONActionCreateIndexes   = ejson.ActionCreateIndexes
 	EJSONActionDropIndexes     = ejson.ActionDropIndexes
+	EJSONActionCreateTable     = ejson.ActionCreateTable
+	EJSONActionDropTable       = ejson.ActionDropTable
 )
 
 // DecodeEJSONRequest parses an Extended-JSON Mongo Data API request body. See

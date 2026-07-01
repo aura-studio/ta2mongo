@@ -142,7 +142,9 @@ func TestEJSON_Integration(t *testing.T) {
 	exec := func(t *testing.T, req *Request) *Response {
 		t.Helper()
 		req.Database = dbName
-		req.Collection = coll
+		if req.Collection == "" {
+			req.Collection = coll
+		}
 		resp, err := Execute(ctx, res, req)
 		if err != nil {
 			t.Fatalf("%s: %v", req.Action, err)
@@ -253,6 +255,35 @@ func TestEJSON_Integration(t *testing.T) {
 	// dropIndexes: remove name_1
 	if r := exec(t, &Request{Action: ActionDropIndexes, IndexName: "name_1"}); r.IndexName != "name_1" {
 		t.Fatalf("dropIndexes: want name_1, got %q", r.IndexName)
+	}
+
+	// createTable: a fresh collection appears in listCollections; dropTable removes it.
+	const newTbl = "items_new"
+	if r := exec(t, &Request{Action: ActionCreateTable, Collection: newTbl}); r.Collections == nil || len(*r.Collections) != 1 || (*r.Collections)[0] != newTbl {
+		t.Fatalf("createTable: want [%s], got %v", newTbl, r.Collections)
+	}
+	{
+		r := exec(t, &Request{Action: ActionListCollections})
+		found := false
+		for _, n := range *r.Collections {
+			if n == newTbl {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("createTable: %q not in listCollections %v", newTbl, *r.Collections)
+		}
+	}
+	if r := exec(t, &Request{Action: ActionDropTable, Collection: newTbl}); r.Collections == nil || (*r.Collections)[0] != newTbl {
+		t.Fatalf("dropTable: want [%s], got %v", newTbl, r.Collections)
+	}
+	{
+		r := exec(t, &Request{Action: ActionListCollections})
+		for _, n := range *r.Collections {
+			if n == newTbl {
+				t.Fatalf("dropTable: %q still present after drop", newTbl)
+			}
+		}
 	}
 }
 

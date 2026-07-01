@@ -10,8 +10,9 @@
 //
 // Beyond CRUD/aggregate it also serves the admin schema view: listCollections
 // enumerates a database's collections, sampleFields infers a collection's field
-// set by sampling, and listIndexes/createIndexes/dropIndexes read and manage a
-// collection's indexes — all through the same request shell and Response.
+// set by sampling, listIndexes/createIndexes/dropIndexes read and manage a
+// collection's indexes, and createTable/dropTable create and drop a collection
+// (table) — all through the same request shell and Response.
 //
 // By design there are no restrictions: any database, any collection, any filter,
 // operator, or aggregation pipeline is forwarded to the driver as-is, and no
@@ -46,6 +47,8 @@ const (
 	ActionListIndexes     = "listIndexes"     // list a collection's indexes
 	ActionCreateIndexes   = "createIndexes"   // create one index from an ordered key spec
 	ActionDropIndexes     = "dropIndexes"     // drop one index by name
+	ActionCreateTable     = "createTable"     // create a collection (table) by name
+	ActionDropTable       = "dropTable"       // drop a collection (table) by name
 )
 
 // Request is the EJSON Data-API request shell. It is decoded from Extended JSON,
@@ -106,7 +109,8 @@ func Execute(ctx context.Context, res *daomongo.MongoResource, req *Request) (*R
 	// connection.
 	switch req.Action {
 	case ActionFindOne, ActionFind, ActionInsertOne, ActionUpdateOne, ActionDeleteOne, ActionAggregate,
-		ActionListCollections, ActionSampleFields, ActionListIndexes, ActionCreateIndexes, ActionDropIndexes:
+		ActionListCollections, ActionSampleFields, ActionListIndexes, ActionCreateIndexes, ActionDropIndexes,
+		ActionCreateTable, ActionDropTable:
 	case "":
 		return nil, errors.New("ejson: action is required")
 	default:
@@ -152,8 +156,12 @@ func Execute(ctx context.Context, res *daomongo.MongoResource, req *Request) (*R
 		return listIndexes(ctx, coll)
 	case ActionCreateIndexes:
 		return createIndexes(ctx, coll, req)
-	default: // ActionDropIndexes (only remaining validated action)
+	case ActionDropIndexes:
 		return dropIndexes(ctx, coll, req)
+	case ActionCreateTable:
+		return createTable(ctx, db, req.Collection)
+	default: // ActionDropTable (only remaining validated action)
+		return dropTable(ctx, coll)
 	}
 }
 
@@ -407,6 +415,27 @@ func dropIndexes(ctx context.Context, coll *mongo.Collection, req *Request) (*Re
 		return nil, err
 	}
 	return &Response{IndexName: req.IndexName}, nil
+}
+
+// createTable creates an (empty) collection by name. Creating a collection that
+// already exists returns the driver's NamespaceExists error. The created name is
+// echoed back in Collections.
+func createTable(ctx context.Context, db *mongo.Database, name string) (*Response, error) {
+	if err := db.CreateCollection(ctx, name); err != nil {
+		return nil, err
+	}
+	return &Response{Collections: &[]string{name}}, nil
+}
+
+// dropTable drops a collection by name (all its documents and indexes go with
+// it — destructive). Dropping a non-existent collection is a driver no-op. The
+// dropped name is echoed back in Collections.
+func dropTable(ctx context.Context, coll *mongo.Collection) (*Response, error) {
+	name := coll.Name()
+	if err := coll.Drop(ctx); err != nil {
+		return nil, err
+	}
+	return &Response{Collections: &[]string{name}}, nil
 }
 
 // indexDir normalizes an index key direction: ±1 (and other numeric orders)
