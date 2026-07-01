@@ -51,6 +51,18 @@ func (s *Store) ensureEventIndexes(ctx context.Context) error {
 			{Key: "#distinct_id", Value: 1},
 			{Key: "#time", Value: 1},
 		}},
+		// Compound: event_name + time — event-name-scoped time range/sort
+		// (queries filtering #event_name without #account_id/#distinct_id).
+		// Explicitly named so a manual pre-build (recommended off-peak on a large
+		// existing collection) can use the same name and stay conflict-free with
+		// this idempotent EnsureIndexes call.
+		{
+			Keys: bson.D{
+				{Key: "#event_name", Value: 1},
+				{Key: "#time", Value: 1},
+			},
+			Options: options.Index().SetName("event_name_time"),
+		},
 		{
 			Keys:    bson.D{{Key: "#uuid", Value: 1}},
 			Options: options.Index().SetUnique(true),
