@@ -39,29 +39,25 @@ func (s *Store) ensureUserIndexes(ctx context.Context) error {
 
 func (s *Store) ensureEventIndexes(ctx context.Context) error {
 	indexes := []mongo.IndexModel{
-		// Compound: event_name + account_id + time
-		{Keys: bson.D{
-			{Key: "#event_name", Value: 1},
-			{Key: "#account_id", Value: 1},
-			{Key: "#time", Value: 1},
-		}},
-		// Compound: event_name + distinct_id + time
-		{Keys: bson.D{
-			{Key: "#event_name", Value: 1},
-			{Key: "#distinct_id", Value: 1},
-			{Key: "#time", Value: 1},
-		}},
-		// Compound: event_name + time — event-name-scoped time range/sort
-		// (queries filtering #event_name without #account_id/#distinct_id).
-		// Explicitly named so a manual pre-build (recommended off-peak on a large
-		// existing collection) can use the same name and stay conflict-free with
-		// this idempotent EnsureIndexes call.
+		{
+			Keys: bson.D{
+				{Key: "#event_name", Value: 1},
+				{Key: "#account_id", Value: 1},
+				{Key: "#time", Value: 1},
+			},
+		},
+		{
+			Keys: bson.D{
+				{Key: "#event_name", Value: 1},
+				{Key: "#distinct_id", Value: 1},
+				{Key: "#time", Value: 1},
+			},
+		},
 		{
 			Keys: bson.D{
 				{Key: "#event_name", Value: 1},
 				{Key: "#time", Value: 1},
 			},
-			Options: options.Index().SetName("event_name_time"),
 		},
 		{
 			Keys:    bson.D{{Key: "#uuid", Value: 1}},
