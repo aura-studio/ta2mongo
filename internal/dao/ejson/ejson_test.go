@@ -95,6 +95,18 @@ func TestExecute_Validation(t *testing.T) {
 	}
 }
 
+// TestExecute_ListCollectionsNoCollectionRequired proves listCollections is
+// database-level: a missing collection must NOT be the failure reason.
+func TestExecute_ListCollectionsNoCollectionRequired(t *testing.T) {
+	_, err := Execute(context.Background(), nil, &Request{Action: ActionListCollections, Database: "d"})
+	if err == nil {
+		t.Fatal("expected an error (nil resource)")
+	}
+	if err.Error() == "ejson: collection is required" {
+		t.Fatalf("listCollections must not require a collection, got %v", err)
+	}
+}
+
 // --- Integration test (real MongoDB / DocumentDB) -------------------------
 
 // TestEJSON_Integration exercises every action end-to-end. It is skipped unless
@@ -175,6 +187,72 @@ func TestEJSON_Integration(t *testing.T) {
 	// deleteOne
 	if r := exec(t, &Request{Action: ActionDeleteOne, Filter: bson.M{"name": "b"}}); r.DeletedCount == nil || *r.DeletedCount != 1 {
 		t.Fatalf("deleteOne: want deleted 1, got %v", r.DeletedCount)
+	}
+
+	// --- schema introspection & index management ---
+
+	// createIndexes: a unique index on name
+	if r := exec(t, &Request{Action: ActionCreateIndexes, Keys: bson.D{{Key: "name", Value: 1}}, IndexName: "name_1", Unique: true}); r.IndexName != "name_1" {
+		t.Fatalf("createIndexes: want name_1, got %q", r.IndexName)
+	}
+
+	// listIndexes: name_1 present, unique, keyed on name
+	{
+		r := exec(t, &Request{Action: ActionListIndexes})
+		if r.Documents == nil {
+			t.Fatal("listIndexes: nil Documents")
+		}
+		var found bool
+		for _, d := range *r.Documents {
+			if d["name"] == "name_1" {
+				found = true
+				if u, _ := d["unique"].(bool); !u {
+					t.Errorf("listIndexes: name_1 should be unique")
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("listIndexes: name_1 not found in %v", *r.Documents)
+		}
+	}
+
+	// sampleFields: name + n discovered
+	{
+		r := exec(t, &Request{Action: ActionSampleFields})
+		if r.Documents == nil {
+			t.Fatal("sampleFields: nil Documents")
+		}
+		seen := map[string]bool{}
+		for _, d := range *r.Documents {
+			if f, ok := d["field"].(string); ok {
+				seen[f] = true
+			}
+		}
+		if !seen["name"] || !seen["n"] {
+			t.Fatalf("sampleFields: want name+n, got %v", *r.Documents)
+		}
+	}
+
+	// listCollections: items present (collection is ignored for this action)
+	{
+		r := exec(t, &Request{Action: ActionListCollections})
+		if r.Collections == nil {
+			t.Fatal("listCollections: nil Collections")
+		}
+		var found bool
+		for _, name := range *r.Collections {
+			if name == coll {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("listCollections: %q not found in %v", coll, *r.Collections)
+		}
+	}
+
+	// dropIndexes: remove name_1
+	if r := exec(t, &Request{Action: ActionDropIndexes, IndexName: "name_1"}); r.IndexName != "name_1" {
+		t.Fatalf("dropIndexes: want name_1, got %q", r.IndexName)
 	}
 }
 

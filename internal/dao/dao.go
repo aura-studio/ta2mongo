@@ -111,6 +111,13 @@ const (
 	EJSONActionUpdateOne = ejson.ActionUpdateOne
 	EJSONActionDeleteOne = ejson.ActionDeleteOne
 	EJSONActionAggregate = ejson.ActionAggregate
+
+	// Schema introspection & index management.
+	EJSONActionListCollections = ejson.ActionListCollections
+	EJSONActionSampleFields    = ejson.ActionSampleFields
+	EJSONActionListIndexes     = ejson.ActionListIndexes
+	EJSONActionCreateIndexes   = ejson.ActionCreateIndexes
+	EJSONActionDropIndexes     = ejson.ActionDropIndexes
 )
 
 // DecodeEJSONRequest parses an Extended-JSON Mongo Data API request body. See

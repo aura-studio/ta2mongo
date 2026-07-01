@@ -8,6 +8,11 @@
 // cli (stdin) ends all call Execute with the same Request and get the same
 // Response, exactly the way the upload path shares the api.Engine.
 //
+// Beyond CRUD/aggregate it also serves the admin schema view: listCollections
+// enumerates a database's collections, sampleFields infers a collection's field
+// set by sampling, and listIndexes/createIndexes/dropIndexes read and manage a
+// collection's indexes — all through the same request shell and Response.
+//
 // By design there are no restrictions: any database, any collection, any filter,
 // operator, or aggregation pipeline is forwarded to the driver as-is, and no
 // limit / return-count / timeout caps are imposed. Callers own access control.
@@ -17,6 +22,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -33,6 +39,13 @@ const (
 	ActionUpdateOne = "updateOne"
 	ActionDeleteOne = "deleteOne"
 	ActionAggregate = "aggregate"
+
+	// Schema introspection & index management, backing the admin schema view.
+	ActionListCollections = "listCollections" // database-level: list collection names
+	ActionSampleFields    = "sampleFields"    // sample docs, union top-level fields + types
+	ActionListIndexes     = "listIndexes"     // list a collection's indexes
+	ActionCreateIndexes   = "createIndexes"   // create one index from an ordered key spec
+	ActionDropIndexes     = "dropIndexes"     // drop one index by name
 )
 
 // Request is the EJSON Data-API request shell. It is decoded from Extended JSON,
@@ -52,6 +65,11 @@ type Request struct {
 	Update     bson.M `bson:"update,omitempty"`   // updateOne (forwarded as-is)
 	Pipeline   bson.A `bson:"pipeline,omitempty"` // aggregate
 	Upsert     bool   `bson:"upsert,omitempty"`
+	// ---- schema introspection & index management ----
+	Keys       bson.D `bson:"keys,omitempty"`       // createIndexes: ordered key spec, e.g. {"#event_name":1,"#time":1}
+	IndexName  string `bson:"indexName,omitempty"`  // createIndexes (optional name) / dropIndexes (name to drop)
+	Unique     bool   `bson:"unique,omitempty"`     // createIndexes
+	SampleSize int64  `bson:"sampleSize,omitempty"` // sampleFields (default 200)
 }
 
 // Response carries the result of an action, encoded back as relaxed Extended
@@ -68,6 +86,11 @@ type Response struct {
 	ModifiedCount *int64    `bson:"modifiedCount,omitempty"` // updateOne
 	UpsertedID    any       `bson:"upsertedId,omitempty"`    // updateOne (upsert)
 	DeletedCount  *int64    `bson:"deletedCount,omitempty"`  // deleteOne
+	// ---- schema introspection & index management ----
+	Collections *[]string `bson:"collections,omitempty"` // listCollections (always set, possibly empty)
+	IndexName   string    `bson:"indexName,omitempty"`   // createIndexes (created) / dropIndexes (dropped)
+	// listIndexes and sampleFields reuse Documents: listIndexes emits
+	// [{name, unique, keys:[{field, dir}, ...]}], sampleFields [{field, types:[...]}].
 }
 
 // Execute dispatches req against the MongoDB resource. The target database is
@@ -82,13 +105,16 @@ func Execute(ctx context.Context, res *daomongo.MongoResource, req *Request) (*R
 	// errors (unknown action, missing collection/database) never depend on a live
 	// connection.
 	switch req.Action {
-	case ActionFindOne, ActionFind, ActionInsertOne, ActionUpdateOne, ActionDeleteOne, ActionAggregate:
+	case ActionFindOne, ActionFind, ActionInsertOne, ActionUpdateOne, ActionDeleteOne, ActionAggregate,
+		ActionListCollections, ActionSampleFields, ActionListIndexes, ActionCreateIndexes, ActionDropIndexes:
 	case "":
 		return nil, errors.New("ejson: action is required")
 	default:
 		return nil, fmt.Errorf("ejson: unknown action %q", req.Action)
 	}
-	if req.Collection == "" {
+	// listCollections is database-level (no collection); every other action
+	// operates on a named collection.
+	if req.Action != ActionListCollections && req.Collection == "" {
 		return nil, errors.New("ejson: collection is required")
 	}
 	dbName := req.Database
@@ -101,7 +127,11 @@ func Execute(ctx context.Context, res *daomongo.MongoResource, req *Request) (*R
 	if res == nil || res.Client == nil {
 		return nil, errors.New("ejson: no MongoDB connection")
 	}
-	coll := res.Client.Database(dbName).Collection(req.Collection)
+	db := res.Client.Database(dbName)
+	if req.Action == ActionListCollections {
+		return listCollections(ctx, db)
+	}
+	coll := db.Collection(req.Collection)
 
 	switch req.Action {
 	case ActionFindOne:
@@ -114,8 +144,16 @@ func Execute(ctx context.Context, res *daomongo.MongoResource, req *Request) (*R
 		return updateOne(ctx, coll, req)
 	case ActionDeleteOne:
 		return deleteOne(ctx, coll, req)
-	default: // ActionAggregate (only remaining validated action)
+	case ActionAggregate:
 		return aggregate(ctx, coll, req)
+	case ActionSampleFields:
+		return sampleFields(ctx, coll, req)
+	case ActionListIndexes:
+		return listIndexes(ctx, coll)
+	case ActionCreateIndexes:
+		return createIndexes(ctx, coll, req)
+	default: // ActionDropIndexes (only remaining validated action)
+		return dropIndexes(ctx, coll, req)
 	}
 }
 
@@ -232,4 +270,192 @@ func filterOrEmpty(f bson.M) bson.M {
 		return bson.M{}
 	}
 	return f
+}
+
+// listCollections lists a database's collection names (sorted), so the admin
+// schema view can enumerate a profile's tables.
+func listCollections(ctx context.Context, db *mongo.Database) (*Response, error) {
+	names, err := db.ListCollectionNames(ctx, bson.M{})
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(names)
+	if names == nil {
+		names = []string{}
+	}
+	return &Response{Collections: &names}, nil
+}
+
+// sampleFields infers a collection's field set by sampling up to SampleSize
+// documents (default 200) and unioning their top-level keys, recording the BSON
+// type(s) seen for each. MongoDB is schemaless, so this is best-effort: a field
+// present in no sampled document does not appear. Fields are returned sorted
+// (_id first), each as {field, types:[...]}, in Documents.
+func sampleFields(ctx context.Context, coll *mongo.Collection, req *Request) (*Response, error) {
+	size := req.SampleSize
+	if size <= 0 {
+		size = 200
+	}
+	cur, err := coll.Find(ctx, bson.D{}, options.Find().SetLimit(size))
+	if err != nil {
+		return nil, err
+	}
+	defer cur.Close(ctx)
+	types := map[string]map[string]struct{}{}
+	for cur.Next(ctx) {
+		elems, err := cur.Current.Elements()
+		if err != nil {
+			continue // skip a malformed document rather than fail the whole sample
+		}
+		for _, e := range elems {
+			k := e.Key()
+			set := types[k]
+			if set == nil {
+				set = map[string]struct{}{}
+				types[k] = set
+			}
+			set[bsonTypeName(e.Value().Type)] = struct{}{}
+		}
+	}
+	if err := cur.Err(); err != nil {
+		return nil, err
+	}
+	fields := make([]string, 0, len(types))
+	for k := range types {
+		fields = append(fields, k)
+	}
+	sort.Slice(fields, func(i, j int) bool {
+		if (fields[i] == "_id") != (fields[j] == "_id") {
+			return fields[i] == "_id" // _id sorts first
+		}
+		return fields[i] < fields[j]
+	})
+	docs := make([]bson.M, 0, len(fields))
+	for _, k := range fields {
+		ts := make([]string, 0, len(types[k]))
+		for t := range types[k] {
+			ts = append(ts, t)
+		}
+		sort.Strings(ts)
+		typesA := make(bson.A, len(ts))
+		for i, t := range ts {
+			typesA[i] = t
+		}
+		docs = append(docs, bson.M{"field": k, "types": typesA})
+	}
+	return &Response{Documents: &docs}, nil
+}
+
+// listIndexes returns a collection's indexes as Documents, each shaped
+// {name, unique, keys:[{field, dir}, ...]} with key order preserved (compound
+// index order is significant).
+func listIndexes(ctx context.Context, coll *mongo.Collection) (*Response, error) {
+	cur, err := coll.Indexes().List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer cur.Close(ctx)
+	docs := []bson.M{}
+	for cur.Next(ctx) {
+		var idx struct {
+			Name   string `bson:"name"`
+			Key    bson.D `bson:"key"`
+			Unique bool   `bson:"unique"`
+		}
+		if err := cur.Decode(&idx); err != nil {
+			return nil, err
+		}
+		keys := make(bson.A, 0, len(idx.Key))
+		for _, kv := range idx.Key {
+			keys = append(keys, bson.M{"field": kv.Key, "dir": indexDir(kv.Value)})
+		}
+		docs = append(docs, bson.M{"name": idx.Name, "unique": idx.Unique, "keys": keys})
+	}
+	if err := cur.Err(); err != nil {
+		return nil, err
+	}
+	return &Response{Documents: &docs}, nil
+}
+
+// createIndexes creates a single index from an ordered key spec (Keys), with an
+// optional name and a unique flag, returning the created index's name.
+func createIndexes(ctx context.Context, coll *mongo.Collection, req *Request) (*Response, error) {
+	if len(req.Keys) == 0 {
+		return nil, errors.New("ejson: createIndexes requires a non-empty keys spec")
+	}
+	idxOpts := options.Index()
+	if req.IndexName != "" {
+		idxOpts.SetName(req.IndexName)
+	}
+	if req.Unique {
+		idxOpts.SetUnique(true)
+	}
+	name, err := coll.Indexes().CreateOne(ctx, mongo.IndexModel{Keys: req.Keys, Options: idxOpts})
+	if err != nil {
+		return nil, err
+	}
+	return &Response{IndexName: name}, nil
+}
+
+// dropIndexes drops one index by name. Dropping _id_ is rejected by MongoDB
+// itself; callers should also guard destructive drops at their own layer.
+func dropIndexes(ctx context.Context, coll *mongo.Collection, req *Request) (*Response, error) {
+	if req.IndexName == "" {
+		return nil, errors.New("ejson: dropIndexes requires an index name")
+	}
+	if err := coll.Indexes().DropOne(ctx, req.IndexName); err != nil {
+		return nil, err
+	}
+	return &Response{IndexName: req.IndexName}, nil
+}
+
+// indexDir normalizes an index key direction: ±1 (and other numeric orders)
+// become an int; a non-numeric direction (e.g. "text", "2dsphere") is kept as
+// its original value.
+func indexDir(v any) any {
+	switch n := v.(type) {
+	case int32:
+		return int(n)
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	default:
+		return v
+	}
+}
+
+// bsonTypeName maps a BSON element type to a short human-friendly name for the
+// schema view.
+func bsonTypeName(t bson.Type) string {
+	switch t {
+	case bson.TypeString:
+		return "string"
+	case bson.TypeInt32:
+		return "int"
+	case bson.TypeInt64:
+		return "long"
+	case bson.TypeDouble:
+		return "double"
+	case bson.TypeDecimal128:
+		return "decimal"
+	case bson.TypeBoolean:
+		return "bool"
+	case bson.TypeDateTime:
+		return "date"
+	case bson.TypeTimestamp:
+		return "timestamp"
+	case bson.TypeObjectID:
+		return "objectId"
+	case bson.TypeEmbeddedDocument:
+		return "object"
+	case bson.TypeArray:
+		return "array"
+	case bson.TypeBinary:
+		return "binary"
+	case bson.TypeNull:
+		return "null"
+	default:
+		return t.String()
+	}
 }
