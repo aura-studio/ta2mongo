@@ -39,8 +39,13 @@ func TestConfigApplyDefaultsPreservesSetValues(t *testing.T) {
 	}
 	c.ApplyDefaults()
 	if !c.Enabled || c.Backend != BackendChangeStream || c.DocumentID != "custom" ||
-		c.PollInterval != 2*time.Second || c.Collection != "_other" {
+		c.PollInterval != 2*time.Second {
 		t.Fatalf("ApplyDefaults clobbered set values: %+v", c)
+	}
+	// Collection is FIXED: ApplyDefaults forces it to DefaultCollection, ignoring
+	// any configured value.
+	if c.Collection != DefaultCollection {
+		t.Errorf("collection = %q, want forced %q", c.Collection, DefaultCollection)
 	}
 	// reconcileInterval was unset → defaulted.
 	if c.ReconcileInterval != DefaultReconcileInterval {

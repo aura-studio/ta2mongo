@@ -41,7 +41,8 @@ func TestDefaultOptions_Cfgsync(t *testing.T) {
 }
 
 // A gateway-compatible config's cfgsync.* section steers the publish/fetch
-// faces, same as it steers the binary roles.
+// faces (documentID, intervals), same as it steers the binary roles — EXCEPT
+// the collection, which is a fixed convention forced to DefaultCollection.
 func TestWithConfigBytes_Cfgsync(t *testing.T) {
 	o := buildOptions(WithConfigBytes([]byte(`
 dao:
@@ -54,8 +55,9 @@ cfgsync:
 	if o.err != nil {
 		t.Fatalf("unexpected err: %v", o.err)
 	}
-	if o.cfgsync.Collection != "my_config" {
-		t.Errorf("cfgsync.collection = %q, want my_config", o.cfgsync.Collection)
+	// collection is NOT steerable: cfgsync.collection is ignored and forced.
+	if o.cfgsync.Collection != cfgsync.DefaultCollection {
+		t.Errorf("cfgsync.collection = %q, want forced %q", o.cfgsync.Collection, cfgsync.DefaultCollection)
 	}
 	if o.cfgsync.DocumentID != "mydoc" {
 		t.Errorf("cfgsync.documentID = %q, want mydoc", o.cfgsync.DocumentID)

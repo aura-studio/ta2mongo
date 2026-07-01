@@ -11,7 +11,7 @@
 //
 // # Read side (this Watcher) and write side (Publish)
 //
-// The Watcher watches the central config document (collection _tango_config) and
+// The Watcher watches the central config document (collection config) and
 // hot-replaces the live config via injected appliers (the Registry). Publish (see
 // publish.go) is the write side: gateway / cli / api all call the one
 // cfgsync.Publish, which validates against the same allowlist and bumps a

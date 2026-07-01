@@ -21,9 +21,11 @@ const (
 
 // Defaults for cfgsync.* keys.
 const (
-	// DefaultCollection is the central config collection. It is a fixed convention
-	// (rarely overridden) and is the same collection the Publish side writes to.
-	DefaultCollection = "_tango_config"
+	// DefaultCollection is the central config collection — the same one the
+	// Publish side writes to and the Watcher reads. It is a FIXED, hardcoded
+	// convention and is NOT configurable: ApplyDefaults forces it regardless of any
+	// cfgsync.collection value, so every side always uses this exact collection.
+	DefaultCollection = "config"
 	// DefaultDocumentID is the _id of the config document cfgsync tracks.
 	DefaultDocumentID = "filter"
 	// DefaultPollInterval is the poll backend's read period: the worst-case
@@ -70,8 +72,10 @@ type Config struct {
 	// ReconcileInterval is the changestream backend's fallback full-read period
 	// (file key cfgsync.reconcileInterval). Default 60s.
 	ReconcileInterval time.Duration `mapstructure:"reconcileInterval"`
-	// Collection is the config collection name (file key cfgsync.collection).
-	// Default "_tango_config"; rarely changed.
+	// Collection is retained for config back-compat but is IGNORED: the config
+	// collection is fixed to DefaultCollection (ApplyDefaults overwrites whatever
+	// is set here). The mapstructure key is still accepted so an old config that
+	// sets cfgsync.collection does not error — the value simply has no effect.
 	Collection string `mapstructure:"collection"`
 }
 
@@ -89,9 +93,10 @@ func (c *Config) ApplyDefaults() {
 	if c.ReconcileInterval <= 0 {
 		c.ReconcileInterval = DefaultReconcileInterval
 	}
-	if c.Collection == "" {
-		c.Collection = DefaultCollection
-	}
+	// The config collection is a FIXED convention: force it, ignoring any
+	// configured value, so the Watcher, Publish and Fetch sides can never diverge
+	// onto different collections.
+	c.Collection = DefaultCollection
 }
 
 // Validate checks the backend selector. The intervals are guarded by
