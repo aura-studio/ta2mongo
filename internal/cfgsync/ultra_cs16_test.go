@@ -141,9 +141,9 @@ func TestUltraCS16_ChangeStream_BreakResubscribe(t *testing.T) {
 	// the change-stream cursor; pump's cs.Next returns false and errCh fires.
 	brokeBefore := hook.brokeCount()
 	dropCtx, dropCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	if err := d.Mongo.DB.Collection(cfg.Collection).Drop(dropCtx); err != nil {
+	if err := d.Mongo.DB.Collection(DefaultCollection).Drop(dropCtx); err != nil {
 		dropCancel()
-		t.Fatalf("dropping watched collection %q: %v", cfg.Collection, err)
+		t.Fatalf("dropping watched collection %q: %v", DefaultCollection, err)
 	}
 	dropCancel()
 

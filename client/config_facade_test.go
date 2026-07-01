@@ -29,9 +29,6 @@ import (
 // land where no watcher looks.
 func TestDefaultOptions_Cfgsync(t *testing.T) {
 	o := buildOptions()
-	if o.cfgsync.Collection != cfgsync.DefaultCollection {
-		t.Errorf("cfgsync.collection default = %q, want %q", o.cfgsync.Collection, cfgsync.DefaultCollection)
-	}
 	if o.cfgsync.DocumentID != cfgsync.DefaultDocumentID {
 		t.Errorf("cfgsync.documentID default = %q, want %q", o.cfgsync.DocumentID, cfgsync.DefaultDocumentID)
 	}
@@ -41,23 +38,19 @@ func TestDefaultOptions_Cfgsync(t *testing.T) {
 }
 
 // A gateway-compatible config's cfgsync.* section steers the publish/fetch
-// faces (documentID, intervals), same as it steers the binary roles — EXCEPT
-// the collection, which is a fixed convention forced to DefaultCollection.
+// faces (documentID, intervals), same as it steers the binary roles. The
+// central collection is NOT part of this: it is the hardcoded cfgsync
+// DefaultCollection with no config key (any cfgsync.collection is ignored).
 func TestWithConfigBytes_Cfgsync(t *testing.T) {
 	o := buildOptions(WithConfigBytes([]byte(`
 dao:
   mongo:
     uri: mongodb://localhost:27017/tango
 cfgsync:
-  collection: my_config
   documentID: mydoc
 `)))
 	if o.err != nil {
 		t.Fatalf("unexpected err: %v", o.err)
-	}
-	// collection is NOT steerable: cfgsync.collection is ignored and forced.
-	if o.cfgsync.Collection != cfgsync.DefaultCollection {
-		t.Errorf("cfgsync.collection = %q, want forced %q", o.cfgsync.Collection, cfgsync.DefaultCollection)
 	}
 	if o.cfgsync.DocumentID != "mydoc" {
 		t.Errorf("cfgsync.documentID = %q, want mydoc", o.cfgsync.DocumentID)

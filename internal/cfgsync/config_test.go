@@ -21,9 +21,6 @@ func TestConfigApplyDefaults(t *testing.T) {
 	if c.ReconcileInterval != DefaultReconcileInterval {
 		t.Errorf("reconcileInterval = %v, want %v", c.ReconcileInterval, DefaultReconcileInterval)
 	}
-	if c.Collection != DefaultCollection {
-		t.Errorf("collection = %q, want %q", c.Collection, DefaultCollection)
-	}
 	if c.Enabled {
 		t.Error("enabled should default to false")
 	}
@@ -35,17 +32,11 @@ func TestConfigApplyDefaultsPreservesSetValues(t *testing.T) {
 		Backend:      BackendChangeStream,
 		DocumentID:   "custom",
 		PollInterval: 2 * time.Second,
-		Collection:   "_other",
 	}
 	c.ApplyDefaults()
 	if !c.Enabled || c.Backend != BackendChangeStream || c.DocumentID != "custom" ||
 		c.PollInterval != 2*time.Second {
 		t.Fatalf("ApplyDefaults clobbered set values: %+v", c)
-	}
-	// Collection is FIXED: ApplyDefaults forces it to DefaultCollection, ignoring
-	// any configured value.
-	if c.Collection != DefaultCollection {
-		t.Errorf("collection = %q, want forced %q", c.Collection, DefaultCollection)
 	}
 	// reconcileInterval was unset → defaulted.
 	if c.ReconcileInterval != DefaultReconcileInterval {

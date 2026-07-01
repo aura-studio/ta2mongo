@@ -133,7 +133,7 @@ func (b *changeStreamBackend) subscribe(ctx context.Context) (*mongo.ChangeStrea
 		{{Key: "$match", Value: bson.M{"documentKey._id": b.cfg.DocumentID}}},
 	}
 	opts := options.ChangeStream().SetFullDocument(options.UpdateLookup)
-	return b.dao.Watch(ctx, b.cfg.Collection, pipeline, opts)
+	return b.dao.Watch(ctx, DefaultCollection, pipeline, opts)
 }
 
 // resubscribe retries subscribe with a bounded backoff until it succeeds or ctx
@@ -187,7 +187,7 @@ func (b *changeStreamBackend) pump(ctx context.Context, cs *mongo.ChangeStream, 
 // readOnce performs one full read + observe, logging (but swallowing) a read
 // error so the stream loop survives a transient DB blip.
 func (b *changeStreamBackend) readOnce(ctx context.Context, observe func(bson.M) error) {
-	doc, err := fetchDoc(ctx, b.dao, b.cfg.Collection, b.cfg.DocumentID)
+	doc, err := fetchDoc(ctx, b.dao, DefaultCollection, b.cfg.DocumentID)
 	if err != nil {
 		if ctx.Err() != nil {
 			return

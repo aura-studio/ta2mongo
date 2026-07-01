@@ -19,7 +19,7 @@ func Fetch(ctx context.Context, d *dao.Dao, cfg *Config) (bson.M, error) {
 		cfg = &Config{}
 	}
 	cfg.ApplyDefaults()
-	return fetchDoc(ctx, d, cfg.Collection, cfg.DocumentID)
+	return fetchDoc(ctx, d, DefaultCollection, cfg.DocumentID)
 }
 
 // fetchDoc reads the tracked config document via the dao EJSON façade

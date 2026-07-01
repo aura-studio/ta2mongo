@@ -23,8 +23,9 @@ const (
 const (
 	// DefaultCollection is the central config collection — the same one the
 	// Publish side writes to and the Watcher reads. It is a FIXED, hardcoded
-	// convention and is NOT configurable: ApplyDefaults forces it regardless of any
-	// cfgsync.collection value, so every side always uses this exact collection.
+	// constant: there is no cfgsync.collection config key, so config can never
+	// change it. Every side (Watcher, Publish, Fetch) references this constant
+	// directly.
 	DefaultCollection = "config"
 	// DefaultDocumentID is the _id of the config document cfgsync tracks.
 	DefaultDocumentID = "filter"
@@ -72,11 +73,10 @@ type Config struct {
 	// ReconcileInterval is the changestream backend's fallback full-read period
 	// (file key cfgsync.reconcileInterval). Default 60s.
 	ReconcileInterval time.Duration `mapstructure:"reconcileInterval"`
-	// Collection is retained for config back-compat but is IGNORED: the config
-	// collection is fixed to DefaultCollection (ApplyDefaults overwrites whatever
-	// is set here). The mapstructure key is still accepted so an old config that
-	// sets cfgsync.collection does not error — the value simply has no effect.
-	Collection string `mapstructure:"collection"`
+	// NOTE: there is deliberately NO Collection field / cfgsync.collection key.
+	// The central config collection is the hardcoded DefaultCollection and cannot
+	// be configured. An old config still setting cfgsync.collection is silently
+	// ignored (unknown key).
 }
 
 // ApplyDefaults fills unset cfgsync options with their defaults.
@@ -93,10 +93,6 @@ func (c *Config) ApplyDefaults() {
 	if c.ReconcileInterval <= 0 {
 		c.ReconcileInterval = DefaultReconcileInterval
 	}
-	// The config collection is a FIXED convention: force it, ignoring any
-	// configured value, so the Watcher, Publish and Fetch sides can never diverge
-	// onto different collections.
-	c.Collection = DefaultCollection
 }
 
 // Validate checks the backend selector. The intervals are guarded by
@@ -121,5 +117,4 @@ func (c *Config) RegisterDefaults(set func(key string, value any), prefix string
 	set(prefix+".documentID", "")
 	set(prefix+".pollInterval", "0s")
 	set(prefix+".reconcileInterval", "0s")
-	set(prefix+".collection", "")
 }

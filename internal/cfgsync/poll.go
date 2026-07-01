@@ -44,7 +44,7 @@ func (b *pollBackend) Run(ctx context.Context, observe func(bson.M) error) error
 // readOnce performs one fetch + observe, logging (but swallowing) a read error so
 // the poll loop survives transient DB unavailability.
 func (b *pollBackend) readOnce(ctx context.Context, observe func(bson.M) error) {
-	doc, err := fetchDoc(ctx, b.dao, b.cfg.Collection, b.cfg.DocumentID)
+	doc, err := fetchDoc(ctx, b.dao, DefaultCollection, b.cfg.DocumentID)
 	if err != nil {
 		if ctx.Err() != nil {
 			return // shutting down; the read failed only because ctx was cancelled

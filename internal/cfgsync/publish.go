@@ -63,7 +63,7 @@ func Publish(ctx context.Context, d *dao.Dao, cfg *Config, doc bson.M) (int64, e
 
 	if _, err := d.EJSON(ctx, &dao.EJSONRequest{
 		Action:     dao.EJSONActionUpdateOne,
-		Collection: cfg.Collection,
+		Collection: DefaultCollection,
 		Filter:     bson.M{"_id": cfg.DocumentID},
 		Update:     bson.M{"$set": set, "$inc": bson.M{"version": 1}},
 		Upsert:     true,
@@ -74,7 +74,7 @@ func Publish(ctx context.Context, d *dao.Dao, cfg *Config, doc bson.M) (int64, e
 	// Read back the new version. The write above is atomic; this follow-up read is
 	// only to report the resulting version (it may already reflect a concurrent
 	// later publish, which is fine — versions only ever move forward).
-	updated, err := fetchDoc(ctx, d, cfg.Collection, cfg.DocumentID)
+	updated, err := fetchDoc(ctx, d, DefaultCollection, cfg.DocumentID)
 	if err != nil {
 		return 0, fmt.Errorf("cfgsync: publish read-back: %w", err)
 	}
@@ -118,7 +118,7 @@ func PublishAppend(ctx context.Context, d *dao.Dao, cfg *Config, doc bson.M) (in
 	}
 
 	for attempt := 0; attempt < publishAppendAttempts; attempt++ {
-		cur, err := fetchDoc(ctx, d, cfg.Collection, cfg.DocumentID)
+		cur, err := fetchDoc(ctx, d, DefaultCollection, cfg.DocumentID)
 		if err != nil {
 			return 0, fmt.Errorf("cfgsync: publish append: read current: %w", err)
 		}
@@ -137,7 +137,7 @@ func PublishAppend(ctx context.Context, d *dao.Dao, cfg *Config, doc bson.M) (in
 			}
 			if _, err := d.EJSON(ctx, &dao.EJSONRequest{
 				Action:     dao.EJSONActionInsertOne,
-				Collection: cfg.Collection,
+				Collection: DefaultCollection,
 				Document:   insertDoc,
 			}); err != nil {
 				if mongo.IsDuplicateKeyError(err) {
@@ -166,7 +166,7 @@ func PublishAppend(ctx context.Context, d *dao.Dao, cfg *Config, doc bson.M) (in
 
 		resp, err := d.EJSON(ctx, &dao.EJSONRequest{
 			Action:     dao.EJSONActionUpdateOne,
-			Collection: cfg.Collection,
+			Collection: DefaultCollection,
 			Filter:     bson.M{"_id": cfg.DocumentID, "version": curVersion},
 			Update:     bson.M{"$set": set, "$inc": bson.M{"version": 1}},
 		})

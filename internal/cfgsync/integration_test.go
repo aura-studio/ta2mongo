@@ -147,7 +147,7 @@ func writeRaw(t *testing.T, d *dao.Dao, cfg *Config, set bson.M) {
 	defer cancel()
 	if _, err := d.EJSON(ctx, &dao.EJSONRequest{
 		Action:     dao.EJSONActionUpdateOne,
-		Collection: cfg.Collection,
+		Collection: DefaultCollection,
 		Filter:     bson.M{"_id": cfg.DocumentID},
 		Update:     bson.M{"$set": set},
 		Upsert:     true,
@@ -252,7 +252,7 @@ func TestIntegration_Publish_RejectsOffAllowlist(t *testing.T) {
 		t.Fatal("expected off-allowlist publish to be rejected")
 	}
 	// And nothing must have been written.
-	doc, err := fetchDoc(ctx, d, cfg.Collection, cfg.DocumentID)
+	doc, err := fetchDoc(ctx, d, DefaultCollection, cfg.DocumentID)
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}

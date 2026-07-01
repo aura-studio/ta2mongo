@@ -104,7 +104,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 	}
 	logging.WithFields(logging.Fields{
 		"backend":    w.cfg.Backend,
-		"collection": w.cfg.Collection,
+		"collection": DefaultCollection,
 		"documentID": w.cfg.DocumentID,
 	}).Info("cfgsync: watcher starting")
 	return backend.Run(ctx, w.observe)
