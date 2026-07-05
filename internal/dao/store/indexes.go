@@ -63,6 +63,13 @@ func (s *Store) ensureEventIndexes(ctx context.Context) error {
 			Keys:    bson.D{{Key: "#uuid", Value: 1}},
 			Options: options.Index().SetUnique(true),
 		},
+		// Leading-#time index for the trim time-window scan: trim filters purely
+		// on the #time (business time) range and evaluates its include/exclude
+		// expressions per-document in the worker, so the query has no #event_name
+		// predicate — the #event_name-leading compound indexes above carry #time
+		// only as a trailing key and cannot serve a pure #time range. Without this
+		// every trim slice is a full collection scan.
+		{Keys: bson.D{{Key: "#time", Value: 1}}},
 		{Keys: bson.D{{Key: "_ts", Value: 1}}},
 	}
 	_, err := s.event.Indexes().CreateMany(ctx, indexes)
